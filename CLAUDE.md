@@ -1,71 +1,72 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with this repository.
 
 ## Project Overview
 
-**Jarvis** is a Personal Assistant (PA) that supports pluggable skills. Skills are modular capabilities that Jarvis loads at startup.
+**Jarvis** is a Personal Assistant (PA) with pluggable skills. It currently ships two trading capabilities:
 
-## Architecture
+| Capability | File | Style |
+|---|---|---|
+| Daily value-investing analysis | `run_trader_bot.py` | Warren Buffett fundamentals |
+| Intraday ICT smart money bot | `run_tjr_bot.py` | TJR AMD model (London/NY sessions) |
+
+## Repository layout
 
 ```
-jarvis.py              # Main PA entry point
-run_trader_bot.py      # Daily trader bot runner (standalone)
-watchlist.json         # Daily stock watchlist - edit to add/remove tickers
+jarvis.py              # Jarvis PA entry point (skill system demo)
+run_trader_bot.py      # Daily watchlist bot (Warren Buffett style)
+run_tjr_bot.py         # TJR intraday bot (ICT AMD model)
+watchlist.json         # Tickers for daily analysis
+tjr_config.json        # TJR bot config (instrument, account size, broker)
 skills/
-  __init__.py          # Skill registry - auto-loads all available skills
-  trader.py            # Trader skill (wraps warren-buffet/trader_skill)
+  __init__.py          # Skill registry
+  trader.py            # Trader skill adapter (wraps warren-buffet package)
 ```
-
-## Installed Skills
-
-| Skill  | Source             | Description                                    |
-|--------|--------------------|------------------------------------------------|
-| trader | warren-buffet repo | Warren Buffett-style stock value analysis      |
 
 ## Setup
 
 ```bash
-# Install the trader skill from the sibling repo
-pip install -e ../warren-buffet
+# US stocks (Alpaca)
+pip install -e '../warren-buffet[alpaca]'
 
-# Also installs yfinance for live market data
+# Crypto (Binance, Bybit, OKX)
+pip install -e '../warren-buffet[crypto]'
 ```
 
-## Running the Daily Trader Bot
+## Running the bots
 
+### Daily value-investing watchlist
 ```bash
-# Edit your watchlist
-nano watchlist.json
-
-# Run the bot - fetches live data and prints BUY/HOLD/SELL recommendations
+# Edit watchlist.json, then:
 python run_trader_bot.py
 ```
 
-The bot saves a dated report (e.g. `report_2026-05-03.txt`) after each run.
-
-## Using the Trader Skill via Jarvis
-
-```python
-from jarvis import Jarvis
-
-jarvis = Jarvis()
-
-# Fetch live data and analyze a single stock
-print(jarvis.ask("trader", "fetch", ticker="KO"))
-
-# Run the full daily analysis
-print(jarvis.ask("trader", "daily", watchlist=["AAPL", "KO", "JNJ", "MSFT"]))
-```
-
-## Adding a New Skill
-
-1. Create `skills/<name>.py` with a class that has `NAME`, `DESCRIPTION`, and `handle(command, **kwargs) -> str`
-2. Register it in `skills/__init__.py` under `AVAILABLE_SKILLS`
-
-## Build & Run
-
+### TJR intraday bot
 ```bash
-python jarvis.py          # demo run
-python run_trader_bot.py  # daily analysis
+# Set secrets:
+export ALPACA_API_KEY=your_key
+export ALPACA_SECRET_KEY=your_secret
+export TELEGRAM_BOT_TOKEN=your_token   # optional, for alerts
+export TELEGRAM_CHAT_ID=your_chat_id   # optional
+
+# Edit tjr_config.json to set instrument and account balance, then:
+python run_tjr_bot.py
 ```
+
+The TJR bot runs continuously. It only trades during London (03:00–08:00 EST) and NY (08:00–11:00 EST) sessions. All trades are logged to `tjr_journal.json`.
+
+## TJR Bot hard limits (never touch)
+
+| Rule | Value |
+|---|---|
+| Max risk/trade | 2% |
+| Max trades/session | 3 |
+| Daily loss stop | 3% |
+| Post-loss cooldown | 30 min |
+| Min R:R | 2:1 |
+
+## Adding a new Jarvis skill
+
+1. Create `skills/<name>.py` with `NAME`, `DESCRIPTION`, and `handle(command, **kwargs) -> str`
+2. Register it in `skills/__init__.py` under `AVAILABLE_SKILLS`

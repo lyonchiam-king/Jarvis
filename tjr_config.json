@@ -1,0 +1,17 @@
+{
+  "instrument": "SPY",
+  "account_balance": 10000.0,
+  "risk_pct": 0.01,
+  "paper_trading": true,
+  "broker": "alpaca",
+  "poll_interval_secs": 30,
+
+  "alpaca_api_key": "",
+  "alpaca_secret_key": "",
+
+  "ccxt_exchange": "binance",
+  "ccxt_api_key": "",
+  "ccxt_secret": "",
+
+  "_note": "Set API keys as env vars (ALPACA_API_KEY, ALPACA_SECRET_KEY, CCXT_API_KEY, CCXT_SECRET) instead of storing them here. Set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID for alerts."
+}

@@ -1,3 +1,12 @@
-# Trader skill - install from warren-buffet sibling repo
-# pip install -e ../warren-buffet
-yfinance>=0.2.0
+# Install from warren-buffet sibling repo:
+#
+#   US stocks (Alpaca):
+#     pip install -e '../warren-buffet[alpaca]'
+#
+#   Crypto (Binance, Bybit, OKX via CCXT):
+#     pip install -e '../warren-buffet[crypto]'
+#
+#   Both:
+#     pip install -e '../warren-buffet[all]'
+#
+# Telegram alerts use stdlib urllib — no extra package needed.
