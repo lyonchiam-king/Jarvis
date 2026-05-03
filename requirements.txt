@@ -1,2 +1,3 @@
 # Trader skill - install from warren-buffet sibling repo
 # pip install -e ../warren-buffet
+yfinance>=0.2.0

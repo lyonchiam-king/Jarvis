@@ -1,0 +1,13 @@
+{
+  "tickers": [
+    "AAPL",
+    "BRK-B",
+    "KO",
+    "JNJ",
+    "MSFT",
+    "WMT",
+    "BAC",
+    "AXP"
+  ],
+  "note": "Warren Buffett-style value investing watchlist. Edit to add/remove tickers."
+}

@@ -8,7 +8,8 @@ if os.path.isdir(_WARREN_BUFFET_PATH):
     sys.path.insert(0, os.path.abspath(_WARREN_BUFFET_PATH))
 
 try:
-    from trader_skill import TraderSkill as _TraderSkill
+    from trader_skill import TraderSkill as _TraderSkill, DailyTraderBot as _DailyTraderBot
+    from trader_skill.data import fetch_metrics as _fetch_metrics
     _SKILL_AVAILABLE = True
 except ImportError:
     _SKILL_AVAILABLE = False
@@ -30,16 +31,24 @@ class TraderSkillAdapter:
 
     def handle(self, command: str, **kwargs) -> str:
         """
-        Handle Jarvis commands for the trader skill.
-
         Supported commands:
-          analyze    - analyze a stock (kwargs: ticker, metrics dict)
+          analyze    - analyze a single stock (kwargs: ticker, metrics dict)
+          fetch      - fetch live data + analyze (kwargs: ticker)
           screen     - screen multiple stocks (kwargs: candidates list)
+          daily      - run full daily bot (kwargs: watchlist list of tickers)
           philosophy - explain value investing philosophy
         """
         if command == "analyze":
             ticker = kwargs.get("ticker", "")
             metrics = kwargs.get("metrics", {})
+            rec = self._skill.analyze(ticker, metrics)
+            return (
+                f"[{rec.action}] {rec.ticker} (confidence: {rec.confidence:.0%})\n"
+                f"{rec.reasoning}"
+            )
+        elif command == "fetch":
+            ticker = kwargs.get("ticker", "")
+            metrics = _fetch_metrics(ticker)
             rec = self._skill.analyze(ticker, metrics)
             return (
                 f"[{rec.action}] {rec.ticker} (confidence: {rec.confidence:.0%})\n"
@@ -53,7 +62,15 @@ class TraderSkillAdapter:
                 for r in recs
             ]
             return "\n".join(lines)
+        elif command == "daily":
+            watchlist = kwargs.get("watchlist", [])
+            bot = _DailyTraderBot(watchlist)
+            results = bot.run(verbose=False)
+            return bot.report(results)
         elif command == "philosophy":
             return self._skill.explain_philosophy()
         else:
-            return f"Unknown trader command: '{command}'. Try: analyze, screen, philosophy"
+            return (
+                f"Unknown trader command: '{command}'. "
+                "Try: analyze, fetch, screen, daily, philosophy"
+            )
