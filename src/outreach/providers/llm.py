@@ -302,22 +302,53 @@ def build_site_spec_prompt(
     praise: str,
     pain_points: str,
     angle: str,
+    social_handle: str = "",
+    social_bio: str = "",
+    social_post: str = "",
+    phone: str = "",
+    address: str = "",
 ) -> str:
-    return "\n".join(
-        [
-            f"Business: {name}",
-            f"Category: {category or 'unknown'}",
-            f"Location: {location or 'unknown'}",
-            "",
-            "Research brief:",
-            f"- Tone: {tone or 'unknown'}",
-            f"- Services: {services or 'unknown'}",
-            f"- Price tier: {price_tier or 'unknown'}",
-            f"- Customers praise: {praise or 'nothing recorded'}",
-            f"- Customer pain points: {pain_points or 'none evident'}",
-            f"- Suggested angle: {angle or 'none recorded'}",
-        ]
-    )
+    lines = [
+        f"Business: {name}",
+        f"Category: {category or 'unknown'}",
+        f"Location: {location or 'unknown'}",
+    ]
+    if address:
+        lines.append(f"Address: {address}")
+    if phone:
+        lines.append(f"Phone: {phone}")
+
+    lines += [
+        "",
+        "Research brief:",
+        f"- Tone: {tone or 'unknown'}",
+        f"- Services: {services or 'unknown'}",
+        f"- Price tier: {price_tier or 'unknown'}",
+        f"- Customers praise: {praise or 'nothing recorded'}",
+        f"- Customer pain points: {pain_points or 'none evident'}",
+        f"- Suggested angle: {angle or 'none recorded'}",
+    ]
+
+    # The social profile matters twice over: it's the business's own voice
+    # (better evidence of tone than anything inferred from reviews), and the
+    # site should link to it rather than compete with it.
+    if social_handle or social_bio or social_post:
+        lines += ["", "Their own social presence:"]
+        if social_handle:
+            lines.append(f"- Handle: {social_handle}")
+        if social_bio:
+            lines.append(f"- Bio: {social_bio}")
+        if social_post:
+            lines.append(f"- Recent post: {social_post}")
+        lines.append(
+            "- Link this profile prominently on the site. It is where their "
+            "existing customers already follow them, and their photo feed is "
+            "content the site would otherwise lack."
+        )
+    else:
+        lines += ["", "No social profile found -- do not invent or link one."]
+
+    return "\n".join(lines)
 
 
 def build_outreach_prompt(

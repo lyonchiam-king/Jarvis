@@ -163,3 +163,51 @@ def test_dashboard_never_shells_out_to_a_string_command():
                         and isinstance(kw.value, ast.Constant)
                         and kw.value.value
                     ), "shell=True in the dashboard"
+
+
+# ------------------------------------------- site briefs and Lovable gating
+
+
+def brief(lead_id, approval="Pending", project_id=""):
+    return {
+        "Lead ID": lead_id,
+        "Approval Status": approval,
+        "Lovable Project ID": project_id,
+    }
+
+
+def test_counts_prompts_waiting_on_your_approval():
+    briefs = index([brief("a"), brief("b", approval=""), brief("c", approval="Approved")])
+    s = summarise({}, set(), briefs, {}, {})
+
+    assert s.awaiting_approval == 2, "blank and Pending both mean 'waiting on you'"
+    assert s.approved_unbuilt == 1
+
+
+def test_an_already_built_site_is_not_outstanding_work():
+    briefs = index([brief("a", approval="Approved", project_id="proj_1")])
+    s = summarise({}, set(), briefs, {}, {})
+
+    assert s.approved_unbuilt == 0
+    assert s.awaiting_approval == 0
+
+
+def test_a_skipped_brief_is_not_counted_either_way():
+    s = summarise({}, set(), index([brief("a", approval="Skip")]), {}, {})
+    assert (s.awaiting_approval, s.approved_unbuilt) == (0, 0)
+
+
+def test_summarise_still_accepts_a_bare_set_of_ids():
+    """Callers that only have ids shouldn't have to fabricate rows."""
+    leads = index([lead("a", "Researched")])
+    s = summarise(leads, {"a"}, {"a"}, {}, {})
+    assert s.to_brief == 0
+
+
+def test_site_build_is_reachable_from_the_dashboard():
+    assert "site-build" in STAGE_COMMANDS
+
+
+def test_full_run_does_not_include_site_build():
+    """Building spends Lovable credits -- it must never ride along with 'run everything'."""
+    assert "site-build" not in FULL_RUN

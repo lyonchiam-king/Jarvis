@@ -42,6 +42,7 @@ STAGE_COMMANDS = {
     "discovery": ["run", "discovery"],
     "research": ["run", "research"],
     "site-brief": ["run", "site-brief"],
+    "site-build": ["run", "site-build"],
     "outreach-draft": ["run", "outreach-draft"],
     "preflight": ["preflight"],
     "preview-leads": ["run", "discovery", "--dry-run"],
@@ -61,6 +62,8 @@ class Summary:
     to_draft: int = 0
     emails_waiting: int = 0
     whatsapp_waiting: int = 0
+    awaiting_approval: int = 0
+    approved_unbuilt: int = 0
     errors: int = 0
     errors_retryable: int = 0
     sheet_url: str = ""
@@ -73,13 +76,15 @@ class Summary:
             or self.to_draft
             or self.emails_waiting
             or self.whatsapp_waiting
+            or self.awaiting_approval
+            or self.approved_unbuilt
         )
 
 
 def summarise(
     leads: dict[str, tuple[int, dict[str, str]]],
     research_ids: set[str],
-    site_brief_ids: set[str],
+    site_briefs: dict[str, tuple[int, dict[str, str]]] | set[str],
     outreach: dict[str, tuple[int, dict[str, str]]],
     errors: dict[str, tuple[int, dict[str, str]]],
 ) -> Summary:
@@ -91,6 +96,7 @@ def summarise(
 
     summary = Summary()
     summary.by_stage = {s.value: 0 for s in FUNNEL}
+    site_brief_ids = set(site_briefs)
 
     for lead_id, (_row, row) in leads.items():
         summary.total += 1
@@ -116,6 +122,17 @@ def summarise(
             and rank(Stage.RESEARCHED) <= rank(current) < rank(Stage.EMAIL_DRAFTED)
         ):
             summary.to_draft += 1
+
+    # Site briefs waiting on you. Approval is a manual column by design, so
+    # these two numbers are the human gate in front of Lovable spending.
+    if isinstance(site_briefs, dict):
+        for _lead_id, (_row, row) in site_briefs.items():
+            approval = (row.get("Approval Status") or "").strip().casefold()
+            built = bool((row.get("Lovable Project ID") or "").strip())
+            if approval == "approved" and not built:
+                summary.approved_unbuilt += 1
+            elif approval in ("", "pending"):
+                summary.awaiting_approval += 1
 
     for _lead_id, (_row, row) in outreach.items():
         if (row.get("Status") or "").strip().casefold() != "drafted":
@@ -191,7 +208,7 @@ def _load_summary(config: Config) -> Summary:
     summary = summarise(
         sheets.read_rows(schema.LEADS),
         set(sheets.read_rows(schema.RESEARCH)),
-        set(sheets.read_rows(schema.SITE_BRIEFS)),
+        sheets.read_rows(schema.SITE_BRIEFS),
         sheets.read_rows(schema.OUTREACH_LOG),
         sheets.read_rows(schema.ERRORS),
     )
@@ -223,6 +240,8 @@ def create_app(config: Config) -> Flask:
                 "to_draft": summary.to_draft,
                 "emails_waiting": summary.emails_waiting,
                 "whatsapp_waiting": summary.whatsapp_waiting,
+                "awaiting_approval": summary.awaiting_approval,
+                "approved_unbuilt": summary.approved_unbuilt,
                 "errors": summary.errors,
                 "errors_retryable": summary.errors_retryable,
                 "sheet_url": summary.sheet_url,
@@ -340,6 +359,7 @@ PAGE = """<!doctype html>
       <button data-run="discovery">Find leads</button>
       <button data-run="research">Research</button>
       <button data-run="site-brief">Site prompts</button>
+      <button data-run="site-build">Build approved sites</button>
       <button data-run="outreach-draft">Draft messages</button>
     </div>
     <p class="hint">
@@ -388,6 +408,10 @@ async function refresh() {
   if (d.to_research) todo.push(card(d.to_research, 'leads to research',
     'About 6&cent; each'));
   if (d.to_brief) todo.push(card(d.to_brief, 'need site prompts', 'Free to generate'));
+  if (d.awaiting_approval) todo.push(card(d.awaiting_approval, 'prompts awaiting you',
+    'Set Approval Status to Approved in the Site Briefs tab'));
+  if (d.approved_unbuilt) todo.push(card(d.approved_unbuilt, 'approved, not built',
+    'Press Build approved sites'));
   if (d.to_draft) todo.push(card(d.to_draft, 'need messages drafted', 'Nothing sends'));
   if (d.errors) todo.push(card(d.errors, 'errors logged',
     `${d.errors_retryable} may fix themselves on a re-run`));

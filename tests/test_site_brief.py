@@ -318,3 +318,56 @@ def test_build_advances_the_stage_to_site_built():
 
     stage_write = [w for w in sheets.column_writes if w[0] is schema.LEADS]
     assert stage_write == [(schema.LEADS, "Stage", {"a": "Site Built"})]
+
+
+# ------------------------------------------- social handle reaches the prompt
+
+
+def test_social_profile_is_included_in_the_site_spec_prompt():
+    from outreach.providers.llm import build_site_spec_prompt
+
+    prompt = build_site_spec_prompt(
+        name="Sun Salon", category="hair salon", location="Penang",
+        tone="warm", services="cut", price_tier="mid-range",
+        praise="Friendly", pain_points="Booking", angle="Online booking",
+        social_handle="@sunsalon", social_bio="Family salon since 1998",
+        social_post="New colour range in stock",
+    )
+    assert "@sunsalon" in prompt
+    assert "Family salon since 1998" in prompt
+    assert "New colour range in stock" in prompt
+    assert "Link this profile prominently" in prompt
+
+
+def test_prompt_forbids_inventing_a_social_profile_when_none_was_found():
+    from outreach.providers.llm import build_site_spec_prompt
+
+    prompt = build_site_spec_prompt(
+        name="Sun Salon", category="hair salon", location="Penang",
+        tone="warm", services="cut", price_tier="mid-range",
+        praise="", pain_points="", angle="",
+    )
+    assert "do not invent or link one" in prompt
+
+
+def test_stage_4_passes_the_social_columns_through():
+    sheets = FakeSheets(
+        index([lead("a")]),
+        index([{**research_row("a"), "Social Handle": "@sunsalon",
+                "Social Bio": "Cutting hair in GT since 1998"}]),
+    )
+
+    class CapturingWriter(FakeWriter):
+        def __init__(self):
+            super().__init__()
+            self.prompt = ""
+
+        def write_site_spec(self, prompt):
+            self.prompt = prompt
+            return super().write_site_spec(prompt)
+
+    writer = CapturingWriter()
+    site_brief.run(config(), sheets, writer, LovableAdapter())
+
+    assert "@sunsalon" in writer.prompt
+    assert "Cutting hair in GT since 1998" in writer.prompt
