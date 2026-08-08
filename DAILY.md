@@ -21,6 +21,47 @@ holds no passwords of its own.
 
 ---
 
+## Build on reply, not upfront
+
+The pipeline *can* build a site for every lead. **Don't let it.**
+
+Cold outreach converts at maybe 5–15%. Building 100 sites to win 10 customers
+means paying for 90 sites nobody asked for — and the build is the only
+genuinely expensive step you have.
+
+**Send first. Build when someone replies.** Your email already has a specific
+hook: the research angle proves you read their reviews. When someone bites,
+build then — and build it better, because you can ask them a question first.
+
+That's why `Approval Status` is a manual column and why **Run everything** does
+not include the build step. The defaults already push you this way.
+
+---
+
+## Zero-touch mornings
+
+Right-click **`Schedule-Daily.ps1`** → *Run with PowerShell*, once.
+
+From then on it runs at 8am every day: finds leads, researches them, drafts
+your messages. You wake up to drafts waiting. Capped at 20 leads a day —
+roughly USD 2 — so it can't run away with your money overnight.
+
+It never sends and never spends Lovable credits. Logs land in `logs\`.
+
+To change the cap or the time:
+
+```powershell
+.\Schedule-Daily.ps1 -LeadsPerDay 40 -Time "07:30"
+```
+
+To stop it:
+
+```powershell
+Unregister-ScheduledTask -TaskName "SME Outreach - morning run" -Confirm:$false
+```
+
+---
+
 ## The honest shape of a day
 
 The tool does about five minutes of work. The other thirty are yours, and

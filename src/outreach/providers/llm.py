@@ -288,6 +288,12 @@ CONSTRAINTS
 - Use placeholder text clearly marked [TO CONFIRM] wherever a real detail is
   needed but not supplied.
 - Make the phone number and location impossible to miss.
+- Send every booking or enquiry to a spreadsheet via the
+  Google Sheets connector, one row per enquiry with a timestamp.
+  This owner has never had a website and will not log into an
+  admin panel to check messages. A spreadsheet is a tool they already know.
+- Put a WhatsApp click-to-chat link next to any form. In this market that is
+  how people actually get in touch, and a form alone will lose enquiries.
 """
 
 

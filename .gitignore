@@ -16,3 +16,5 @@ venv/
 # Local run artifacts
 .cache/
 *.log
+logs/
+scripts/morning-run.ps1

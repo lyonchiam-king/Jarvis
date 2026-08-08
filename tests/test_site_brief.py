@@ -371,3 +371,13 @@ def test_stage_4_passes_the_social_columns_through():
 
     assert "@sunsalon" in writer.prompt
     assert "Cutting hair in GT since 1998" in writer.prompt
+
+
+def test_prompt_routes_enquiries_to_a_sheet_the_owner_already_understands():
+    """These owners have never had a website -- no admin panel, no login."""
+    prompt = render_lovable_prompt(
+        business_name="Sun Salon", category="salon", location="Penang", spec=SPEC
+    )
+    assert "Google Sheets connector" in prompt
+    assert "admin panel" in prompt
+    assert "WhatsApp" in prompt
