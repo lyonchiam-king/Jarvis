@@ -95,6 +95,35 @@ class GmailClient:
         )
         self.draft_count = 0
 
+    def probe(self) -> tuple[bool, str]:
+        """Is the Gmail API switched on, and does the token carry the scope?
+
+        Lists at most one existing draft -- reads nothing, writes nothing,
+        creates nothing. Catches at preflight the two things that otherwise
+        surface only once Stage 5 is already running.
+        """
+        try:
+            self._service.users().drafts().list(userId="me", maxResults=1).execute()
+        except HttpError as exc:
+            status = getattr(exc.resp, "status", None)
+            detail = str(exc)
+            if status == 403 and "SERVICE_DISABLED" in detail:
+                return False, (
+                    "the Gmail API is not enabled on this Cloud project.\n"
+                    "       Enable it, wait ~2 minutes, then re-run:\n"
+                    "       https://console.cloud.google.com/apis/library/gmail.googleapis.com"
+                )
+            if status in (401, 403):
+                return False, (
+                    "Gmail rejected the token. If you set this up before the "
+                    "gmail.compose scope existed, delete credentials/token.json "
+                    f"and re-run to re-consent.\n       {detail[:200]}"
+                )
+            return False, f"unexpected Gmail response (HTTP {status}): {detail[:200]}"
+        except Exception as exc:  # noqa: BLE001
+            return False, f"{type(exc).__name__}: {exc}"
+        return True, "enabled, gmail.compose granted"
+
     def create_draft(self, *, to: str, subject: str, body: str) -> Draft:
         """Create a draft. It is never sent -- you press send in Gmail."""
         if not to or "@" not in to:

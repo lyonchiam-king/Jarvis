@@ -93,6 +93,44 @@ class SheetsClient:
     def url(self) -> str:
         return f"https://docs.google.com/spreadsheets/d/{self.spreadsheet_id}/edit"
 
+    def probe(self) -> tuple[bool, str]:
+        """Is the Sheets API switched on for this Cloud project?
+
+        Asks for a spreadsheet that cannot exist. A 400/404 means the API
+        answered and is healthy; a 403 SERVICE_DISABLED means it was never
+        enabled. Costs nothing and creates nothing -- the point is to fail
+        here, in preflight, rather than three commands later mid-run.
+        """
+        try:
+            self._service.spreadsheets().get(
+                spreadsheetId="preflight-probe-nonexistent"
+            ).execute()
+        except HttpError as exc:
+            status = getattr(exc.resp, "status", None)
+            detail = str(exc)
+            if status == 403 and "SERVICE_DISABLED" in detail:
+                return False, (
+                    "the Google Sheets API is not enabled on this Cloud project.\n"
+                    "       Enable it, wait ~2 minutes, then re-run:\n"
+                    "       https://console.cloud.google.com/apis/library/sheets.googleapis.com"
+                )
+            if status == 403:
+                return False, f"Sheets API refused the request: {detail[:200]}"
+            if status == 401:
+                return False, (
+                    "the stored token was rejected. Delete credentials/token.json "
+                    "and re-run to sign in again."
+                )
+            if status in (400, 404):
+                return True, "enabled"
+            return False, f"unexpected Sheets response (HTTP {status}): {detail[:200]}"
+        except Exception as exc:  # noqa: BLE001
+            return False, f"{type(exc).__name__}: {exc}"
+
+        # A real spreadsheet with that ID would be extraordinary, but the API
+        # clearly answered, which is all we were asking.
+        return True, "enabled"
+
     # ------------------------------------------------------------- bootstrap
 
     def existing_tab_titles(self) -> set[str]:

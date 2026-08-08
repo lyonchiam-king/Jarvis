@@ -135,9 +135,28 @@ def preflight(ctx: click.Context) -> None:
         ok = False
     else:
         try:
-            sheets = _sheets_client(config, require_sheet_id=False)
+            creds = _credentials(config)
             click.echo("[ OK ] Google OAuth token valid")
-            if config.secrets.sheet_id:
+
+            # Check the APIs are actually switched on. Without this, preflight
+            # passes and then `init-sheet` fails on a Cloud setting -- which is
+            # exactly what happened before this check existed.
+            sheets = SheetsClient(creds, config.secrets.sheet_id)
+            sheets_ok, sheets_detail = sheets.probe()
+            if sheets_ok:
+                click.echo("[ OK ] Google Sheets API enabled")
+            else:
+                click.echo(f"[FAIL] {sheets_detail}")
+                ok = False
+
+            gmail_ok, gmail_detail = GmailClient(creds).probe()
+            if gmail_ok:
+                click.echo(f"[ OK ] Gmail API {gmail_detail}")
+            else:
+                # Stage 5 only. Don't fail the whole preflight over it.
+                click.echo(f"[WARN] Gmail not ready (needed for Stage 5): {gmail_detail}")
+
+            if config.secrets.sheet_id and sheets_ok:
                 titles = sheets.existing_tab_titles()
                 missing = [t.title for t in schema.ALL_TABS if t.title not in titles]
                 if missing:
@@ -146,7 +165,7 @@ def preflight(ctx: click.Context) -> None:
                 else:
                     click.echo("[ OK ] Sheet reachable, all tabs present")
                 click.echo(f"       {sheets.url}")
-            else:
+            elif not config.secrets.sheet_id:
                 click.echo("[WARN] SHEET_ID not set -- run `outreach init-sheet`")
         except (click.ClickException, SheetsError) as exc:
             click.echo(f"[FAIL] {exc}")
