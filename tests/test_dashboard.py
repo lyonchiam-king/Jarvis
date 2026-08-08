@@ -211,3 +211,31 @@ def test_site_build_is_reachable_from_the_dashboard():
 def test_full_run_does_not_include_site_build():
     """Building spends Lovable credits -- it must never ride along with 'run everything'."""
     assert "site-build" not in FULL_RUN
+
+
+# ------------------------------------------------- the manual build loop
+
+
+def test_record_build_requires_a_lead_id(client):
+    assert client.post("/api/record-build", json={}).status_code == 400
+
+
+def test_record_build_rejects_a_non_http_url(client):
+    """Guards against a javascript: or data: URL landing in the Sheet."""
+    r = client.post(
+        "/api/record-build", json={"lead_id": "a", "preview_url": "javascript:alert(1)"}
+    )
+    assert r.status_code == 400
+    assert "http" in r.get_json()["error"]
+
+
+def test_build_queue_is_empty_without_a_sheet(client):
+    assert client.get("/api/build-queue").get_json() == {"queue": []}
+
+
+def test_page_offers_the_copy_and_open_lovable_flow(client):
+    body = client.get("/").data
+    assert b"Ready to build" in body
+    assert b"Copy prompt" in body
+    assert b"lovable.dev" in body
+    assert b"Mark as built" in body

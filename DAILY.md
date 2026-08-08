@@ -68,7 +68,23 @@ publish one. Those have a ready WhatsApp message instead.
 - Open WhatsApp, paste it to the number in the **Leads** tab
 - Change **Status** to `Sent`
 
-### 4. Handle replies
+### 4. Build any sites you approved
+
+Lovable can't be driven from here — it only supports OAuth sign-in, so there's
+no key a program on your laptop could use. The dashboard gets you as close as
+possible:
+
+1. Open the **Site Briefs** tab, set **Approval Status** to `Approved` on the
+   sites you want built
+2. Back on the dashboard, the **Ready to build** section lists them
+3. **Copy prompt** → **Open Lovable** → paste → let it build
+4. Paste the finished site URL back into the box and press **Mark as built**
+
+Step 4 isn't bookkeeping. The URL goes into the outreach email, and a lead
+with a site they can actually click is a much stronger message than one
+without.
+
+### 5. Handle replies
 
 When someone writes back, open the **Leads** tab and change their **Stage**:
 

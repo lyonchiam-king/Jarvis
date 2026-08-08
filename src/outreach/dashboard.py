@@ -249,6 +249,74 @@ def create_app(config: Config) -> Flask:
             }
         )
 
+    @app.route("/api/build-queue")
+    def api_build_queue():
+        """Approved briefs waiting to be built, prompt included."""
+        from .auth import get_credentials
+        from .sheets import SheetsClient
+
+        if not config.secrets.sheet_id:
+            return jsonify({"queue": []})
+        try:
+            creds = get_credentials(
+                config.secrets.oauth_client_file, config.secrets.token_file
+            )
+            sheets = SheetsClient(creds, config.secrets.sheet_id)
+            rows = sheets.read_rows(schema.SITE_BRIEFS)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+
+        queue = [
+            {
+                "lead_id": lead_id,
+                "name": row.get("Business Name", ""),
+                "prompt": row.get("Lovable Prompt", ""),
+            }
+            for lead_id, (_n, row) in rows.items()
+            if (row.get("Approval Status") or "").strip().casefold() == "approved"
+            and not (row.get("Lovable Project ID") or "").strip()
+        ]
+        return jsonify({"queue": queue})
+
+    @app.route("/api/record-build", methods=["POST"])
+    def api_record_build():
+        """Record a site you built by hand, and move the lead to Site Built.
+
+        Closing this loop matters beyond bookkeeping: Stage 5 puts the preview
+        URL in the outreach email, and leads with a live site to look at are
+        the ones worth writing to first.
+        """
+        from .auth import get_credentials
+        from .sheets import SheetsClient
+        from .stage import Stage
+
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        preview_url = (payload.get("preview_url") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+        if preview_url and not preview_url.startswith(("http://", "https://")):
+            return jsonify({"error": "preview URL must start with http"}), 400
+
+        try:
+            creds = get_credentials(
+                config.secrets.oauth_client_file, config.secrets.token_file
+            )
+            sheets = SheetsClient(creds, config.secrets.sheet_id)
+            sheets.update_column(
+                schema.SITE_BRIEFS, "Lovable Project ID", {lead_id: "built-by-hand"}
+            )
+            if preview_url:
+                sheets.update_column(
+                    schema.SITE_BRIEFS, "Preview URL", {lead_id: preview_url}
+                )
+            sheets.update_column(
+                schema.LEADS, "Stage", {lead_id: Stage.SITE_BUILT.value}
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+        return jsonify({"ok": True})
+
     @app.route("/api/run", methods=["POST"])
     def api_run():
         what = (request.json or {}).get("what", "")
@@ -333,6 +401,15 @@ PAGE = """<!doctype html>
         overflow:auto; max-height:340px; font-size:12.5px; line-height:1.5;
         margin:0; white-space:pre-wrap; word-break:break-word; }
   .hint { color:var(--muted); font-size:13px; margin:9px 0 0; }
+  .q { margin-bottom:12px; }
+  .q h3 { margin:0 0 10px; font-size:16px; }
+  .q textarea { width:100%; height:120px; font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+                background:var(--bg); color:var(--ink); border:1px solid var(--line);
+                border-radius:8px; padding:11px; resize:vertical; }
+  .q input { flex:1 1 260px; font:inherit; font-size:13.5px; padding:8px 11px;
+             border-radius:8px; border:1px solid var(--line);
+             background:var(--bg); color:var(--ink); }
+  .ok { color:var(--ok); font-size:13px; }
   .status { font-size:13px; color:var(--warn); }
   .err { color:var(--accent); }
 </style>
@@ -372,6 +449,10 @@ PAGE = """<!doctype html>
       <span class="status" id="running"></span>
     </div>
   </div>
+
+  <h2>Ready to build <span class="sub" style="text-transform:none;letter-spacing:0">
+      &mdash; approved, waiting for you to paste into Lovable</span></h2>
+  <div id="queue"></div>
 
   <h2>Output</h2>
   <pre id="log">Nothing running.</pre>
@@ -446,10 +527,59 @@ document.querySelectorAll('button[data-run]').forEach(b =>
     poll();
   }));
 
+async function loadQueue() {
+  let d;
+  try { d = await (await fetch('/api/build-queue')).json(); } catch { return; }
+  const el = $('#queue');
+  if (d.error) { el.innerHTML = `<div class="card err">${d.error}</div>`; return; }
+  if (!d.queue || !d.queue.length) {
+    el.innerHTML = '<div class="card"><div class="what">Nothing approved yet.</div>' +
+      '<div class="sub">Open the Site Briefs tab and set Approval Status to ' +
+      '<b>Approved</b> on the ones you want built.</div></div>';
+    return;
+  }
+  el.innerHTML = d.queue.map((q, i) => `
+    <div class="card q">
+      <h3>${q.name}</h3>
+      <textarea id="p${i}" readonly>${q.prompt.replace(/</g,'&lt;')}</textarea>
+      <div class="row" style="margin-top:10px">
+        <button onclick="copyPrompt(${i})">Copy prompt</button>
+        <a href="https://lovable.dev" target="_blank" rel="noopener">
+          <button>Open Lovable</button></a>
+        <span class="sub" id="c${i}"></span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <input id="u${i}" placeholder="Paste the finished site URL here">
+        <button onclick="saveBuilt('${q.lead_id}', ${i})">Mark as built</button>
+        <span class="ok" id="s${i}"></span>
+      </div>
+    </div>`).join('');
+}
+
+async function copyPrompt(i) {
+  const t = document.getElementById('p' + i);
+  t.select();
+  try { await navigator.clipboard.writeText(t.value); }
+  catch { document.execCommand('copy'); }
+  document.getElementById('c' + i).textContent = 'Copied. Paste it into Lovable.';
+}
+
+async function saveBuilt(leadId, i) {
+  const url = document.getElementById('u' + i).value.trim();
+  const r = await fetch('/api/record-build', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({lead_id: leadId, preview_url: url})
+  });
+  const d = await r.json();
+  document.getElementById('s' + i).textContent = d.ok ? 'Saved.' : (d.error || 'Failed');
+  if (d.ok) { loadQueue(); refresh(); }
+}
+
 refresh();
+loadQueue();
 poll();
 setInterval(poll, 1200);
-setInterval(refresh, 30000);
+setInterval(refresh, 30000);\nsetInterval(loadQueue, 30000);
 </script>
 </body>
 </html>
