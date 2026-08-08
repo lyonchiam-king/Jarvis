@@ -11,6 +11,7 @@ them:
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 
@@ -24,6 +25,7 @@ from .providers.llm import BriefWriter, LLMError
 from .providers.lovable import LovableAdapter, LovableUnavailable
 from .providers.places import PlacesClient, PlacesError
 from .sheets import SheetsClient, SheetsError
+from .stage import Stage
 from .stages import discovery as discovery_stage
 from .stages import init_sheet as init_sheet_stage
 from .stages import outreach_draft as outreach_stage
@@ -218,6 +220,80 @@ def compliance_cmd(ctx: click.Context) -> None:
     click.echo(compliance.format_notice(config.compliance.country_code))
     click.echo("")
     click.echo(f"Acknowledged in config: {config.compliance.acknowledged}")
+
+
+@main.group()
+def briefs() -> None:
+    """Read and record site briefs -- the hooks an MCP client drives."""
+
+
+@briefs.command("pending")
+@click.option("--json", "as_json", is_flag=True, help="Machine-readable output.")
+@click.pass_context
+def briefs_pending(ctx: click.Context, as_json: bool) -> None:
+    """List approved briefs that have no site yet.
+
+    Exists so an MCP client (Claude Code with the Lovable connector) can read
+    the queue, build each one, and report back -- the step this pipeline
+    cannot take itself, because Lovable offers no headless credential.
+    """
+    config = _load(ctx.obj["config_path"])
+    sheets = _sheets_client(config)
+    rows = sheets.read_rows(schema.SITE_BRIEFS)
+
+    queue = [
+        {
+            "lead_id": lead_id,
+            "business_name": row.get("Business Name", ""),
+            "prompt": row.get("Lovable Prompt", ""),
+        }
+        for lead_id, (_n, row) in rows.items()
+        if (row.get("Approval Status") or "").strip().casefold() == "approved"
+        and not (row.get("Lovable Project ID") or "").strip()
+    ]
+
+    if as_json:
+        click.echo(json.dumps(queue, indent=2))
+        return
+
+    if not queue:
+        click.echo("Nothing approved and unbuilt.")
+        return
+    click.echo(f"{len(queue)} approved brief(s) waiting to be built:\n")
+    for item in queue:
+        click.echo(f"  {item['lead_id']}  {item['business_name']}")
+
+
+@briefs.command("record")
+@click.option("--lead-id", required=True, help="The lead's place_id.")
+@click.option("--preview-url", default="", help="URL of the finished site.")
+@click.option("--project-id", default="", help="Lovable project ID, if you have it.")
+@click.pass_context
+def briefs_record(
+    ctx: click.Context, lead_id: str, preview_url: str, project_id: str
+) -> None:
+    """Record a built site and advance the lead to Site Built.
+
+    The preview URL is not bookkeeping: Stage 5 puts it in the outreach email.
+    """
+    if preview_url and not preview_url.startswith(("http://", "https://")):
+        raise click.ClickException("--preview-url must start with http:// or https://")
+
+    config = _load(ctx.obj["config_path"])
+    sheets = _sheets_client(config)
+
+    sheets.update_column(
+        schema.SITE_BRIEFS,
+        "Lovable Project ID",
+        {lead_id: project_id or "built-via-mcp"},
+    )
+    if preview_url:
+        sheets.update_column(schema.SITE_BRIEFS, "Preview URL", {lead_id: preview_url})
+    sheets.update_column(schema.LEADS, "Stage", {lead_id: Stage.SITE_BUILT.value})
+
+    click.echo(f"Recorded {lead_id} as Site Built.")
+    if preview_url:
+        click.echo(f"  {preview_url}")
 
 
 @main.group()

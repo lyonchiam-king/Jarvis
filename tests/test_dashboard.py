@@ -239,3 +239,42 @@ def test_page_offers_the_copy_and_open_lovable_flow(client):
     assert b"Copy prompt" in body
     assert b"lovable.dev" in body
     assert b"Mark as built" in body
+
+
+# ------------------------------------------- the MCP hooks Claude Code uses
+
+
+def test_briefs_commands_exist_for_an_mcp_client():
+    """Claude Code drives Lovable through these two commands."""
+    from outreach.cli import main
+
+    assert "briefs" in main.commands
+    briefs = main.commands["briefs"]
+    assert "pending" in briefs.commands
+    assert "record" in briefs.commands
+
+
+def test_record_rejects_a_non_http_preview_url_from_the_cli():
+    from click.testing import CliRunner
+
+    from outreach.cli import main
+
+    result = CliRunner().invoke(
+        main, ["briefs", "record", "--lead-id", "a", "--preview-url", "javascript:x"]
+    )
+    assert result.exit_code != 0
+    assert "http" in result.output
+
+
+def test_build_sites_skill_exists_and_forbids_prompt_editing():
+    """The skill is the instructions Claude Code follows -- guard its rules."""
+    skill = (
+        Path(__file__).resolve().parent.parent
+        / ".claude/skills/build-sites/SKILL.md"
+    )
+    assert skill.exists()
+    text = skill.read_text()
+    assert "outreach briefs pending --json" in text
+    assert "outreach briefs record" in text
+    assert "Do not improve, shorten, or reword the prompt" in text
+    assert "Record after each build" in text

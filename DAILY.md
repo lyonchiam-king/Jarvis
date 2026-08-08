@@ -84,6 +84,28 @@ Step 4 isn't bookkeeping. The URL goes into the outreach email, and a lead
 with a site they can actually click is a much stronger message than one
 without.
 
+#### Or let Claude Code do the whole build step
+
+If you have **Claude Code** installed on this machine, it can do steps 2–4 for
+you. It's the one place that can reach both your Sheet *and* Lovable — your
+local Python can't sign into Lovable, and a chat on claude.ai can't reach your
+Sheet.
+
+Connect Lovable once:
+
+```powershell
+claude mcp add --transport http lovable https://mcp.lovable.dev/
+```
+
+Then `/mcp` to sign in. After that, open Claude Code in this folder and say:
+
+> build the approved sites
+
+It reads the approved queue, asks you to confirm before spending credits,
+builds each one in Lovable, and writes the URLs back to your Sheet. The rules
+it follows live in `.claude/skills/build-sites/SKILL.md` — including never
+editing a prompt and never building anything you haven't approved.
+
 ### 5. Handle replies
 
 When someone writes back, open the **Leads** tab and change their **Stage**:
