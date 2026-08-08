@@ -276,14 +276,91 @@ def create_app(config: Config) -> Flask:
     app = Flask(__name__)
     runner = Runner()
 
+    # The campaign target is editable from the page, so config is state rather
+    # than a constant. Every handler reads through `current()` so a save takes
+    # effect immediately instead of at the next restart.
+    state = {"config": config}
+
+    def current() -> Config:
+        return state["config"]
+
     @app.route("/")
     def index():
-        return render_template_string(PAGE, campaign=config.campaign)
+        return render_template_string(PAGE, campaign=current().campaign)
+
+    @app.route("/api/campaign")
+    def api_campaign():
+        c = current()
+        return jsonify(
+            {
+                "category": c.campaign.category,
+                "location": c.campaign.location,
+                "areas": list(c.campaign.areas),
+                "batch_size": c.batch_size,
+                "file": str(c.source_path),
+            }
+        )
+
+    @app.route("/api/campaign", methods=["POST"])
+    def api_set_campaign():
+        """Change what the pipeline hunts for, from the page.
+
+        Writes the campaign YAML in place, preserving its comments, then
+        reloads. Nothing already on the Sheet is touched -- changing category
+        starts a new hunt alongside the old one, it does not reset anything.
+        """
+        from .campaign_edit import CampaignEditError, rewrite_campaign
+        from .config import ConfigError, load_config
+
+        payload = request.json or {}
+        category = payload.get("category")
+        location = payload.get("location")
+        areas = payload.get("areas")
+        if areas is not None and not isinstance(areas, list):
+            return jsonify({"error": "areas must be a list of strings"}), 400
+
+        path = current().source_path
+        try:
+            original = path.read_text()
+            updated = rewrite_campaign(
+                original,
+                category=category,
+                location=location,
+                areas=[str(a) for a in areas] if areas is not None else None,
+            )
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        except OSError as exc:
+            return jsonify({"error": f"Could not read {path}: {exc}"}), 200
+
+        try:
+            path.write_text(updated)
+        except OSError as exc:
+            return jsonify({"error": f"Could not save {path}: {exc}"}), 200
+
+        try:
+            state["config"] = load_config(path)
+        except ConfigError as exc:
+            # Put the file back rather than leave the user with a campaign the
+            # pipeline cannot load. rewrite_campaign validates, so reaching
+            # here means something outside the target went wrong.
+            path.write_text(original)
+            return jsonify({"error": f"Reverted -- {exc}"}), 200
+
+        c = current()
+        return jsonify(
+            {
+                "ok": True,
+                "category": c.campaign.category,
+                "location": c.campaign.location,
+                "areas": list(c.campaign.areas),
+            }
+        )
 
     @app.route("/api/summary")
     def api_summary():
         try:
-            summary = _load_summary(config)
+            summary = _load_summary(current())
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
         return jsonify(
@@ -308,10 +385,10 @@ def create_app(config: Config) -> Flask:
     @app.route("/api/review-queue")
     def api_review_queue():
         """Briefs waiting on your yes or no, with the research to judge them."""
-        if not config.secrets.sheet_id:
+        if not current().secrets.sheet_id:
             return jsonify({"queue": []})
         try:
-            sheets = _sheets_client(config)
+            sheets = _sheets_client(current())
             queue = review_queue(
                 sheets.read_rows(schema.LEADS),
                 sheets.read_rows(schema.RESEARCH),
@@ -339,7 +416,7 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": "decision must be 'approved' or 'skip'"}), 400
 
         try:
-            sheets = _sheets_client(config)
+            sheets = _sheets_client(current())
             written = sheets.update_column(
                 schema.SITE_BRIEFS,
                 "Approval Status",
@@ -355,10 +432,10 @@ def create_app(config: Config) -> Flask:
     @app.route("/api/build-queue")
     def api_build_queue():
         """Approved briefs waiting to be built, prompt included."""
-        if not config.secrets.sheet_id:
+        if not current().secrets.sheet_id:
             return jsonify({"queue": []})
         try:
-            sheets = _sheets_client(config)
+            sheets = _sheets_client(current())
             rows = sheets.read_rows(schema.SITE_BRIEFS)
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
@@ -394,7 +471,7 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": "preview URL must start with http"}), 400
 
         try:
-            sheets = _sheets_client(config)
+            sheets = _sheets_client(current())
             sheets.update_column(
                 schema.SITE_BRIEFS, "Lovable Project ID", {lead_id: "built-by-hand"}
             )
@@ -495,12 +572,15 @@ PAGE = """<!doctype html>
   .hint { color:var(--muted); font-size:13px; margin:9px 0 0; }
   .q { margin-bottom:12px; }
   .q h3 { margin:0 0 10px; font-size:16px; }
-  .q textarea { width:100%; height:120px; font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
-                background:var(--bg); color:var(--ink); border:1px solid var(--line);
-                border-radius:8px; padding:11px; resize:vertical; }
-  .q input { flex:1 1 260px; font:inherit; font-size:13.5px; padding:8px 11px;
-             border-radius:8px; border:1px solid var(--line);
-             background:var(--bg); color:var(--ink); }
+  textarea { display:block; width:100%; height:120px;
+             font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+             background:var(--bg); color:var(--ink); border:1px solid var(--line);
+             border-radius:8px; padding:11px; resize:vertical; }
+  input { font:inherit; font-size:13.5px; padding:8px 11px;
+          border-radius:8px; border:1px solid var(--line);
+          background:var(--bg); color:var(--ink); }
+  .q input { flex:1 1 260px; }
+  label { display:block; }
   .ok { color:var(--ok); font-size:13px; }
   .status { font-size:13px; color:var(--warn); }
   .err { color:var(--accent); }
@@ -526,9 +606,12 @@ PAGE = """<!doctype html>
 
   <header>
     <h1>SME Outreach</h1>
-    <div class="sub">{{ campaign.category }} &middot; {{ campaign.location }}</div>
+    <div class="sub" id="who">{{ campaign.category }} &middot; {{ campaign.location }}</div>
   </header>
   <div class="sub" id="totals">Loading&hellip;</div>
+
+  <h2>What you're hunting</h2>
+  <div class="card" id="target">Loading&hellip;</div>
 
   <h2>What needs you today</h2>
   <div class="todo" id="todo"></div>
@@ -667,6 +750,85 @@ document.querySelectorAll('button[data-run]').forEach(b =>
     });
     poll();
   }));
+
+// -------------------------------------------------------- what you're hunting
+
+let target = null;
+
+async function loadTarget() {
+  try { target = await (await fetch('/api/campaign')).json(); } catch { return; }
+  drawTarget();
+}
+
+function drawTarget(editing) {
+  const el = $('#target');
+  if (!target) return;
+  if (target.error) { el.innerHTML = `<span class="err">${esc(target.error)}</span>`; return; }
+
+  $('#who').innerHTML = `${esc(target.category)} &middot; ${esc(target.location)}`;
+
+  const n = (target.areas || []).length;
+  if (!editing) {
+    el.innerHTML = `<div class="row" style="justify-content:space-between">
+      <div>
+        <div style="font-size:19px;font-weight:600">${esc(target.category)}</div>
+        <div class="sub">${n ? n + ' search area' + (n > 1 ? 's' : '')
+          : 'one area: ' + esc(target.location)} &middot; ${target.batch_size} per run</div>
+      </div>
+      <button onclick="drawTarget(true)">Change</button>
+    </div>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <label class="sub" for="t-cat">Type of business</label>
+    <input id="t-cat" style="width:100%;margin:5px 0 14px" value="${esc(target.category)}"
+           placeholder="hair salon">
+    <label class="sub" for="t-loc">Main location</label>
+    <input id="t-loc" style="width:100%;margin:5px 0 4px" value="${esc(target.location)}"
+           placeholder="Georgetown, Penang, Malaysia">
+    <p class="hint" style="margin:0 0 14px">Used in the outreach copy, and searched
+      when no areas are listed below.</p>
+    <label class="sub" for="t-areas">Search areas &mdash; one per line</label>
+    <textarea id="t-areas" style="height:190px;margin-top:5px"
+      placeholder="Georgetown, Penang, Malaysia">${esc((target.areas || []).join('\\n'))}</textarea>
+    <p class="hint">Google gives about 60 results per area and no more, so one area
+      runs dry in a day or two. List several and each run moves down the list,
+      skipping businesses you already have.</p>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" onclick="saveTarget()">Save</button>
+      <button onclick="drawTarget(false)">Cancel</button>
+      <span class="sub" id="t-msg"></span>
+    </div>
+    <p class="hint">Changing this starts a fresh hunt. Nothing already on your
+      Sheet is altered or lost.</p>`;
+}
+
+async function saveTarget() {
+  const body = {
+    category: $('#t-cat').value,
+    location: $('#t-loc').value,
+    areas: $('#t-areas').value.split('\\n').map(s => s.trim()).filter(Boolean),
+  };
+  document.querySelectorAll('#target button').forEach(b => b.disabled = true);
+  $('#t-msg').textContent = 'Saving…';
+
+  let d;
+  try {
+    d = await (await fetch('/api/campaign', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    })).json();
+  } catch { d = {error: 'Could not reach the dashboard'}; }
+
+  if (!d.ok) {
+    $('#t-msg').innerHTML = `<span class="err">${esc(d.error || 'Failed')}</span>`;
+    document.querySelectorAll('#target button').forEach(b => b.disabled = false);
+    return;
+  }
+  target = Object.assign({}, target, d);
+  drawTarget(false);
+}
 
 // ------------------------------------------------------------ step 2: review
 
@@ -816,6 +978,7 @@ async function saveBuilt(leadId, i) {
 }
 
 refresh();
+loadTarget();
 loadReview();
 loadQueue();
 poll();

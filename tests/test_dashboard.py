@@ -462,3 +462,116 @@ def test_deciding_on_a_missing_row_says_so_rather_than_claiming_success(monkeypa
 
     body = client.post("/api/decide", json={"lead_id": "ghost", "decision": "approved"})
     assert "ghost" in body.get_json()["error"]
+
+
+# ------------------------------------------- choosing what to hunt, from the page
+
+
+@pytest.fixture
+def campaign_app(tmp_path):
+    """An app pointed at a throwaway copy of the real campaign file."""
+    from pathlib import Path
+
+    src = Path("config/campaigns/penang-my.yaml")
+    path = tmp_path / "campaign.yaml"
+    path.write_text(src.read_text())
+    config = load_config(path, env_file=None)
+    return create_app(config).test_client(), path
+
+
+def test_the_page_shows_what_you_are_hunting(client):
+    body = client.get("/").data
+    assert b"What you're hunting" in body or b"What you&#39;re hunting" in body
+    assert b"Change" in body
+
+
+def test_campaign_endpoint_reports_the_current_target(campaign_app):
+    client, _path = campaign_app
+    d = client.get("/api/campaign").get_json()
+
+    assert d["category"] == "hair salon"
+    assert len(d["areas"]) == 18
+    assert d["batch_size"] == 60
+
+
+def test_changing_the_category_is_written_to_the_file(campaign_app):
+    client, path = campaign_app
+    d = client.post("/api/campaign", json={"category": "barber shop"}).get_json()
+
+    assert d["ok"] is True
+    assert d["category"] == "barber shop"
+    assert 'category: "barber shop"' in path.read_text()
+
+
+def test_a_change_takes_effect_without_a_restart(campaign_app):
+    """The whole point of editing from the page."""
+    client, _path = campaign_app
+    client.post("/api/campaign", json={"category": "cafe"})
+
+    assert client.get("/api/campaign").get_json()["category"] == "cafe"
+    assert b"cafe" in client.get("/").data
+
+
+def test_areas_can_be_replaced_from_the_page(campaign_app):
+    client, path = campaign_app
+    d = client.post(
+        "/api/campaign", json={"areas": ["Ipoh, Perak", "Taiping, Perak"]}
+    ).get_json()
+
+    assert d["areas"] == ["Ipoh, Perak", "Taiping, Perak"]
+    assert "Bayan Lepas" not in path.read_text()
+
+
+def test_saving_keeps_the_files_comments(campaign_app):
+    client, path = campaign_app
+    before = path.read_text().count("#")
+    client.post("/api/campaign", json={"category": "cafe", "areas": ["Ipoh"]})
+
+    assert path.read_text().count("#") == before
+
+
+def test_an_empty_category_is_refused_and_nothing_is_written(campaign_app):
+    client, path = campaign_app
+    before = path.read_text()
+
+    d = client.post("/api/campaign", json={"category": "  "}).get_json()
+
+    assert "cannot be empty" in d["error"]
+    assert path.read_text() == before, "a rejected edit must not touch the file"
+
+
+def test_duplicate_areas_are_refused(campaign_app):
+    client, _path = campaign_app
+    d = client.post("/api/campaign", json={"areas": ["Ipoh", "Ipoh"]}).get_json()
+    assert "Duplicate area" in d["error"]
+
+
+def test_areas_must_be_a_list(campaign_app):
+    client, _path = campaign_app
+    r = client.post("/api/campaign", json={"areas": "Ipoh"})
+    assert r.status_code == 400
+
+
+def test_a_rejected_edit_leaves_a_loadable_campaign(campaign_app):
+    """However the edit fails, the pipeline must still start tomorrow."""
+    client, path = campaign_app
+    client.post("/api/campaign", json={"category": ""})
+    client.post("/api/campaign", json={"location": ""})
+
+    cfg = load_config(path, env_file=None)
+    assert cfg.campaign.category == "hair salon"
+    assert cfg.campaign.areas
+
+
+def test_the_new_target_is_what_the_next_run_would_search(campaign_app):
+    client, path = campaign_app
+    client.post(
+        "/api/campaign",
+        json={"category": "dental clinic", "areas": ["Ipoh, Perak", "Taiping, Perak"]},
+    )
+
+    cfg = load_config(path, env_file=None)
+    assert cfg.campaign.search_queries == (
+        "dental clinic in Ipoh, Perak",
+        "dental clinic in Taiping, Perak",
+    )

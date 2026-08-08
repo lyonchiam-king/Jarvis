@@ -474,7 +474,16 @@ compliance gate for the campaign's country also runs before any copy is written.
 
 ## Changing city, category, or country
 
-Copy a campaign file, edit values, point at it. No code changes.
+**From the dashboard:** the *What you're hunting* card at the top edits the
+category, the main location, and the list of search areas, then reloads without
+a restart. It rewrites the campaign YAML in place with its comments intact —
+`campaign_edit.py` does a surgical line rewrite rather than a `safe_dump`
+round-trip, because the comments in a campaign file *are* its documentation.
+A rejected edit never touches the file, and an edit that would fail to load is
+rolled back, so the pipeline always starts tomorrow.
+
+**For a whole new campaign:** copy a campaign file, edit values, point at it.
+No code changes.
 
 ```bash
 cp config/campaigns/penang-my.yaml config/campaigns/kl-cafes.yaml

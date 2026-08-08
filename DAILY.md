@@ -10,8 +10,10 @@ the order you actually work:
 | **3** | **Build** | The approved ones, ready to paste into Lovable |
 | **4** | **Send** | Drafts waiting in Gmail, WhatsApp messages to copy |
 
-At the top, **What needs you today** — the same four things as counts, so you
-know before scrolling whether this is a five-minute morning or an hour.
+At the top, **What you're hunting** (what you're targeting right now, and a
+**Change** button) and **What needs you today** — the same four things as
+counts, so you know before scrolling whether this is a five-minute morning or
+an hour.
 
 ---
 
@@ -277,26 +279,23 @@ the run tells you plainly:
 > Every area in this campaign is used up — Google has no more results to give
 > for these searches.
 
-That is your cue, and it's a one-line edit. Open
-`config\campaigns\penang-my.yaml` in Notepad and either **add more areas**:
+That is your cue, and you never need to leave the dashboard for it. In
+**What you're hunting** at the top, press **Change**:
 
-```yaml
-campaign:
-  areas:
-    - "Georgetown, Penang, Malaysia"
-    - "Sungai Petani, Kedah, Malaysia"     # new
-    - "Ipoh, Perak, Malaysia"              # new
-```
+- **Type of business** — `hair salon` → `barber shop`. Changing this reopens
+  every area at once, since Google treats it as an entirely different search.
+- **Search areas** — one per line. Add `Sungai Petani, Kedah, Malaysia`,
+  `Ipoh, Perak, Malaysia`, anything you'd type into Google Maps.
 
-…or **change the category**, which reopens every area at once:
+Press **Save**, then **Run this morning's batch**. Same pipeline, new market.
 
-```yaml
-campaign:
-  category: "barber shop"      # was: hair salon
-```
+**Nothing you've already done is touched.** Old leads keep their stage, their
+sites, and their drafts. The Sheet grows a new hunt alongside the old one — so
+changing your mind costs nothing and loses nothing.
 
-Save, then press **Run this morning's batch**. Same pipeline, new market, and
-everything you've already done is untouched.
+> Save writes it into `config\campaigns\penang-my.yaml` for you, comments and
+> all. Editing that file in Notepad still works exactly as before if you prefer
+> it; there's just no longer any need to.
 
 **Good categories to try:** hair salon, barber shop, cafe, dental clinic,
 tuition centre, car workshop, florist, bakery, pet grooming, physiotherapy.
