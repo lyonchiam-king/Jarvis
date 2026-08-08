@@ -1,0 +1,45 @@
+# Example of expanding beyond Malaysia -- proves the pipeline is region-agnostic.
+# Nothing here differs structurally from penang-my.yaml except the values.
+#
+# NOTE: the UK is a flagged jurisdiction (UK GDPR + PECR). Running an outreach
+# stage against this config will refuse to start until you read the warning
+# compliance.py prints and set `acknowledged: true` below.
+
+campaign:
+  name: manchester-barbers
+  category: "barber shop"
+  location: "Manchester, United Kingdom"
+  language: en
+
+discovery:
+  max_results: 40
+  page_size: 20
+  min_rating: 0.0
+  min_review_count: 5
+  allowed_business_status:
+    - OPERATIONAL
+  treat_social_as_no_website: true
+  social_domains:
+    - facebook.com
+    - fb.com
+    - instagram.com
+    - linktr.ee
+    - wa.me
+    - tiktok.com
+    - business.site
+
+outreach:
+  sender_name: "Lyon Chiam"
+  sender_title: "Founder"
+  company: "COAI"
+  channel_priority:
+    - email
+    - whatsapp
+
+lovable:
+  enabled: false
+  require_confirmation: true
+
+compliance:
+  country_code: GB
+  acknowledged: false

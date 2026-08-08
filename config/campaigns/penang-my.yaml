@@ -1,0 +1,68 @@
+# Campaign: Penang, Malaysia -- hair salons without a website.
+# To target a different city/country, copy this file, change `campaign` and
+# `compliance.country_code`, and point CAMPAIGN_CONFIG at the new file.
+# No code changes required.
+
+campaign:
+  name: penang-hair-salons
+  category: "hair salon"
+  # Free-text location. Places Text Search resolves this, so anything a human
+  # would type into Google Maps works: a suburb, a city, or a whole region.
+  location: "Georgetown, Penang, Malaysia"
+  language: en
+
+discovery:
+  # Stop after this many qualifying (no-website) leads. Each API page costs
+  # money -- see README "Cost control".
+  max_results: 60
+  # Places API (New) caps Text Search at 20 per page.
+  page_size: 20
+  # Skip low-signal listings. 0 disables the filter.
+  min_rating: 0.0
+  min_review_count: 3
+  # Only chase businesses that are actually trading.
+  allowed_business_status:
+    - OPERATIONAL
+  # A Facebook page is not a website. When true, a lead whose only web presence
+  # is a social/link-in-bio URL still counts as "no website" -- these are often
+  # the best leads, since they have proven they want an online presence.
+  treat_social_as_no_website: true
+  social_domains:
+    - facebook.com
+    - fb.com
+    - fb.me
+    - instagram.com
+    - linktr.ee
+    - linktree.com
+    - wa.me
+    - api.whatsapp.com
+    - tiktok.com
+    - x.com
+    - twitter.com
+    - beacons.ai
+    - carrd.co
+    - business.site      # Google Business Profile auto-sites
+    - shopee.com.my
+    - lazada.com.my
+
+outreach:
+  sender_name: "Lyon Chiam"
+  sender_title: "Founder"
+  company: "COAI"
+  # Places rarely returns email for these businesses, so WhatsApp leads.
+  channel_priority:
+    - whatsapp
+    - email
+
+lovable:
+  # Coded and ready, but off. Flip to true only after connecting the Lovable
+  # MCP server -- create_project and send_message consume credits.
+  enabled: false
+  require_confirmation: true
+
+compliance:
+  # ISO 3166-1 alpha-2. Drives the outreach-law gate in compliance.py.
+  country_code: MY
+  # Must be true before any outreach stage will run in a flagged jurisdiction.
+  # Malaysia is not flagged, so discovery runs regardless.
+  acknowledged: false

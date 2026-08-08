@@ -1,0 +1,18 @@
+# Secrets and credentials -- never commit
+.env
+credentials/
+*.json.secret
+token.json
+oauth_client.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Local run artifacts
+.cache/
+*.log
