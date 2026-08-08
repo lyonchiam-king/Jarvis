@@ -43,6 +43,10 @@ outreach:
   sender_name: "Lyon Chiam"
   sender_title: "Founder"
   company: "COAI"
+  # Required before Stage 5 runs. For a UK campaign this must be a real
+  # address a recipient could actually write to -- PECR and UK GDPR both
+  # expect the sender to be identifiable and contactable.
+  postal_address: ""
   channel_priority:
     - email
     - whatsapp

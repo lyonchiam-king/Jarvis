@@ -72,7 +72,7 @@ outreach:
   # REQUIRED before Stage 5 will run. Goes in the footer of every draft --
   # a real postal address is a legal requirement for commercial email under
   # CAN-SPAM, GDPR/ePrivacy, and Australia's Spam Act.
-  postal_address: ""
+  postal_address: "COAI, Level 16, Hunza Tower, Penang, Malaysia"
   # Places rarely returns email for these businesses, so WhatsApp leads.
   channel_priority:
     - whatsapp
