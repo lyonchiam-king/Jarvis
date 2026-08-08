@@ -35,8 +35,11 @@ in your Gmail **drafts** and you press send.
 
 ## Quick start
 
-Needs **Python 3.10 or newer** (`python3 --version`). macOS ships 3.9 — if
-that's what you have, `brew install python@3.12` first.
+Needs **Python 3.10 or newer**. macOS ships 3.9 — if that's what you have,
+`brew install python@3.12` first. On Windows, install from python.org and tick
+**"Add Python to PATH"**.
+
+**macOS / Linux:**
 
 ```bash
 python3 -m venv .venv
@@ -45,9 +48,28 @@ pip install -e ".[dev]"
 
 mkdir -p credentials          # your OAuth client JSON goes here (gitignored)
 cp .env.example .env          # fill in PLACES_API_KEY + ANTHROPIC_API_KEY
+nano .env
 ```
 
-Then, in order:
+**Windows (PowerShell):**
+
+```powershell
+python -m venv .venv
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass   # see note below
+.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+
+mkdir credentials
+cp .env.example .env
+notepad .env
+```
+
+> Activating a venv in PowerShell fails with *"running scripts is disabled on
+> this system"* unless you relax the execution policy. `-Scope Process` applies
+> to that window only — nothing permanent — and you repeat it in each new
+> window. There is no `nano` on Windows; `notepad` is built in.
+
+Either way, your prompt should gain a `(.venv)` prefix. Then, in order:
 
 ```bash
 outreach preflight            # checks key, billing, OAuth, Sheet access
@@ -63,9 +85,10 @@ outreach run outreach-draft --dry-run   # see the copy before spending
 outreach run outreach-draft        # drafts land in your Gmail
 ```
 
-Every new terminal needs `source .venv/bin/activate` again. If you'd rather
-skip that, prefix commands with the full path instead: `.venv/bin/outreach
-preflight`.
+Every new terminal needs the activate step again (`source .venv/bin/activate`,
+or `.venv\Scripts\Activate.ps1` on Windows). If you'd rather skip it, use the
+full path instead: `.venv/bin/outreach preflight` — or on Windows,
+`.venv\Scripts\outreach.exe preflight`.
 
 Each stage handles up to **100 businesses per run** and skips anything it has
 already done, so running a command twice is safe and costs nothing extra.
