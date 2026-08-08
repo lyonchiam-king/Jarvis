@@ -35,9 +35,15 @@ in your Gmail **drafts** and you press send.
 
 ## Just want to use it?
 
-**Double-click `run.bat`** (Windows) or `run.sh` (macOS/Linux). You get a menu;
-type a number. No commands to remember, and it builds its own environment on
-first run.
+**Double-click `Dashboard.bat`** (Windows) or run `outreach dashboard`. A local
+dashboard opens in your browser: what needs your attention today, where every
+lead sits in the funnel, and a button for each stage. Runs on `127.0.0.1` only.
+
+Right-click `Dashboard.bat` → *Send to → Desktop (create shortcut)* for a
+desktop icon.
+
+Prefer a terminal menu? `run.bat` / `run.sh` does the same thing without a
+browser. Both bootstrap their own environment on first run.
 
 **[DAILY.md](DAILY.md)** is the day-to-day guide, written for someone who
 doesn't use a terminal.

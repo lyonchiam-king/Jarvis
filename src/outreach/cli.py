@@ -199,6 +199,17 @@ def init_sheet(ctx: click.Context, title: str | None) -> None:
         click.echo(f"  SHEET_ID={sheet_id}")
 
 
+@main.command("dashboard")
+@click.option("--port", default=8765, help="Port to serve on.")
+@click.option("--no-browser", is_flag=True, help="Don't open a browser tab.")
+@click.pass_context
+def dashboard_cmd(ctx: click.Context, port: int, no_browser: bool) -> None:
+    """Open the dashboard in your browser. Runs on this machine only."""
+    from .dashboard import serve
+
+    serve(ctx.obj["config_path"], port=port, open_browser=not no_browser)
+
+
 @main.command("compliance")
 @click.pass_context
 def compliance_cmd(ctx: click.Context) -> None:

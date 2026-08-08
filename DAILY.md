@@ -1,11 +1,23 @@
 # Running this every day
 
-No commands to remember. **Double-click `run.bat`.**
+**Double-click `Dashboard.bat`.** Your browser opens with everything on one
+page: what needs you today, where every lead sits, and buttons to run each
+stage.
 
-A menu appears. Type a number, press Enter. That's the whole interface.
+### Put it on your desktop, once
 
-> On a Mac: rename `run.sh` to `run.command`, then run `chmod +x run.command`
-> once in Terminal. After that it double-clicks too.
+Right-click `Dashboard.bat` → **Send to → Desktop (create shortcut)**. Rename
+the shortcut to *SME Outreach*. From then on it's a desktop icon like any
+other app.
+
+> **Prefer a plain menu?** `run.bat` gives you a numbered list in a terminal
+> window instead. Same actions, no browser.
+>
+> **On a Mac:** rename `run.sh` to `run.command` and run `chmod +x run.command`
+> once. Or `outreach dashboard` for the browser version.
+
+The dashboard runs on your machine only — nobody else can reach it, and it
+holds no passwords of its own.
 
 ---
 
@@ -25,12 +37,15 @@ thinking the job is done when the Sheet fills up.
 
 ## Your morning, step by step
 
-### 1. Double-click `run.bat`, press `5`
+### 1. Open the dashboard, press **Run everything**
 
-That runs everything: finds new leads, researches them, writes website
-prompts, and drafts your messages. Takes a few minutes. You can walk away.
+That finds new leads, researches them, writes website prompts, and drafts your
+messages. Takes a few minutes — output streams down the page, and you can walk
+away.
 
-When it finishes it prints a summary and your Sheet link.
+When it's done, the **What needs you today** cards refresh. Those are your
+to-do list: how many emails are waiting to be sent, how many WhatsApp messages
+to copy, and anything that errored.
 
 ### 2. Open Gmail → Drafts
 
