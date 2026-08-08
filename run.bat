@@ -22,7 +22,7 @@ if not exist ".venv\Scripts\python.exe" (
         exit /b 1
     )
     ".venv\Scripts\python.exe" -m pip install --quiet --upgrade pip
-    ".venv\Scripts\python.exe" -m pip install --quiet -e ".[dev]"
+    ".venv\Scripts\python.exe" -m pip install --quiet -e .
     echo   Setup done.
     timeout /t 2 >nul
 )
@@ -41,19 +41,21 @@ echo        1.  Find new leads
 echo        2.  Research the leads I have
 echo.
 echo      PREPARE
-echo        3.  Write website prompts
-echo        4.  Draft my outreach messages
+echo        3.  Write the design briefs
+echo        4.  Build the sites I approved
+echo        5.  Draft my outreach messages
 echo.
 echo      ALL OF IT
-echo        5.  Run the full pipeline  ^(1 then 2 then 3 then 4^)
+echo        6.  Run this morning's batch  ^(1, 2, 3, then 5^)
 echo.
 echo      LOOK BEFORE YOU SPEND
-echo        6.  Preview new leads      ^(costs a search, writes nothing^)
-echo        7.  Preview my messages    ^(writes nothing, drafts nothing^)
+echo        7.  Preview new leads      ^(costs a search, writes nothing^)
+echo        8.  Preview my messages    ^(writes nothing, drafts nothing^)
 echo.
 echo      HOUSEKEEPING
-echo        8.  Check everything works
-echo        9.  Open my Sheet
+echo        9.  Check everything works
+echo        S.  Open my Sheet
+echo        D.  Open the dashboard  ^(easier - approving happens there^)
 echo        0.  Quit
 echo.
 set /p "choice=   Type a number and press Enter: "
@@ -61,12 +63,14 @@ set /p "choice=   Type a number and press Enter: "
 if "%choice%"=="1" goto discovery
 if "%choice%"=="2" goto research
 if "%choice%"=="3" goto sitebrief
-if "%choice%"=="4" goto draft
-if "%choice%"=="5" goto fullrun
-if "%choice%"=="6" goto previewleads
-if "%choice%"=="7" goto previewmsgs
-if "%choice%"=="8" goto preflight
-if "%choice%"=="9" goto opensheet
+if "%choice%"=="4" goto sitebuild
+if "%choice%"=="5" goto draft
+if "%choice%"=="6" goto fullrun
+if "%choice%"=="7" goto previewleads
+if "%choice%"=="8" goto previewmsgs
+if "%choice%"=="9" goto preflight
+if /i "%choice%"=="S" goto opensheet
+if /i "%choice%"=="D" goto dashboard
 if "%choice%"=="0" exit /b 0
 goto menu
 
@@ -86,10 +90,25 @@ goto done
 
 :sitebrief
 cls
-echo   Writing website prompts...
+echo   Writing the design briefs...
 echo.
 %OUTREACH% run site-brief
 goto done
+
+:sitebuild
+cls
+echo   Building the sites you marked Approved. This spends Lovable credits,
+echo   and it asks before each one.
+echo.
+%OUTREACH% run site-build
+goto done
+
+:dashboard
+cls
+echo   Starting the dashboard. Close that window to come back here.
+echo.
+%OUTREACH% dashboard
+goto menu
 
 :draft
 cls
@@ -100,7 +119,8 @@ goto done
 
 :fullrun
 cls
-echo   Running the full pipeline. Sit back - this takes a few minutes.
+echo   Running this morning's batch. Sit back - this takes a few minutes.
+echo   It skips every business it has already seen.
 echo.
 %OUTREACH% run discovery
 echo.

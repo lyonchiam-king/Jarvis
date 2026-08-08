@@ -1,6 +1,7 @@
 """The dashboard's numbers, and that it stays local and read-only."""
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -575,3 +576,66 @@ def test_the_new_target_is_what_the_next_run_would_search(campaign_app):
         "dental clinic in Ipoh, Perak",
         "dental clinic in Taiping, Perak",
     )
+
+
+# ------------------------------------------------ the handbook, and first run
+
+
+def test_the_handbook_renders_in_the_app(client):
+    r = client.get("/guide")
+    assert r.status_code == 200
+    body = r.data.decode()
+    assert "Running this every day" in body
+    assert "Back to the dashboard" in body
+
+
+def test_the_dashboard_links_to_the_handbook(client):
+    assert b'href="/guide"' in client.get("/").data
+
+
+def test_each_step_links_to_its_place_in_the_handbook(client):
+    """A help link that 404s inside the page is worse than none."""
+    from outreach.guide import guide_html
+
+    page = client.get("/").data.decode()
+    rendered = guide_html()
+
+    anchors = re.findall(r'href="/guide#([^"]+)"', page)
+    assert anchors, "no contextual help links on the page"
+    for anchor in set(anchors):
+        assert f'id="{anchor}"' in rendered, f"help link points nowhere: #{anchor}"
+
+
+def test_an_unconfigured_install_says_what_is_missing(monkeypatch, tmp_path):
+    """Otherwise the page invites you to press a button that will just fail."""
+    from dataclasses import replace
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, sheet_id="", places_api_key=""))
+    client = create_app(config).test_client()
+
+    d = client.get("/api/summary").get_json()
+
+    assert "SHEET_ID" in d["setup_needed"]
+    assert "PLACES_API_KEY" in d["setup_needed"]
+    assert "total" not in d
+
+
+def test_a_configured_install_reports_numbers_not_a_setup_prompt(monkeypatch):
+    from dataclasses import replace
+
+    from outreach import dashboard as dash
+
+    monkeypatch.setattr(dash, "_load_summary", lambda config: dash.Summary(total=7))
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(
+        config,
+        secrets=replace(
+            config.secrets, sheet_id="s", places_api_key="p", anthropic_api_key="a"
+        ),
+    )
+    client = create_app(config).test_client()
+
+    d = client.get("/api/summary").get_json()
+    assert d["total"] == 7
+    assert "setup_needed" not in d

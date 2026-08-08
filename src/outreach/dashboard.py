@@ -288,6 +288,12 @@ def create_app(config: Config) -> Flask:
     def index():
         return render_template_string(PAGE, campaign=current().campaign)
 
+    @app.route("/guide")
+    def guide():
+        from .guide import guide_html
+
+        return render_template_string(GUIDE_PAGE, body=guide_html())
+
     @app.route("/api/campaign")
     def api_campaign():
         c = current()
@@ -359,8 +365,24 @@ def create_app(config: Config) -> Flask:
 
     @app.route("/api/summary")
     def api_summary():
+        c = current()
+        # Distinguish "set up but empty" from "not set up yet". Without this
+        # the page says "no leads yet, press Find leads" at someone whose keys
+        # aren't filled in, and the button they press just fails.
+        missing = [
+            name
+            for name, value in (
+                ("SHEET_ID", c.secrets.sheet_id),
+                ("PLACES_API_KEY", c.secrets.places_api_key),
+                ("ANTHROPIC_API_KEY", c.secrets.anthropic_api_key),
+            )
+            if not value
+        ]
+        if missing:
+            return jsonify({"setup_needed": missing})
+
         try:
-            summary = _load_summary(current())
+            summary = _load_summary(c)
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
         return jsonify(
@@ -518,6 +540,73 @@ def serve(config_path: str | None = None, *, port: int = 8765, open_browser: boo
     app.run(host="127.0.0.1", port=port, debug=False)
 
 
+GUIDE_PAGE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Handbook &middot; SME Outreach</title>
+<style>
+  :root {
+    --bg:#f6f5f2; --card:#fff; --ink:#1b1a17; --muted:#6b6862;
+    --line:#e3e0d8; --accent:#b4552d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16151a; --card:#1f1e24; --ink:#ece9e3; --muted:#9a958c;
+            --line:#2f2d35; --accent:#e07a4e; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .wrap { max-width:720px; margin:0 auto; padding:24px 20px 90px; }
+  .back { display:inline-block; margin-bottom:26px; font-size:13.5px;
+          color:var(--accent); text-decoration:none; }
+  h1 { font-size:27px; letter-spacing:-.015em; margin:0 0 20px; }
+  h2 { font-size:21px; margin:44px 0 12px; letter-spacing:-.01em;
+       padding-top:14px; border-top:1px solid var(--line); }
+  h3 { font-size:17px; margin:30px 0 8px; }
+  h4 { font-size:15px; margin:22px 0 6px; color:var(--muted); }
+  p, li { margin:0 0 13px; }
+  ul, ol { padding-left:22px; margin:0 0 16px; }
+  a { color:var(--accent); }
+  code { font:13.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+         background:var(--card); border:1px solid var(--line);
+         border-radius:5px; padding:1px 5px; word-break:break-word; }
+  pre { background:#0e0d11; color:#dcd7cf; padding:15px 17px; border-radius:10px;
+        overflow-x:auto; font-size:13px; line-height:1.6; margin:0 0 18px; }
+  pre code { background:none; border:0; padding:0; color:inherit;
+             white-space:pre; word-break:normal; }
+  blockquote { margin:0 0 18px; padding:13px 17px; background:var(--card);
+               border-left:3px solid var(--accent); border-radius:0 9px 9px 0; }
+  blockquote > :last-child { margin-bottom:0; }
+  .scroll { overflow-x:auto; margin:0 0 18px; }
+  table { border-collapse:collapse; width:100%; font-size:14.5px; }
+  th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line);
+           vertical-align:top; }
+  th { font-size:12px; text-transform:uppercase; letter-spacing:.06em;
+       color:var(--muted); }
+  hr { border:0; border-top:1px solid var(--line); margin:34px 0; }
+  h1:target, h2:target, h3:target { scroll-margin-top:18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/">&lsaquo; Back to the dashboard</a>
+  {{ body|safe }}
+</div>
+<script>
+// Wide tables scroll on their own rather than pushing the page sideways.
+document.querySelectorAll('table').forEach(t => {
+  const box = document.createElement('div');
+  box.className = 'scroll';
+  t.parentNode.insertBefore(box, t);
+  box.appendChild(t);
+});
+</script>
+</body>
+</html>
+"""
+
 PAGE = """<!doctype html>
 <html lang="en">
 <head>
@@ -608,8 +697,10 @@ PAGE = """<!doctype html>
     <h1>SME Outreach</h1>
     <div class="sub" id="who">{{ campaign.category }} &middot; {{ campaign.location }}</div>
   </header>
-  <div class="sub" id="totals">Loading&hellip;</div>
-
+  <div class="row" style="justify-content:space-between;align-items:baseline">
+    <div class="sub" id="totals">Loading&hellip;</div>
+    <a class="sub" href="/guide" target="_blank" rel="noopener"><b>Handbook &rsaquo;</b></a>
+  </div>
   <h2>What you're hunting</h2>
   <div class="card" id="target">Loading&hellip;</div>
 
@@ -618,7 +709,8 @@ PAGE = """<!doctype html>
 
   <h2><span class="stepno">1</span> Gather
       <span class="sub" style="text-transform:none;letter-spacing:0">
-      &mdash; finds new businesses, researches them, writes their briefs</span></h2>
+      &mdash; finds new businesses, researches them, writes their briefs</span>
+      <a class="sub" href="/guide#1-press-run-this-mornings-batch" target="_blank" rel="noopener">What is this?</a></h2>
   <div class="card">
     <div class="row">
       <button class="primary" data-run="full">Run this morning's batch</button>
@@ -647,15 +739,18 @@ PAGE = """<!doctype html>
 
   <h2><span class="stepno">2</span> Review
       <span class="sub" style="text-transform:none;letter-spacing:0">
-      &mdash; one at a time. Approve sends it to the build queue; nothing is spent yet</span></h2>
+      &mdash; one at a time. Approve sends it to the build queue; nothing is spent yet</span>
+      <a class="sub" href="/guide#2-review-the-briefs-one-at-a-time" target="_blank" rel="noopener">What is this?</a></h2>
   <div id="review"></div>
 
   <h2><span class="stepno">3</span> Build
       <span class="sub" style="text-transform:none;letter-spacing:0">
-      &mdash; approved, waiting for you to paste into Lovable</span></h2>
+      &mdash; approved, waiting for you to paste into Lovable</span>
+      <a class="sub" href="/guide#3-build-the-ones-you-approved" target="_blank" rel="noopener">What is this?</a></h2>
   <div id="queue"></div>
 
-  <h2><span class="stepno">4</span> Send</h2>
+  <h2><span class="stepno">4</span> Send
+      <a class="sub" href="/guide#4-open-gmail-drafts" target="_blank" rel="noopener">What is this?</a></h2>
   <div class="card" id="send"></div>
 
   <h2>Pipeline</h2>
@@ -680,7 +775,22 @@ async function refresh() {
   try { d = await (await fetch('/api/summary')).json(); } catch { return; }
 
   if (d.error) {
-    $('#totals').innerHTML = `<span class="err">${d.error}</span>`;
+    $('#totals').innerHTML = `<span class="err">${esc(d.error)}</span>`;
+    return;
+  }
+
+  if (d.setup_needed) {
+    $('#totals').innerHTML = '<span class="err">Not set up yet</span>';
+    $('#todo').innerHTML = `<div class="card" style="grid-column:1/-1">
+      <div class="what"><b>Before this can run, three keys need filling in.</b></div>
+      <div class="sub" style="margin:8px 0">
+        Still missing from your <code>.env</code> file:
+        <b>${d.setup_needed.join('</b>, <b>')}</b></div>
+      <div class="sub">The <a href="/guide#getting-it-onto-your-computer"
+        target="_blank" rel="noopener">handbook</a> shows where each one comes
+        from. Fill them in, save, then reload this page.</div></div>`;
+    $('#funnel').innerHTML = '';
+    $('#send').innerHTML = '<div class="sub">Nothing yet.</div>';
     return;
   }
   $('#totals').innerHTML = d.total

@@ -63,6 +63,71 @@ build if anyone ever changes that binding.
 
 ---
 
+## Your first test run
+
+About twenty minutes, and it costs roughly a dollar. Do it once before you
+trust it with a real batch.
+
+### 1. Check the wiring — free
+
+Double-click your new desktop icon. In step 1, open **Run one step on its own**
+and press **Check setup**.
+
+Read the output. It tests Google Places, Sheets, Gmail and Anthropic one at a
+time and names anything that's wrong. **Don't go further until this passes** —
+every later step depends on it, and a failure here is much easier to read than
+the same failure buried in a batch of 60.
+
+### 2. Look before you spend — free
+
+Press **Preview leads**. It searches, applies your filters, and prints the
+businesses it *would* save. Nothing is written and nothing is charged beyond a
+few cents of search.
+
+Look at the names. Are these real businesses you'd want as customers? If
+they're the wrong sort entirely, fix the category in **What you're hunting**
+before spending anything.
+
+### 3. A small real batch — about 60 cents
+
+Press **Find leads**, then **Research**, then **Write briefs**. Ten leads is
+plenty for a first look; you can stop the moment you have enough.
+
+Now open your Sheet (link at the top) and read the **Research** tab. This is
+the honest test: is *Suggested Website Angle* specific and true, or could it
+have been written about any salon in Penang? Everything downstream is built on
+this, so if it reads thin, say so and we'll tune it before you scale up.
+
+### 4. Review one, build one — the real cost starts here
+
+In step 2, read one brief properly. **Approve** just that one, **Decide later**
+on the rest.
+
+In step 3, **Copy prompt** → **Open Lovable** → paste → let it build. Then
+paste the URL back and press **Mark as built**.
+
+**Open the finished site on your phone.** This is the moment of truth — it's
+what a business owner will see. Is the name right? Does the phone number work?
+Would you be happy sending this to a stranger?
+
+### 5. See the message — free
+
+Press **Draft messages**, then open Gmail → Drafts. Read it as if you were the
+owner: does the first line prove someone looked at their business, and does the
+demo link open?
+
+**Don't send it yet.** Sit on it for an hour, read it again, then decide.
+
+### What to come back with
+
+- The angle from the Research tab — sharp, or generic?
+- The demo site — right, or does it need different instructions?
+- The email — would you actually send it as written?
+
+Those three answers are what tell us what to fix next.
+
+---
+
 ## The demo is the pitch
 
 **Every lead gets a site built before you write to them.** Not a description of
