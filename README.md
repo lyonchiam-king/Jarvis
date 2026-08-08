@@ -348,7 +348,15 @@ prompt out — so the prompt is reviewable and testable rather than a one-off
 generation.
 
 The prompt lands in the `Site Briefs` tab with `Approval Status` seeded to
-`Pending`. **This command never spends Lovable credits** — a test asserts it.
+`Pending`, or to `Approved` when `lovable.auto_approve: true` — the demo-first
+setting the Penang campaign ships with, since approving each lead one at a time
+is pure friction when the plan is to build for all of them. Either way
+**this command never spends Lovable credits**; a test asserts it even with
+auto-approve on. `Approved` means queued, not built.
+
+The seed is written once on insert and never rewritten, so turning
+`auto_approve` on later cannot retroactively approve a lead you already
+declined.
 
 ### Stage 4b — actually building
 
@@ -359,9 +367,13 @@ outreach run site-build
 Three independent gates stand in front of any spend:
 
 1. `lovable.enabled: true` in the campaign config *(default: false)*
-2. `Approval Status` reads `Approved` — that column is **manual**, so automation
-   cannot approve its own spending
+2. `Approval Status` reads `Approved`. With `auto_approve` off this is your
+   per-lead gate; with it on, the gate inverts — set a row to `Skip` and it is
+   never built. Either way the column is yours to edit and nothing rewrites it.
 3. An interactive confirmation per project *(unless `require_confirmation: false`)*
+
+Gate 3 is the one that never moves: no run spends credits without asking, no
+matter how the approval column was seeded.
 
 With the Lovable connector absent, `site-build` tells you how to connect it
 rather than failing obscurely. Until then the workflow is: read the prompt in
@@ -377,9 +389,24 @@ outreach run outreach-draft --dry-run   # print the copy, write nothing
 outreach run outreach-draft
 ```
 
+### Demo-first: `outreach.require_site`
+
+With `require_site: true` *(the Penang campaign's setting)*, a lead is only
+eligible once it reaches `Site Built`. A researched lead with no demo is
+reported as **not ready** and costs nothing — no Claude call, no draft.
+
+The reasoning is the product, not the plumbing: these businesses have never had
+a website, so a message describing one asks them to imagine something they have
+no reference for, and reads like every other cold script. A link to *their own
+site, already built* doesn't ask them to imagine anything.
+
+Leave it `false` (the default) to write research-angle messages without a site;
+the copy prompt then explicitly tells the model not to imply a site exists.
+
 Per lead: Claude writes a subject, an email body, and a **separate** WhatsApp
-opener (not the email pasted shorter). The signature and compliance footer are
-appended by code, not by the model, so they're identical in every draft and
+opener (not the email pasted shorter). When a `Preview URL` exists it is handed
+to the model so the link carries the pitch. The signature and compliance footer
+are appended by code, not by the model, so they're identical in every draft and
 can't be paraphrased away.
 
 - **Email address found** → a draft appears in your Gmail drafts folder

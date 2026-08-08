@@ -34,10 +34,16 @@ there is no path to Lovable, and a half-measure wastes their time.
 outreach briefs pending --json
 ```
 
-Returns a JSON array of `{lead_id, business_name, prompt}`. Only briefs the
-user has personally marked `Approved` in the Sheet appear here. **An empty
-array means stop** — say so and do nothing else. It does not mean "go find
-something to build".
+Returns a JSON array of `{lead_id, business_name, prompt}` — the briefs marked
+`Approved` in the Sheet that have no project yet. **An empty array means stop**
+— say so and do nothing else. It does not mean "go find something to build".
+
+Note the campaign may run `lovable.auto_approve: true`, which seeds new briefs
+as `Approved` rather than `Pending`. That is a deliberate demo-first strategy —
+build a site for every lead, because the demo is the pitch — and it means this
+queue can be long without the user having clicked anything. It does **not**
+make the queue self-authorising: step 2 is the gate, and it matters more, not
+less, when the list arrives pre-approved.
 
 ### 2. Confirm before spending
 
@@ -85,8 +91,11 @@ burning credits on retries is the wrong response.
 
 ## What not to do
 
-- **Never build a brief that is not in the `pending` output.** Approval is a
-  manual column precisely so automation cannot approve its own spending.
+- **Never build a brief that is not in the `pending` output.** A row set to
+  `Skip` is a decision, and under auto-approve it is the *only* way the user
+  says no. Honour it.
+- **Never spend without an explicit yes in this conversation.** The approval
+  column may have been seeded by config; the confirmation in step 2 cannot be.
 - **Never edit the prompt.** See step 3.
 - **Never invent a preview URL.** If Lovable did not return one, record with
   `--project-id` alone and say the URL is missing.

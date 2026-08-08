@@ -1,5 +1,7 @@
 """Stage 4: prompt generation, and the three gates in front of spending credits."""
 
+from dataclasses import replace
+
 import pytest
 
 from outreach import schema
@@ -15,8 +17,17 @@ from outreach.stages import site_brief
 PENANG = "config/campaigns/penang-my.yaml"
 
 
-def config():
-    return load_config(PENANG, env_file=None)
+def config(**lovable_overrides):
+    """Campaign config with the Lovable settings pinned, not inherited.
+
+    ``auto_approve`` lives in a campaign file the user edits, so any test that
+    depends on it states its own value here.
+    """
+    cfg = load_config(PENANG, env_file=None)
+    return replace(
+        cfg,
+        lovable=replace(cfg.lovable, **{"auto_approve": False, **lovable_overrides}),
+    )
 
 
 SPEC = SiteSpec(
@@ -381,3 +392,33 @@ def test_prompt_routes_enquiries_to_a_sheet_the_owner_already_understands():
     assert "Google Sheets connector" in prompt
     assert "admin panel" in prompt
     assert "WhatsApp" in prompt
+
+
+def test_auto_approve_seeds_briefs_as_approved():
+    sheets = FakeSheets(index([lead("a")]), index([research_row("a")]))
+    site_brief.run(config(auto_approve=True), sheets, FakeWriter(), LovableAdapter())
+
+    assert sheets.upserts[0][1][0]["Approval Status"] == "Approved"
+
+
+def test_auto_approve_off_still_seeds_pending():
+    sheets = FakeSheets(index([lead("a")]), index([research_row("a")]))
+    site_brief.run(config(auto_approve=False), sheets, FakeWriter(), LovableAdapter())
+
+    assert sheets.upserts[0][1][0]["Approval Status"] == "Pending"
+
+
+def test_auto_approve_still_does_not_build_anything_here():
+    """Approved != built. Stage 4 writes prompts; only `site-build` spends."""
+
+    class ExplodingAdapter(LovableAdapter):
+        def create_project(self, *, name, prompt):
+            raise AssertionError("site-brief must never build, even auto-approved")
+
+    sheets = FakeSheets(index([lead("a")]), index([research_row("a")]))
+    report = site_brief.run(
+        config(auto_approve=True), sheets, FakeWriter(), ExplodingAdapter(enabled=True)
+    )
+
+    assert report.prompts_written == 1
+    assert report.projects_created == 0

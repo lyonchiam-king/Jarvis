@@ -77,12 +77,23 @@ outreach:
   channel_priority:
     - whatsapp
     - email
+  # The demo site IS the pitch. A business that has never had a website cannot
+  # picture one, so a link to theirs does what no sentence can. With this on,
+  # no message is drafted until that lead's site exists -- the email is never
+  # sent without the thing that makes it worth reading.
+  require_site: true
 
 lovable:
-  # Coded and ready, but off. Flip to true only after connecting the Lovable
-  # MCP server -- create_project and send_message consume credits.
+  # Only affects the local pipeline's own build path, which cannot work:
+  # Lovable is OAuth-only and issues no headless credential. Building happens
+  # through Claude Code with the Lovable MCP connector -- see
+  # .claude/skills/build-sites/SKILL.md -- so this stays false.
   enabled: false
   require_confirmation: true
+  # Demo-first strategy: every lead gets a site built before outreach, so
+  # per-lead approval would be pure friction. New briefs are seeded "Approved".
+  # Set a brief to "Skip" by hand and it is never built.
+  auto_approve: true
 
 compliance:
   # ISO 3166-1 alpha-2. Drives the outreach-law gate in compliance.py.

@@ -52,7 +52,7 @@ class OutreachReport:
         return [
             f"Leads on the Sheet        {self.candidates}",
             f"  already drafted         {self.already_done}  (skipped)",
-            f"  not yet researched      {self.not_ready}  (skipped)",
+            f"  not ready yet           {self.not_ready}  (skipped)",
             f"  selected this run       {self.selected}",
             "",
             f"Messages written          {self.copy_written}",
@@ -132,10 +132,13 @@ def run(
     report.candidates = len(leads)
 
     batch_size = min(limit or config.batch_size, config.batch_size)
+    # With require_site on, the demo is the pitch: a lead is not ready to be
+    # written to until there is a site for them to look at.
+    requires = Stage.SITE_BUILT if config.outreach.require_site else Stage.RESEARCHED
     selected, already, not_ready = select_pending(
         leads,
         set(existing),
-        requires=Stage.RESEARCHED,
+        requires=requires,
         target=Stage.EMAIL_DRAFTED,
         batch_size=batch_size,
     )
@@ -144,7 +147,14 @@ def run(
     report.selected = len(selected)
 
     if not selected:
-        log.info("Nothing to draft -- every researched lead already has a message.")
+        if config.outreach.require_site and not_ready:
+            log.info(
+                "Nothing to draft. %d lead(s) are waiting on a demo site -- "
+                "build those first (outreach.require_site is on).",
+                not_ready,
+            )
+        else:
+            log.info("Nothing to draft -- every eligible lead already has a message.")
         return report
 
     log.info("Writing outreach for %d lead(s).", len(selected))

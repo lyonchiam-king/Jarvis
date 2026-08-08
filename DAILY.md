@@ -21,20 +21,36 @@ holds no passwords of its own.
 
 ---
 
-## Build on reply, not upfront
+## The demo is the pitch
 
-The pipeline *can* build a site for every lead. **Don't let it.**
+**Every lead gets a site built before you write to them.** Not a description of
+a site. The actual thing, with their name on it, at a URL they can tap.
 
-Cold outreach converts at maybe 5–15%. Building 100 sites to win 10 customers
-means paying for 90 sites nobody asked for — and the build is the only
-genuinely expensive step you have.
+These owners have never had a website. Telling one that "a booking page would
+help you" asks them to picture something they have no reference for — and it
+sounds like every other script in their inbox. Sending them *their own salon,
+already built*, doesn't ask them to imagine anything. That's a different
+conversation, and it's the only version of this that works now.
 
-**Send first. Build when someone replies.** Your email already has a specific
-hook: the research angle proves you read their reviews. When someone bites,
-build then — and build it better, because you can ask them a question first.
+So the pipeline is wired that way and won't let you skip it:
 
-That's why `Approval Status` is a manual column and why **Run everything** does
-not include the build step. The defaults already push you this way.
+| Setting | Value | What it does |
+|---|---|---|
+| `outreach.require_site` | `true` | No message is drafted until that lead's site exists |
+| `lovable.auto_approve` | `true` | New briefs arrive `Approved` — every lead gets built |
+
+Both live in `config\campaigns\penang-my.yaml`.
+
+**The cost is real, so know the number.** The build is your most expensive
+step. If you'd rather not build for everyone, don't flip `require_site` off —
+just open the **Site Briefs** tab and set `Approval Status` to `Skip` on the
+ones you don't want. A `Skip` is never built, and a lead with no site is never
+written to. That way the filter is *you choosing which businesses are worth
+it*, which is a better filter than sending everyone a thinner message.
+
+**Nothing builds behind your back.** `Approved` means "queued", not "built".
+Building only ever happens when you press **Build approved sites** or tell
+Claude Code to do it, and it asks before spending.
 
 ---
 
@@ -42,9 +58,16 @@ not include the build step. The defaults already push you this way.
 
 Right-click **`Schedule-Daily.ps1`** → *Run with PowerShell*, once.
 
-From then on it runs at 8am every day: finds leads, researches them, drafts
-your messages. You wake up to drafts waiting. Capped at 20 leads a day —
-roughly USD 2 — so it can't run away with your money overnight.
+From then on it runs at 8am every day: finds leads, researches them, writes
+their site prompts, and drafts messages for every lead **whose demo you built
+yesterday**. Capped at 20 leads a day — roughly USD 2 — so it can't run away
+with your money overnight.
+
+That one-day lag is the whole design. The overnight run does everything that is
+cheap and safe; the two steps that cost real money or touch a real person —
+building the sites and sending the messages — wait for you. So a fresh lead
+found this morning gets its demo built by you today and its message drafted by
+the run tomorrow. Nothing stalls; it just runs a day behind, permanently.
 
 It never sends and never spends Lovable credits. Logs land in `logs\`.
 
@@ -70,8 +93,9 @@ thinking the job is done when the Sheet fills up.
 
 | | What | Who |
 |---|---|---|
-| **5 min** | Find, research, and draft | the tool |
-| **20 min** | Read the drafts, edit, send | **you** |
+| **5 min** | Find, research, write prompts, draft messages | the tool |
+| **20 min** | Build today's demo sites | **you** (or Claude Code) |
+| **20 min** | Read yesterday's drafts, edit, send | **you** |
 | **10 min** | Reply to anyone who wrote back | **you** |
 
 ---
@@ -80,55 +104,43 @@ thinking the job is done when the Sheet fills up.
 
 ### 1. Open the dashboard, press **Run everything**
 
-That finds new leads, researches them, writes website prompts, and drafts your
-messages. Takes a few minutes — output streams down the page, and you can walk
-away.
+That finds new leads, researches them, writes each one's site prompt, and
+drafts messages for the leads whose demos are already built. Takes a few
+minutes — output streams down the page, and you can walk away.
 
-When it's done, the **What needs you today** cards refresh. Those are your
-to-do list: how many emails are waiting to be sent, how many WhatsApp messages
-to copy, and anything that errored.
+When it's done, the **What needs you today** cards refresh. That's your
+to-do list, in the order you should work it.
 
-### 2. Open Gmail → Drafts
+> **Expect `0 need messages drafted` on your first run.** Nothing has a demo
+> yet, so there is nothing to write about. Build the sites in step 2 and press
+> **Draft messages** — or just leave it for tomorrow's run.
 
-Every lead with an email address has a draft waiting. For each one:
+### 2. Build today's demo sites
 
-- **Read the first sentence.** It should prove you actually looked at their
-  business. If it could have been sent to any salon in Penang, delete the
-  draft — a generic message is worse than no message.
-- Edit anything that reads stiff. It's a starting point, not a finished letter.
-- Press send.
-
-**Nothing sends by itself.** That's deliberate, and it's enforced in the code.
-
-### 3. Open your Sheet → Outreach Log tab
-
-Most leads won't have an email — businesses without websites usually don't
-publish one. Those have a ready WhatsApp message instead.
-
-- Copy the **WhatsApp Message** cell
-- Open WhatsApp, paste it to the number in the **Leads** tab
-- Change **Status** to `Sent`
-
-### 4. Build any sites you approved
+**This is the day's real work.** The card reads *approved, not built*.
 
 Lovable can't be driven from here — it only supports OAuth sign-in, so there's
 no key a program on your laptop could use. The dashboard gets you as close as
-possible:
+possible. For each row in **Ready to build**:
 
-1. Open the **Site Briefs** tab, set **Approval Status** to `Approved` on the
-   sites you want built
-2. Back on the dashboard, the **Ready to build** section lists them
-3. **Copy prompt** → **Open Lovable** → paste → let it build
-4. Paste the finished site URL back into the box and press **Mark as built**
+1. **Copy prompt** → **Open Lovable** → paste → let it build
+2. Paste the finished site URL back into the box and press **Mark as built**
 
-Step 4 isn't bookkeeping. The URL goes into the outreach email, and a lead
-with a site they can actually click is a much stronger message than one
-without.
+Step 2 is not bookkeeping. That URL is what goes in the email, and marking it
+is what releases the lead for drafting — skip it and the message never gets
+written.
+
+**Give each one about a minute of your eyes.** Is the business name right? Any
+`[TO CONFIRM]` left in the copy? You are about to send this to the owner; it
+does not have to be perfect, but it has to be theirs.
+
+Don't want to build one? Set its **Approval Status** to `Skip` in the
+**Site Briefs** tab. That lead is then never built and never written to.
 
 #### Or let Claude Code do the whole build step
 
-If you have **Claude Code** installed on this machine, it can do steps 2–4 for
-you. It's the one place that can reach both your Sheet *and* Lovable — your
+If you have **Claude Code** installed on this machine, it can do all of step 2
+for you. It's the one place that can reach both your Sheet *and* Lovable — your
 local Python can't sign into Lovable, and a chat on claude.ai can't reach your
 Sheet.
 
@@ -146,6 +158,31 @@ It reads the approved queue, asks you to confirm before spending credits,
 builds each one in Lovable, and writes the URLs back to your Sheet. The rules
 it follows live in `.claude/skills/build-sites/SKILL.md` — including never
 editing a prompt and never building anything you haven't approved.
+
+### 3. Open Gmail → Drafts
+
+These are the leads whose demos were built earlier — every one of them has a
+site to link to. For each draft:
+
+- **Check the link is in there and it opens.** That link is the entire pitch.
+  A broken one is worse than not writing at all.
+- **Read the first sentence.** It should prove you actually looked at their
+  business. If it could have been sent to any salon in Penang, rewrite it.
+- Edit anything that reads stiff. It's a starting point, not a finished letter.
+- Press send.
+
+**Nothing sends by itself.** That's deliberate, and it's enforced in the code.
+
+### 4. Open your Sheet → Outreach Log tab
+
+Most leads won't have an email — businesses without websites usually don't
+publish one. Those have a ready WhatsApp message instead, carrying the same
+link. For these, WhatsApp is the better channel anyway: the preview unfurls
+right in the chat, so they see the site without deciding to click anything.
+
+- Copy the **WhatsApp Message** cell
+- Open WhatsApp, paste it to the number in the **Leads** tab
+- Change **Status** to `Sent`
 
 ### 5. Handle replies
 
@@ -189,14 +226,22 @@ plausibly search online first. Skip anything where the buyer never Googles.
 | Option | Money |
 |---|---|
 | 1. Find new leads | A few cents in Google searches |
-| 2. Research leads | **~6 cents per lead** — the main cost |
+| 2. Research leads | ~6 cents per lead |
 | 3. Website prompts | ~2 cents per lead |
 | 4. Draft messages | ~2 cents per lead |
+| **Building the sites** | **Lovable credits — by far the largest line** |
 | 6, 7. Previews | Option 6 costs the same as option 1. Option 7 costs the same as option 4 |
 | 8, 9 | Free |
 
-A hundred leads all the way through is roughly **ten dollars**. One closed
-deal pays for a year of it.
+A hundred leads through everything *except* the build is roughly **ten
+dollars**. The builds are the number that matters, and they're charged by
+Lovable, not by this tool — check your plan's credit allowance before you queue
+up a hundred of them.
+
+That's the trade you chose: a demo costs real money, and it's the reason the
+message lands at all. If the volume gets expensive, cut the number of leads —
+not the demo. Twenty businesses who each get their own site will beat a hundred
+who get a paragraph.
 
 **Running the same option twice is free.** Every stage skips work it has
 already done. If you're unsure whether something ran, just run it again —
@@ -214,6 +259,7 @@ Press `8` first. It checks everything and says what's broken in plain English.
 | `Sheets API is not enabled` | Click the link in the message, wait 2 minutes, retry |
 | `SHEET_ID is not set` | Your `.env` lost its Sheet ID. Press `9` won't work either |
 | `postal_address is empty` | Someone cleared it from the campaign file |
+| `N lead(s) are waiting on a demo site` | Working as intended. Build those sites, mark them built, then draft |
 | A browser opens asking you to log in | Normal if it's been ~6 months. Log in again |
 | One lead failed | Check the **Errors** tab. The run continued without it |
 
@@ -224,9 +270,15 @@ running that stage again will probably fix it.
 
 ## Two habits worth keeping
 
+**Open one finished demo a day, as the owner would.** On your phone, from the
+link in the message you're about to send. If it's slow, generic, or has their
+name wrong, the whole pitch inverts — you've just shown a stranger you don't
+pay attention. This is the one check worth doing every single day.
+
 **Read one brief a day.** Open the **Research** tab and read a
-**Suggested Website Angle**. If it's vague, your emails are vague. That's your
-early warning that something needs tuning — tell whoever maintains this.
+**Suggested Website Angle**. If it's vague, the sites built from it are vague.
+That's your early warning that something needs tuning — tell whoever maintains
+this.
 
 **Never send a draft you haven't read.** The model is good, not infallible.
 It writes to a real person who owns a real business, and your name is on it.

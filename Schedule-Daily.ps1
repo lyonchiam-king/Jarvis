@@ -3,10 +3,16 @@
 #
 #   Right-click this file > Run with PowerShell
 #
-# What it schedules: discovery, research, and outreach-draft.
+# What it schedules: discovery, research, site-brief, and outreach-draft --
+# every step that is cheap and touches nobody.
 # What it deliberately does NOT schedule:
-#   * site-build  -- spends Lovable credits, and needs your approval first
+#   * site-build  -- spends Lovable credits, and needs your confirmation
 #   * sending     -- nothing in this pipeline sends. You press send.
+#
+# With outreach.require_site on, the drafting step only writes to leads whose
+# demo you already built, so the morning run lands one day behind your builds.
+# That is intended: you wake up to a build queue and to drafts for the sites
+# you built yesterday.
 #
 # Spend is bounded by -LeadsPerDay. At the default of 20 that is roughly
 # USD 2 a day, not the ~10 an unbounded 100-lead run would cost.
@@ -43,6 +49,7 @@ Set-Location "$root"
 "=== `$(Get-Date -Format 'u') ===" | Out-File -Append `$log
 & "$outreach" run discovery                        2>&1 | Out-File -Append `$log
 & "$outreach" run research      --limit $LeadsPerDay 2>&1 | Out-File -Append `$log
+& "$outreach" run site-brief    --limit $LeadsPerDay 2>&1 | Out-File -Append `$log
 & "$outreach" run outreach-draft --limit $LeadsPerDay 2>&1 | Out-File -Append `$log
 "=== finished `$(Get-Date -Format 'u') ===" | Out-File -Append `$log
 "@ | Set-Content -Path $runner -Encoding UTF8
@@ -64,8 +71,9 @@ Write-Host "    Runs      : every day at $Time"
 Write-Host "    Caps at   : $LeadsPerDay leads (about USD 2/day)"
 Write-Host "    Logs to   : logs\run-YYYY-MM-DD.log"
 Write-Host ""
-Write-Host "  It finds, researches and drafts. It never sends, and never"
-Write-Host "  spends Lovable credits."
+Write-Host "  It finds, researches, writes site prompts, and drafts messages"
+Write-Host "  for leads whose demo is already built. It never sends, and never"
+Write-Host "  spends Lovable credits -- building the demos stays yours."
 Write-Host ""
 Write-Host "  To stop it later:" -ForegroundColor Cyan
 Write-Host "    Unregister-ScheduledTask -TaskName '$TaskName' -Confirm:`$false"

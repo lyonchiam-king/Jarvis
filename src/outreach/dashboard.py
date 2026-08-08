@@ -87,10 +87,16 @@ def summarise(
     site_briefs: dict[str, tuple[int, dict[str, str]]] | set[str],
     outreach: dict[str, tuple[int, dict[str, str]]],
     errors: dict[str, tuple[int, dict[str, str]]],
+    *,
+    require_site: bool = False,
 ) -> Summary:
     """Turn raw Sheet rows into the numbers a founder acts on.
 
     Pure and side-effect free, so it can be tested without a Sheet.
+
+    ``require_site`` must mirror ``outreach.require_site``: with it on, a lead
+    is not "waiting to be drafted" until its demo exists, and a card saying
+    otherwise would send you to press a button that does nothing.
     """
     from .stage import parse, rank
 
@@ -117,9 +123,10 @@ def summarise(
             and rank(Stage.RESEARCHED) <= rank(current) < rank(Stage.SITE_BRIEFED)
         ):
             summary.to_brief += 1
+        draft_from = Stage.SITE_BUILT if require_site else Stage.RESEARCHED
         if (
             lead_id not in outreach
-            and rank(Stage.RESEARCHED) <= rank(current) < rank(Stage.EMAIL_DRAFTED)
+            and rank(draft_from) <= rank(current) < rank(Stage.EMAIL_DRAFTED)
         ):
             summary.to_draft += 1
 
@@ -211,6 +218,7 @@ def _load_summary(config: Config) -> Summary:
         sheets.read_rows(schema.SITE_BRIEFS),
         sheets.read_rows(schema.OUTREACH_LOG),
         sheets.read_rows(schema.ERRORS),
+        require_site=config.outreach.require_site,
     )
     summary.sheet_url = sheets.url
     return summary

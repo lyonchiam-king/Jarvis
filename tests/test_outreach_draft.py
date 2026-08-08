@@ -266,7 +266,13 @@ class FakeGmail:
 
 
 def cfg():
-    return config(postal_address="12 Some Road, 10450 Penang")
+    """The no-demo path, pinned rather than inherited.
+
+    ``require_site`` lives in a campaign file the user is expected to edit, so
+    a test that depends on it must say so. Only
+    ``test_penang_campaign_is_configured_demo_first`` reads that file's value.
+    """
+    return config(postal_address="12 Some Road, 10450 Penang", require_site=False)
 
 
 def test_lead_with_an_email_gets_a_gmail_draft():
@@ -386,3 +392,50 @@ def test_stage_advances_to_email_drafted():
     outreach_draft.run(cfg(), sheets, FakeWriter(), FakeGmail())
 
     assert sheets.column_writes == [(schema.LEADS, "Stage", {"a": "Email Drafted"})]
+
+
+# ------------------------------------------------ demo-first: require_site
+
+
+def site_first():
+    """The Penang campaign's real posture: build the demo before writing."""
+    return config(postal_address="12 Some Road, Penang", require_site=True)
+
+
+def test_require_site_holds_back_a_lead_with_no_demo_yet():
+    sheets = FakeSheets(index([lead("a", stage="Researched")]), index([research_row("a")]))
+    writer, gmail = FakeWriter(), FakeGmail()
+
+    report = outreach_draft.run(site_first(), sheets, writer, gmail)
+
+    assert report.selected == 0
+    assert report.not_ready == 1
+    assert writer.call_count == 0, "no Claude spend on a lead we can't pitch yet"
+    assert gmail.drafted == []
+
+
+def test_require_site_releases_the_lead_once_the_demo_exists():
+    sheets = FakeSheets(
+        index([lead("a", stage="Site Built")]),
+        index([research_row("a", "o@salon.my")]),
+        site_briefs=index([{"Lead ID": "a", "Preview URL": "https://preview.test/a"}]),
+    )
+    writer = FakeWriter()
+    report = outreach_draft.run(site_first(), sheets, writer, FakeGmail())
+
+    assert report.selected == 1
+    assert "https://preview.test/a" in writer.prompts[0]
+
+
+def test_without_require_site_a_researched_lead_is_written_to_immediately():
+    sheets = FakeSheets(index([lead("a", stage="Researched")]), index([research_row("a")]))
+    report = outreach_draft.run(cfg(), sheets, FakeWriter(), FakeGmail())
+    assert report.selected == 1
+
+
+def test_penang_campaign_is_configured_demo_first():
+    from outreach.config import load_config
+
+    c = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    assert c.outreach.require_site is True
+    assert c.lovable.auto_approve is True

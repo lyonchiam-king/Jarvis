@@ -151,8 +151,12 @@ def run(
                     "Business Name": name,
                     "Lovable Prompt": prompt,
                     # Manual column, seeded once on insert so the cell isn't
-                    # ambiguously blank. Never rewritten afterwards.
-                    "Approval Status": "Pending",
+                    # ambiguously blank. Never rewritten afterwards -- so a
+                    # later config change cannot retroactively approve a lead
+                    # you already declined.
+                    "Approval Status": (
+                        "Approved" if config.lovable.auto_approve else "Pending"
+                    ),
                     "Lovable Project ID": "",
                     "Preview URL": "",
                     "Created At": utc_now(),

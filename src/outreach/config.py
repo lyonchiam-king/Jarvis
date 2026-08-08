@@ -85,12 +85,22 @@ class OutreachSettings:
         "If you'd rather not hear from me again, just reply "
         "'no thanks' and I won't contact you."
     )
+    # Only draft outreach for leads whose demo site is built. The demo is the
+    # pitch -- a business that has never had a website cannot picture one, and
+    # a link to theirs closes that gap in a way no sentence does. Leave this
+    # false to send research-angle emails without a site.
+    require_site: bool = False
 
 
 @dataclass(frozen=True)
 class LovableSettings:
     enabled: bool = False
     require_confirmation: bool = True
+    # Seed new briefs as Approved instead of Pending. Set this when building a
+    # demo for every lead is the deliberate strategy -- per-lead approval is
+    # pure friction at that point. Default stays false so nobody discovers a
+    # spend they didn't choose.
+    auto_approve: bool = False
 
 
 @dataclass(frozen=True)
@@ -220,6 +230,7 @@ def load_config(
         company=str(o.get("company", "")),
         channel_priority=tuple(o.get("channel_priority") or ("whatsapp", "email")),
         postal_address=str(o.get("postal_address", "")),
+        require_site=bool(o.get("require_site", False)),
         opt_out_note=str(
             o.get("opt_out_note")
             or OutreachSettings.opt_out_note
@@ -230,6 +241,7 @@ def load_config(
     lovable = LovableSettings(
         enabled=bool(lv.get("enabled", False)),
         require_confirmation=bool(lv.get("require_confirmation", True)),
+        auto_approve=bool(lv.get("auto_approve", False)),
     )
 
     c = raw.get("compliance") or {}

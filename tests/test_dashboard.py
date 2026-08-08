@@ -208,6 +208,23 @@ def test_site_build_is_reachable_from_the_dashboard():
     assert "site-build" in STAGE_COMMANDS
 
 
+# ------------------------------------------------ demo-first: require_site
+
+
+def test_require_site_does_not_count_a_siteless_lead_as_ready_to_draft():
+    """Otherwise the card sends you to press a button that drafts nothing."""
+    leads = index([lead("a", "Site Briefed")])
+
+    assert summarise(leads, {"a"}, {"a"}, {}, {}).to_draft == 1
+    assert summarise(leads, {"a"}, {"a"}, {}, {}, require_site=True).to_draft == 0
+
+
+def test_require_site_counts_the_lead_once_its_demo_is_built():
+    leads = index([lead("a", "Site Built")])
+    s = summarise(leads, {"a"}, {"a"}, {}, {}, require_site=True)
+    assert s.to_draft == 1
+
+
 def test_full_run_does_not_include_site_build():
     """Building spends Lovable credits -- it must never ride along with 'run everything'."""
     assert "site-build" not in FULL_RUN
