@@ -33,6 +33,20 @@ in your Gmail **drafts** and you press send.
 
 ---
 
+## Just want to use it?
+
+**Double-click `run.bat`** (Windows) or `run.sh` (macOS/Linux). You get a menu;
+type a number. No commands to remember, and it builds its own environment on
+first run.
+
+**[DAILY.md](DAILY.md)** is the day-to-day guide, written for someone who
+doesn't use a terminal.
+
+The rest of this README is for setting it up the first time, and for
+understanding how it works.
+
+---
+
 ## Quick start
 
 Needs **Python 3.10 or newer**. macOS ships 3.9 — if that's what you have,
