@@ -157,6 +157,50 @@ def summarise(
     return summary
 
 
+def review_queue(
+    leads: dict[str, tuple[int, dict[str, str]]],
+    research: dict[str, tuple[int, dict[str, str]]],
+    site_briefs: dict[str, tuple[int, dict[str, str]]],
+) -> list[dict[str, str]]:
+    """Briefs waiting for a yes or no, newest work first.
+
+    Each entry carries enough of the research to decide without opening the
+    Sheet -- the rating, the angle, what customers said. Deciding blind is how
+    you end up approving sixty sites you never looked at.
+
+    Pure, like ``summarise``, so the ordering and the payload can be tested
+    without touching Google.
+    """
+    queue: list[dict[str, str]] = []
+    for lead_id, (_n, brief) in site_briefs.items():
+        approval = (brief.get("Approval Status") or "").strip().casefold()
+        if approval not in ("", "pending"):
+            continue
+        if (brief.get("Lovable Project ID") or "").strip():
+            continue
+
+        lead = leads.get(lead_id, (0, {}))[1]
+        found = research.get(lead_id, (0, {}))[1]
+        queue.append(
+            {
+                "lead_id": lead_id,
+                "name": brief.get("Business Name") or lead.get("Business Name", ""),
+                "category": lead.get("Category", ""),
+                "address": lead.get("Address", ""),
+                "phone": lead.get("Phone", ""),
+                "rating": lead.get("Rating", ""),
+                "reviews": lead.get("Review Count", ""),
+                "maps_url": lead.get("Maps URL", ""),
+                "angle": found.get("Suggested Website Angle", ""),
+                "praise": found.get("Customer Praise", ""),
+                "pain": found.get("Customer Pain Points", ""),
+                "social": found.get("Social Handle", ""),
+                "prompt": brief.get("Lovable Prompt", ""),
+            }
+        )
+    return queue
+
+
 class Runner:
     """Runs one stage at a time in a subprocess, streaming output to the page."""
 
@@ -202,15 +246,19 @@ class Runner:
                 self.running = None
 
 
-def _load_summary(config: Config) -> Summary:
+def _sheets_client(config: Config):
     from .auth import get_credentials
     from .sheets import SheetsClient
 
+    creds = get_credentials(config.secrets.oauth_client_file, config.secrets.token_file)
+    return SheetsClient(creds, config.secrets.sheet_id)
+
+
+def _load_summary(config: Config) -> Summary:
     if not config.secrets.sheet_id:
         return Summary()
 
-    creds = get_credentials(config.secrets.oauth_client_file, config.secrets.token_file)
-    sheets = SheetsClient(creds, config.secrets.sheet_id)
+    sheets = _sheets_client(config)
 
     summary = summarise(
         sheets.read_rows(schema.LEADS),
@@ -257,19 +305,60 @@ def create_app(config: Config) -> Flask:
             }
         )
 
-    @app.route("/api/build-queue")
-    def api_build_queue():
-        """Approved briefs waiting to be built, prompt included."""
-        from .auth import get_credentials
-        from .sheets import SheetsClient
-
+    @app.route("/api/review-queue")
+    def api_review_queue():
+        """Briefs waiting on your yes or no, with the research to judge them."""
         if not config.secrets.sheet_id:
             return jsonify({"queue": []})
         try:
-            creds = get_credentials(
-                config.secrets.oauth_client_file, config.secrets.token_file
+            sheets = _sheets_client(config)
+            queue = review_queue(
+                sheets.read_rows(schema.LEADS),
+                sheets.read_rows(schema.RESEARCH),
+                sheets.read_rows(schema.SITE_BRIEFS),
             )
-            sheets = SheetsClient(creds, config.secrets.sheet_id)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+        return jsonify({"queue": queue})
+
+    @app.route("/api/decide", methods=["POST"])
+    def api_decide():
+        """Record Approve or Skip against one brief.
+
+        This is the human gate in front of every Lovable credit. It writes only
+        the Approval Status cell -- approving does not build anything, it moves
+        the row into the build queue where a second, explicit action spends.
+        """
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        decision = (payload.get("decision") or "").strip().casefold()
+
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+        if decision not in ("approved", "skip"):
+            return jsonify({"error": "decision must be 'approved' or 'skip'"}), 400
+
+        try:
+            sheets = _sheets_client(config)
+            written = sheets.update_column(
+                schema.SITE_BRIEFS,
+                "Approval Status",
+                {lead_id: "Approved" if decision == "approved" else "Skip"},
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+
+        if not written:
+            return jsonify({"error": f"No Site Briefs row for {lead_id}"}), 200
+        return jsonify({"ok": True})
+
+    @app.route("/api/build-queue")
+    def api_build_queue():
+        """Approved briefs waiting to be built, prompt included."""
+        if not config.secrets.sheet_id:
+            return jsonify({"queue": []})
+        try:
+            sheets = _sheets_client(config)
             rows = sheets.read_rows(schema.SITE_BRIEFS)
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
@@ -291,11 +380,9 @@ def create_app(config: Config) -> Flask:
         """Record a site you built by hand, and move the lead to Site Built.
 
         Closing this loop matters beyond bookkeeping: Stage 5 puts the preview
-        URL in the outreach email, and leads with a live site to look at are
-        the ones worth writing to first.
+        URL in the outreach email, and with require_site on, a lead that is
+        never marked built is never written to at all.
         """
-        from .auth import get_credentials
-        from .sheets import SheetsClient
         from .stage import Stage
 
         payload = request.json or {}
@@ -307,10 +394,7 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": "preview URL must start with http"}), 400
 
         try:
-            creds = get_credentials(
-                config.secrets.oauth_client_file, config.secrets.token_file
-            )
-            sheets = SheetsClient(creds, config.secrets.sheet_id)
+            sheets = _sheets_client(config)
             sheets.update_column(
                 schema.SITE_BRIEFS, "Lovable Project ID", {lead_id: "built-by-hand"}
             )
@@ -420,6 +504,21 @@ PAGE = """<!doctype html>
   .ok { color:var(--ok); font-size:13px; }
   .status { font-size:13px; color:var(--warn); }
   .err { color:var(--accent); }
+  .stepno { display:inline-flex; align-items:center; justify-content:center;
+            width:19px; height:19px; border-radius:50%; background:var(--accent);
+            color:#fff; font-size:11.5px; font-weight:700; margin-right:7px;
+            vertical-align:1px; letter-spacing:0; }
+  summary { cursor:pointer; }
+  .counter { font-size:13px; color:var(--muted); }
+  .facts { display:flex; flex-wrap:wrap; gap:6px 14px; margin:2px 0 12px;
+           font-size:13px; color:var(--muted); }
+  .note { margin:0 0 9px; font-size:14px; }
+  .note b { font-weight:600; color:var(--ink); }
+  button.approve { background:var(--ok); border-color:var(--ok); color:#fff; }
+  button.approve:hover:not(:disabled) { opacity:.9; color:#fff; }
+  .sendrow { display:flex; justify-content:space-between; align-items:center;
+             gap:12px; padding:9px 0; border-bottom:1px solid var(--line); }
+  .sendrow:last-child { border-bottom:0; }
 </style>
 </head>
 <body>
@@ -434,33 +533,50 @@ PAGE = """<!doctype html>
   <h2>What needs you today</h2>
   <div class="todo" id="todo"></div>
 
-  <h2>Pipeline</h2>
-  <div class="funnel" id="funnel"></div>
-
-  <h2>Run something</h2>
+  <h2><span class="stepno">1</span> Gather
+      <span class="sub" style="text-transform:none;letter-spacing:0">
+      &mdash; finds new businesses, researches them, writes their briefs</span></h2>
   <div class="card">
     <div class="row">
-      <button class="primary" data-run="full">Run everything</button>
-      <button data-run="discovery">Find leads</button>
-      <button data-run="research">Research</button>
-      <button data-run="site-brief">Site prompts</button>
-      <button data-run="site-build">Build approved sites</button>
-      <button data-run="outreach-draft">Draft messages</button>
-    </div>
-    <p class="hint">
-      Running anything twice is free &mdash; every stage skips what it already did.
-    </p>
-    <div class="row" style="margin-top:12px">
-      <button data-run="preview-leads">Preview leads</button>
-      <button data-run="preview-messages">Preview messages</button>
-      <button data-run="preflight">Check setup</button>
+      <button class="primary" data-run="full">Run this morning's batch</button>
       <span class="status" id="running"></span>
     </div>
+    <p class="hint">
+      Skips every business it has already seen, so each run brings a fresh batch.
+      Running it twice is free.
+    </p>
+    <details style="margin-top:12px">
+      <summary class="sub">Run one step on its own</summary>
+      <div class="row" style="margin-top:10px">
+        <button data-run="discovery">Find leads</button>
+        <button data-run="research">Research</button>
+        <button data-run="site-brief">Write briefs</button>
+        <button data-run="site-build">Build approved</button>
+        <button data-run="outreach-draft">Draft messages</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button data-run="preview-leads">Preview leads</button>
+        <button data-run="preview-messages">Preview messages</button>
+        <button data-run="preflight">Check setup</button>
+      </div>
+    </details>
   </div>
 
-  <h2>Ready to build <span class="sub" style="text-transform:none;letter-spacing:0">
+  <h2><span class="stepno">2</span> Review
+      <span class="sub" style="text-transform:none;letter-spacing:0">
+      &mdash; one at a time. Approve sends it to the build queue; nothing is spent yet</span></h2>
+  <div id="review"></div>
+
+  <h2><span class="stepno">3</span> Build
+      <span class="sub" style="text-transform:none;letter-spacing:0">
       &mdash; approved, waiting for you to paste into Lovable</span></h2>
   <div id="queue"></div>
+
+  <h2><span class="stepno">4</span> Send</h2>
+  <div class="card" id="send"></div>
+
+  <h2>Pipeline</h2>
+  <div class="funnel" id="funnel"></div>
 
   <h2>Output</h2>
   <pre id="log">Nothing running.</pre>
@@ -489,28 +605,45 @@ async function refresh() {
        <a href="${d.sheet_url}" target="_blank" rel="noopener">Open Sheet</a>`
     : 'No leads yet &mdash; press <b>Find leads</b> to start.';
 
+  // Ordered the way the morning runs: review, build, send, then housekeeping.
   const todo = [];
+  if (d.awaiting_approval) todo.push(card(d.awaiting_approval, 'briefs to review',
+    'Step 2 below &mdash; Approve or Skip'));
+  if (d.approved_unbuilt) todo.push(card(d.approved_unbuilt, 'sites to build',
+    'Step 3 below'));
   if (d.emails_waiting) todo.push(card(d.emails_waiting, 'emails to send',
     'Open Gmail drafts, read, press send'));
   if (d.whatsapp_waiting) todo.push(card(d.whatsapp_waiting, 'WhatsApp to send',
     'Copy from the Outreach Log tab'));
   if (d.to_research) todo.push(card(d.to_research, 'leads to research',
     'About 6&cent; each'));
-  if (d.to_brief) todo.push(card(d.to_brief, 'need site prompts', 'Free to generate'));
-  if (d.awaiting_approval) todo.push(card(d.awaiting_approval, 'prompts awaiting you',
-    'Set Approval Status to Approved in the Site Briefs tab'));
-  if (d.approved_unbuilt) todo.push(card(d.approved_unbuilt, 'approved, not built',
-    'Press Build approved sites'));
+  if (d.to_brief) todo.push(card(d.to_brief, 'need briefs written', 'Free to generate'));
   if (d.to_draft) todo.push(card(d.to_draft, 'need messages drafted', 'Nothing sends'));
   if (d.errors) todo.push(card(d.errors, 'errors logged',
     `${d.errors_retryable} may fix themselves on a re-run`));
   $('#todo').innerHTML = todo.length ? todo.join('')
     : '<div class="card"><div class="what">Nothing waiting.</div>' +
-      '<div class="sub">Find new leads, or change the category in your campaign file.</div></div>';
+      '<div class="sub">Press <b>Run this morning\\u2019s batch</b> for a fresh set, ' +
+      'or add areas to your campaign file.</div></div>';
 
   $('#funnel').innerHTML = Object.entries(d.by_stage).map(([k, v]) =>
     `<div class="step ${v ? '' : 'empty'}"><div class="c">${v}</div>
      <div class="l">${k}</div></div>`).join('');
+
+  const send = [];
+  if (d.emails_waiting) send.push(`<div class="sendrow">
+    <div><b>${d.emails_waiting}</b> email${d.emails_waiting > 1 ? 's' : ''} drafted
+    <div class="sub">Read each one, check the demo link opens, press send</div></div>
+    <a href="https://mail.google.com/mail/u/0/#drafts" target="_blank" rel="noopener">
+      <button>Open Gmail drafts</button></a></div>`);
+  if (d.whatsapp_waiting) send.push(`<div class="sendrow">
+    <div><b>${d.whatsapp_waiting}</b> WhatsApp message${d.whatsapp_waiting > 1 ? 's' : ''}
+    <div class="sub">Copy each from the Outreach Log tab, then mark it Sent</div></div>
+    <a href="${d.sheet_url}" target="_blank" rel="noopener">
+      <button>Open Sheet</button></a></div>`);
+  $('#send').innerHTML = send.length ? send.join('')
+    : '<div class="what">Nothing to send yet.</div>' +
+      '<div class="sub">Messages are written once a lead\\u2019s demo site is built.</div>';
 }
 
 async function poll() {
@@ -535,6 +668,106 @@ document.querySelectorAll('button[data-run]').forEach(b =>
     poll();
   }));
 
+// ------------------------------------------------------------ step 2: review
+
+let review = [];
+let at = 0;
+
+function esc(s) {
+  return (s || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+}
+
+async function loadReview(keepPosition) {
+  let d;
+  try { d = await (await fetch('/api/review-queue')).json(); } catch { return; }
+  const el = $('#review');
+  if (d.error) { el.innerHTML = `<div class="card err">${esc(d.error)}</div>`; return; }
+  review = d.queue || [];
+  if (!keepPosition) at = 0;
+  if (at >= review.length) at = Math.max(0, review.length - 1);
+  drawReview();
+}
+
+function drawReview() {
+  const el = $('#review');
+  if (!review.length) {
+    el.innerHTML = '<div class="card"><div class="what">Nothing to review.</div>' +
+      '<div class="sub">Briefs appear here after step 1 writes them.</div></div>';
+    return;
+  }
+  const q = review[at];
+  const facts = [];
+  if (q.category) facts.push(esc(q.category));
+  if (q.rating) facts.push(`${esc(q.rating)}&#9733; (${esc(q.reviews || '0')} reviews)`);
+  if (q.phone) facts.push(esc(q.phone));
+  if (q.social) facts.push(esc(q.social));
+  if (q.maps_url) facts.push(
+    `<a href="${esc(q.maps_url)}" target="_blank" rel="noopener">See it on Maps</a>`);
+
+  const notes = [];
+  if (q.angle) notes.push(`<p class="note"><b>Angle:</b> ${esc(q.angle)}</p>`);
+  if (q.pain) notes.push(`<p class="note"><b>Their problem:</b> ${esc(q.pain)}</p>`);
+  if (q.praise) notes.push(`<p class="note"><b>Customers say:</b> ${esc(q.praise)}</p>`);
+
+  el.innerHTML = `<div class="card q">
+    <div class="row" style="justify-content:space-between">
+      <h3 style="margin:0">${esc(q.name)}</h3>
+      <span class="counter">${at + 1} of ${review.length}</span>
+    </div>
+    <div class="facts">${facts.join('<span>&middot;</span>')}</div>
+    ${notes.join('')}
+    <details>
+      <summary class="sub">Read the full brief before approving</summary>
+      <textarea id="rp" readonly style="margin-top:9px">${esc(q.prompt)}</textarea>
+    </details>
+    <div class="row" style="margin-top:12px">
+      <button class="approve" onclick="decide('approved')">Approve &mdash; build this</button>
+      <button onclick="decide('skip')">Skip</button>
+      <button onclick="move(1)" ${review.length < 2 ? 'disabled' : ''}>Decide later &rsaquo;</button>
+      <span class="sub" id="rmsg"></span>
+    </div>
+    <p class="hint">Approving queues it for step 3. Nothing is spent until you
+      build it there.</p>
+  </div>`;
+}
+
+function move(n) {
+  if (!review.length) return;
+  at = (at + n + review.length) % review.length;
+  drawReview();
+}
+
+async function decide(decision) {
+  const q = review[at];
+  if (!q) return;
+  document.querySelectorAll('#review button').forEach(b => b.disabled = true);
+  $('#rmsg').textContent = 'Saving…';
+
+  let d;
+  try {
+    d = await (await fetch('/api/decide', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lead_id: q.lead_id, decision})
+    })).json();
+  } catch { d = {error: 'Could not reach the dashboard'}; }
+
+  if (!d.ok) {
+    $('#rmsg').innerHTML = `<span class="err">${esc(d.error || 'Failed')}</span>`;
+    document.querySelectorAll('#review button').forEach(b => b.disabled = false);
+    return;
+  }
+
+  // Drop it locally and show the next one straight away -- waiting on a Sheets
+  // round trip between every decision is what makes reviewing sixty a chore.
+  review.splice(at, 1);
+  if (at >= review.length) at = Math.max(0, review.length - 1);
+  drawReview();
+  refresh();
+  loadQueue();
+}
+
+// ------------------------------------------------------------- step 3: build
+
 async function loadQueue() {
   let d;
   try { d = await (await fetch('/api/build-queue')).json(); } catch { return; }
@@ -542,8 +775,7 @@ async function loadQueue() {
   if (d.error) { el.innerHTML = `<div class="card err">${d.error}</div>`; return; }
   if (!d.queue || !d.queue.length) {
     el.innerHTML = '<div class="card"><div class="what">Nothing approved yet.</div>' +
-      '<div class="sub">Open the Site Briefs tab and set Approval Status to ' +
-      '<b>Approved</b> on the ones you want built.</div></div>';
+      '<div class="sub">Approve a brief in step 2 and it appears here.</div></div>';
     return;
   }
   el.innerHTML = d.queue.map((q, i) => `
@@ -584,10 +816,15 @@ async function saveBuilt(leadId, i) {
 }
 
 refresh();
+loadReview();
 loadQueue();
 poll();
 setInterval(poll, 1200);
-setInterval(refresh, 30000);\nsetInterval(loadQueue, 30000);
+setInterval(refresh, 30000);
+setInterval(loadQueue, 30000);
+// Keeps the position you are at, so a background refresh never yanks the card
+// out from under a decision you are part-way through making.
+setInterval(() => loadReview(true), 30000);
 </script>
 </body>
 </html>

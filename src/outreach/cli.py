@@ -303,9 +303,19 @@ def run() -> None:
 
 @run.command("discovery")
 @click.option("--dry-run", is_flag=True, help="Search and report, but write nothing.")
+@click.option(
+    "--refresh",
+    is_flag=True,
+    help="Update businesses already on the Sheet instead of hunting for new ones.",
+)
 @click.pass_context
-def run_discovery(ctx: click.Context, dry_run: bool) -> None:
-    """Stage 1 -- find businesses with no website and write them to Leads."""
+def run_discovery(ctx: click.Context, dry_run: bool, refresh: bool) -> None:
+    """Stage 1 -- find businesses with no website and write them to Leads.
+
+    Every run looks for businesses you have never seen: anything already on the
+    Leads tab is skipped and doesn't use up the batch. Run it daily and you get
+    a fresh batch each time, until the campaign's areas are used up.
+    """
     config = _load(ctx.obj["config_path"])
 
     try:
@@ -316,7 +326,9 @@ def run_discovery(ctx: click.Context, dry_run: bool) -> None:
     # A dry run touches Places only, so it needs no Google credentials at all.
     sheets = None if dry_run else _sheets_client(config)
 
-    report = discovery_stage.run(config, places, sheets, dry_run=dry_run)
+    report = discovery_stage.run(
+        config, places, sheets, dry_run=dry_run, refresh=refresh
+    )
 
     click.echo("")
     for line in report.summary_lines():

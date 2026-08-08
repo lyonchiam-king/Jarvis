@@ -82,10 +82,23 @@ def test_batch_cap_is_enforced():
     assert len(selected) == 100
 
 
-def test_config_caps_every_stage_at_one_hundred():
+def test_one_cap_governs_every_stage():
+    """The number is the campaign's to choose; that it's shared is not."""
     cfg = config()
-    assert cfg.batch_size == 100
-    assert cfg.discovery_cap == 100
+    assert cfg.batch_size == cfg.limits.batch_size
+    assert cfg.discovery_cap == min(cfg.discovery.max_results, cfg.limits.batch_size)
+
+
+def test_discovery_cannot_outrun_the_global_cap():
+    from dataclasses import replace
+
+    cfg = config()
+    cfg = replace(
+        cfg,
+        limits=replace(cfg.limits, batch_size=25),
+        discovery=replace(cfg.discovery, max_results=500),
+    )
+    assert cfg.discovery_cap == 25
 
 
 # ------------------------------------------------------------------ fakes
@@ -263,10 +276,11 @@ def test_a_failed_checkpoint_does_not_lose_the_remaining_run():
 
 
 def test_limit_flag_cannot_exceed_the_configured_batch_size():
-    leads = leads_index([lead_row(f"p{i}") for i in range(300)])
+    cfg = config()
+    leads = leads_index([lead_row(f"p{i}") for i in range(cfg.batch_size * 3)])
     sheets = FakeSheets(leads)
-    report = research.run(config(), FakePlaces(), sheets, FakeWriter(), limit=500)
-    assert report.selected == 100
+    report = research.run(cfg, FakePlaces(), sheets, FakeWriter(), limit=500)
+    assert report.selected == cfg.batch_size
 
 
 def test_social_lookup_runs_only_for_social_only_leads(monkeypatch):

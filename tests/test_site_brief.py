@@ -422,3 +422,125 @@ def test_auto_approve_still_does_not_build_anything_here():
 
     assert report.prompts_written == 1
     assert report.projects_created == 0
+
+
+# ------------------------------------- the brief reads like a designer wrote it
+
+
+FULL_SPEC = SiteSpec(
+    site_goal="Turn a phone browser into a booked appointment.",
+    pages=("Home",),
+    hero_headline="Cut, colour and a proper wash on Lebuh Chulia",
+    hero_subcopy="Walk in if we're quiet, or pick a time below.",
+    key_sections=("Book a time -- three taps, above the fold on mobile.",),
+    primary_cta="Book a time",
+    visual_direction="Quiet, warm, unmistakably a Chulia shophouse.",
+    visitor="Someone at 8pm whose usual barber is shut, on a phone.",
+    proof_points=("4.7 from 213 Google reviews",),
+    palette="Off-white #FAF7F2, near-black #1C1A17, one teal #12604F accent.",
+    typography="Fraunces headings, Inter body, headings 2.2x body.",
+    avoid=("No stock photos of models", "No 'unisex salon' phrasing"),
+)
+
+
+def rendered(**kwargs):
+    return render_lovable_prompt(
+        business_name="Chulia Hair House",
+        category="hair salon",
+        location="Georgetown",
+        spec=FULL_SPEC,
+        **kwargs,
+    )
+
+
+def test_the_brief_opens_with_the_visitor_not_the_business():
+    prompt = rendered()
+    assert "WHO IT IS FOR" in prompt
+    assert FULL_SPEC.visitor in prompt
+    assert prompt.index("WHO IT IS FOR") < prompt.index("THE ONE JOB")
+
+
+def test_every_section_is_tied_to_the_one_action():
+    """The discipline that separates a booking site from a brochure."""
+    prompt = rendered()
+    assert 'does not move someone toward "Book a time"' in prompt
+
+
+def test_design_decisions_are_carried_through_not_summarised_away():
+    prompt = rendered()
+    assert "#FAF7F2" in prompt and "#12604F" in prompt
+    assert "Fraunces" in prompt and "Inter" in prompt
+
+
+def test_the_do_not_list_survives_into_the_brief():
+    prompt = rendered()
+    assert "DO NOT" in prompt
+    assert "No stock photos of models" in prompt
+
+
+def test_proof_points_are_fenced_against_embellishment():
+    prompt = rendered()
+    assert "4.7 from 213 Google reviews" in prompt
+    assert "invent nothing further" in prompt
+
+
+def test_real_contact_details_are_passed_through_verbatim():
+    """A hallucinated digit in a phone number costs a real customer."""
+    prompt = rendered(
+        phone="04-262 1188",
+        address="58 Lebuh Chulia, 10200 George Town",
+        social_handle="@chuliahairhouse",
+    )
+    assert "04-262 1188" in prompt
+    assert "58 Lebuh Chulia, 10200 George Town" in prompt
+    assert "@chuliahairhouse" in prompt
+    assert "do not paraphrase" in prompt
+
+
+def test_sections_absent_from_the_spec_leave_no_empty_headings():
+    """A thin spec must not render a brief full of dangling labels."""
+    thin = SiteSpec(
+        site_goal="Get people to call.",
+        pages=(),
+        hero_headline="A barber on Chulia",
+        hero_subcopy="Open six days.",
+        key_sections=("Call us -- the number, big.",),
+        primary_cta="Call now",
+        visual_direction="",
+    )
+    prompt = render_lovable_prompt(
+        business_name="X", category="barber", location="Penang", spec=thin
+    )
+
+    assert "DO NOT" not in prompt
+    assert "PROOF" not in prompt
+    assert "REAL DETAILS" not in prompt
+    assert "- Home (single page)" in prompt, "an empty page list still needs one page"
+
+
+def test_the_builder_is_told_to_mark_gaps_rather_than_guess():
+    assert "[TO CONFIRM]" in rendered()
+    assert "rather than guessing" in rendered()
+
+
+def test_stage_4_hands_the_lead_its_own_phone_and_address():
+    sheets = FakeSheets(
+        index([{**lead("a"), "Phone": "04-262 1188", "Address": "58 Lebuh Chulia"}]),
+        index([{**research_row("a"), "Social Handle": "@chuliahair"}]),
+    )
+    site_brief.run(config(), sheets, FakeWriter(), LovableAdapter())
+
+    prompt = sheets.upserts[0][1][0]["Lovable Prompt"]
+    assert "04-262 1188" in prompt
+    assert "58 Lebuh Chulia" in prompt
+    assert "@chuliahair" in prompt
+
+
+def test_the_spec_model_is_asked_for_real_design_decisions():
+    """Guards the system prompt against drifting back to 'modern and clean'."""
+    from outreach.providers.llm import SITE_SPEC_SCHEMA, SITE_SPEC_SYSTEM
+
+    for field in ("visitor", "palette", "typography", "avoid", "proof_points"):
+        assert field in SITE_SPEC_SCHEMA["required"]
+    assert "hex" in SITE_SPEC_SYSTEM
+    assert "Never invent a fact" in SITE_SPEC_SYSTEM

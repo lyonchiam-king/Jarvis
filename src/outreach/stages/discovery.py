@@ -2,9 +2,19 @@
 
 Run: ``outreach run discovery``
 
-Idempotent. The Google ``place_id`` is the primary key, so re-running over the
-same area refreshes existing rows in place rather than duplicating them, and a
-lead you have already emailed never gets knocked back to "Discovered".
+Idempotent, and non-repeating. The Google ``place_id`` is the primary key, so
+re-running can never duplicate a row or knock a lead you have already emailed
+back to "Discovered".
+
+Beyond that, a run **hunts for businesses you have never seen**: place_ids
+already on the Leads tab are skipped and do not count toward the batch cap. So
+"60 today, 60 more tomorrow" means 60 genuinely new businesses each time,
+rather than the same 60 re-reported.
+
+That only works if there are new businesses to find. Google caps a single text
+query at roughly 60 results however you paginate, so one query is a finite
+well. ``campaign.areas`` lists further places to search, and a run walks them
+in order until the cap is full -- see ``search_queries`` in config.
 """
 
 from __future__ import annotations
@@ -32,14 +42,19 @@ class DiscoveryReport:
     rejected_rating: int = 0
     rejected_reviews: int = 0
     duplicates_in_run: int = 0
+    already_known: int = 0
+    areas_searched: int = 0
+    exhausted: bool = False
     api_requests: int = 0
     upsert: UpsertResult = field(default_factory=UpsertResult)
     errors: int = 0
 
     def summary_lines(self) -> list[str]:
-        return [
+        lines = [
+            f"Areas searched         {self.areas_searched}",
             f"Places examined        {self.seen}",
-            f"  no website / social  {self.qualified}",
+            f"  already on the Sheet {self.already_known}  (skipped)",
+            f"  new, no website      {self.qualified}",
             f"  rejected: has site   {self.rejected_has_website}",
             f"  rejected: status     {self.rejected_status}",
             f"  rejected: rating     {self.rejected_rating}",
@@ -51,6 +66,14 @@ class DiscoveryReport:
             f"Places API requests    {self.api_requests}",
             f"Errors logged          {self.errors}",
         ]
+        if self.exhausted:
+            lines += [
+                "",
+                "Every area in this campaign is used up -- Google has no more",
+                "results to give for these searches. To keep finding leads, add",
+                "areas or change the category in your campaign file.",
+            ]
+        return lines
 
 
 def website_qualifies(status: WebsiteStatus, treat_social_as_no_website: bool) -> bool:
@@ -100,8 +123,15 @@ def run(
     sheets: SheetsClient | None,
     *,
     dry_run: bool = False,
+    refresh: bool = False,
 ) -> DiscoveryReport:
-    """Search, filter, and write. ``sheets`` may be None when ``dry_run``."""
+    """Search, filter, and write. ``sheets`` may be None when ``dry_run``.
+
+    With ``refresh`` the run re-reads businesses already on the Sheet and
+    updates their Places fields, instead of skipping them to hunt for new ones.
+    Useful every few months when phone numbers and ratings have drifted; it
+    finds nothing new, so it is not the daily mode.
+    """
     if not dry_run and sheets is None:
         raise ValueError("sheets client is required unless dry_run=True")
 
@@ -109,53 +139,89 @@ def run(
     errors = ErrorLog("discovery")
     d = config.discovery
 
+    # Everything we have ever seen. Skipping these is what makes a second run
+    # return a different 60 rather than the same 60.
+    known_ids: set[str] = set()
+    if sheets is not None and not refresh:
+        try:
+            known_ids = set(sheets.read_rows(schema.LEADS))
+        except Exception as exc:  # noqa: BLE001
+            # Better to risk re-reporting a lead than to abort the run: the
+            # upsert is keyed on place_id, so nothing can duplicate either way.
+            log.warning("Could not read existing leads (%s); searching without them.", exc)
+
     leads: list[Lead] = []
     seen_ids: set[str] = set()
-    query = config.campaign.search_query
+    queries = config.campaign.search_queries
+    cap = config.discovery_cap
 
-    log.info("Searching Places for %r", query)
+    if known_ids:
+        log.info("Skipping %d business(es) already on the Sheet.", len(known_ids))
 
-    try:
-        for place in places.search_text(
-            query,
-            page_size=d.page_size,
-            language_code=config.campaign.language,
-        ):
-            report.seen += 1
+    for query in queries:
+        if len(leads) >= cap:
+            break
 
-            with errors.guard(lead_id=place.place_id, business_name=place.name):
-                if place.place_id in seen_ids:
-                    report.duplicates_in_run += 1
-                    continue
+        report.areas_searched += 1
+        log.info("Searching Places for %r", query)
+        found_here = 0
 
-                if d.allowed_business_status and place.business_status:
-                    if place.business_status not in d.allowed_business_status:
-                        report.rejected_status += 1
+        try:
+            for place in places.search_text(
+                query,
+                page_size=d.page_size,
+                language_code=config.campaign.language,
+            ):
+                report.seen += 1
+
+                with errors.guard(lead_id=place.place_id, business_name=place.name):
+                    if place.place_id in seen_ids:
+                        report.duplicates_in_run += 1
                         continue
 
-                website_status = classify_website(place.website_uri, d.social_domains)
-                if not website_qualifies(website_status, d.treat_social_as_no_website):
-                    report.rejected_has_website += 1
-                    continue
+                    # The whole point of a daily run: never work the same
+                    # business twice. Known leads do not consume the cap.
+                    if place.place_id in known_ids:
+                        report.already_known += 1
+                        continue
 
-                if d.min_rating > 0 and (place.rating or 0.0) < d.min_rating:
-                    report.rejected_rating += 1
-                    continue
+                    if d.allowed_business_status and place.business_status:
+                        if place.business_status not in d.allowed_business_status:
+                            report.rejected_status += 1
+                            continue
 
-                if place.review_count < d.min_review_count:
-                    report.rejected_reviews += 1
-                    continue
+                    website_status = classify_website(place.website_uri, d.social_domains)
+                    if not website_qualifies(website_status, d.treat_social_as_no_website):
+                        report.rejected_has_website += 1
+                        continue
 
-                seen_ids.add(place.place_id)
-                leads.append(_to_lead(place, config, website_status))
-                report.qualified += 1
+                    if d.min_rating > 0 and (place.rating or 0.0) < d.min_rating:
+                        report.rejected_rating += 1
+                        continue
 
-            if len(leads) >= config.discovery_cap:
-                log.info("Reached batch cap of %d; stopping search.", config.discovery_cap)
-                break
-    except Exception as exc:  # noqa: BLE001 -- a search-level failure, not per-lead
-        errors.record(exc)
-        log.error("Places search failed: %s", exc)
+                    if place.review_count < d.min_review_count:
+                        report.rejected_reviews += 1
+                        continue
+
+                    seen_ids.add(place.place_id)
+                    leads.append(_to_lead(place, config, website_status))
+                    report.qualified += 1
+                    found_here += 1
+
+                if len(leads) >= cap:
+                    log.info("Reached batch cap of %d; stopping search.", cap)
+                    break
+        except Exception as exc:  # noqa: BLE001 -- search-level, not per-lead
+            errors.record(exc)
+            log.error("Places search failed for %r: %s", query, exc)
+            continue
+
+        if found_here == 0:
+            log.info("  nothing new in this area.")
+
+    # Walked every area and still short of the cap: this campaign's searches
+    # have no more to give, and saying so is more useful than a quiet zero.
+    report.exhausted = len(leads) < cap and report.areas_searched >= len(queries)
 
     report.api_requests = places.request_count
 

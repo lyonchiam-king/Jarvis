@@ -8,18 +8,52 @@ campaign:
   category: "hair salon"
   # Free-text location. Places Text Search resolves this, so anything a human
   # would type into Google Maps works: a suburb, a city, or a whole region.
+  # Used for copy ("a hair salon in Georgetown") and as the fallback search
+  # when no `areas` are listed below.
   location: "Georgetown, Penang, Malaysia"
   language: en
+  # Google returns at most ~60 results for any one text search, however you
+  # paginate. So one area is a finite well: once discovery has taken those, it
+  # will find nothing new there however often you run it.
+  #
+  # These are the wells, drunk in order. Discovery skips every business already
+  # on your Sheet, so each run moves further down this list -- that is what
+  # makes "60 today, 60 more tomorrow" actually deliver 60 *new* businesses.
+  #
+  # When runs start reporting "every area is used up", add more areas here or
+  # change the category. Both are one-line edits.
+  areas:
+    - "Georgetown, Penang, Malaysia"
+    - "Pulau Tikus, Penang, Malaysia"
+    - "Tanjung Tokong, Penang, Malaysia"
+    - "Tanjung Bungah, Penang, Malaysia"
+    - "Batu Ferringhi, Penang, Malaysia"
+    - "Air Itam, Penang, Malaysia"
+    - "Jelutong, Penang, Malaysia"
+    - "Gelugor, Penang, Malaysia"
+    - "Bayan Baru, Penang, Malaysia"
+    - "Bayan Lepas, Penang, Malaysia"
+    - "Sungai Ara, Penang, Malaysia"
+    - "Balik Pulau, Penang, Malaysia"
+    - "Butterworth, Penang, Malaysia"
+    - "Perai, Penang, Malaysia"
+    - "Seberang Jaya, Penang, Malaysia"
+    - "Bukit Mertajam, Penang, Malaysia"
+    - "Simpang Ampat, Penang, Malaysia"
+    - "Nibong Tebal, Penang, Malaysia"
 
 # One cap for every stage. `run discovery` and `run research` each process at
 # most this many businesses per invocation; run the command again for the next
 # batch. Bounded runs are what make the pipeline resumable.
+#
+# 60 is a day's work: 60 new businesses found, researched, and turned into
+# prompts, which is about as many demo sites as one person can review.
 limits:
-  batch_size: 100
+  batch_size: 60
 
 discovery:
   # Discovery stops at the tighter of this and limits.batch_size.
-  max_results: 100
+  max_results: 60
   # Places API (New) caps Text Search at 20 per page.
   page_size: 20
   # Skip low-signal listings. 0 disables the filter.
@@ -90,10 +124,11 @@ lovable:
   # .claude/skills/build-sites/SKILL.md -- so this stays false.
   enabled: false
   require_confirmation: true
-  # Demo-first strategy: every lead gets a site built before outreach, so
-  # per-lead approval would be pure friction. New briefs are seeded "Approved".
-  # Set a brief to "Skip" by hand and it is never built.
-  auto_approve: true
+  # Off: every prompt waits for you in the dashboard's review queue, where you
+  # read it and press Approve or Skip. Approving is one click, and it is the
+  # only place a human sees the brief before credits are spent -- worth the
+  # ten seconds per lead.
+  auto_approve: false
 
 compliance:
   # ISO 3166-1 alpha-2. Drives the outreach-law gate in compliance.py.

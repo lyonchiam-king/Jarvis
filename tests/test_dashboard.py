@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from outreach.config import load_config
-from outreach.dashboard import FULL_RUN, STAGE_COMMANDS, create_app, summarise
+from outreach.dashboard import (
+    FULL_RUN,
+    STAGE_COMMANDS,
+    create_app,
+    review_queue,
+    summarise,
+)
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "outreach"
 
@@ -252,10 +258,26 @@ def test_build_queue_is_empty_without_a_sheet(client):
 
 def test_page_offers_the_copy_and_open_lovable_flow(client):
     body = client.get("/").data
-    assert b"Ready to build" in body
     assert b"Copy prompt" in body
     assert b"lovable.dev" in body
     assert b"Mark as built" in body
+
+
+def test_page_lays_the_morning_out_in_order(client):
+    """Gather, review, build, send -- the order you actually work in."""
+    body = client.get("/").data.decode()
+    headings = [f"</span> {s}" for s in ("Gather", "Review", "Build", "Send")]
+    for heading in headings:
+        assert heading in body, f"missing step heading: {heading}"
+    positions = [body.index(h) for h in headings]
+    assert positions == sorted(positions)
+
+
+def test_the_review_step_offers_approve_and_skip(client):
+    body = client.get("/").data
+    assert b"Approve" in body
+    assert b"Skip" in body
+    assert b"Nothing is spent until you" in body
 
 
 # ------------------------------------------- the MCP hooks Claude Code uses
@@ -295,3 +317,148 @@ def test_build_sites_skill_exists_and_forbids_prompt_editing():
     assert "outreach briefs record" in text
     assert "Do not improve, shorten, or reword the prompt" in text
     assert "Record after each build" in text
+
+
+# ------------------------------------------------ step 2: the review queue
+
+
+def brief_row(lead_id, approval="Pending", project_id="", prompt="Build a site"):
+    return {
+        "Lead ID": lead_id,
+        "Business Name": f"Salon {lead_id}",
+        "Lovable Prompt": prompt,
+        "Approval Status": approval,
+        "Lovable Project ID": project_id,
+    }
+
+
+def lead_row(lead_id, **extra):
+    return {
+        "Lead ID": lead_id,
+        "Stage": "Site Briefed",
+        "Business Name": f"Salon {lead_id}",
+        "Category": "Hair salon",
+        "Phone": "04-262 1188",
+        "Rating": "4.7",
+        "Review Count": "213",
+        **extra,
+    }
+
+
+def research_row(lead_id, **extra):
+    return {
+        "Lead ID": lead_id,
+        "Suggested Website Angle": "They get booking questions in the reviews",
+        "Customer Praise": "Friendly and fast",
+        "Customer Pain Points": "No way to book",
+        **extra,
+    }
+
+
+def test_only_undecided_briefs_reach_the_review_queue():
+    briefs = index(
+        [
+            brief_row("pending"),
+            brief_row("blank", approval=""),
+            brief_row("yes", approval="Approved"),
+            brief_row("no", approval="Skip"),
+        ]
+    )
+    queue = review_queue({}, {}, briefs)
+
+    assert {q["lead_id"] for q in queue} == {"pending", "blank"}
+
+
+def test_an_already_built_brief_is_not_re_reviewed():
+    briefs = index([brief_row("a", approval="Pending", project_id="proj_1")])
+    assert review_queue({}, {}, briefs) == []
+
+
+def test_the_review_card_carries_enough_to_decide_without_the_sheet():
+    """Deciding blind is how you approve sixty sites you never looked at."""
+    queue = review_queue(
+        index([lead_row("a")]),
+        index([research_row("a", **{"Social Handle": "@salon_a"})]),
+        index([brief_row("a", prompt="Build a booking page")]),
+    )
+
+    assert len(queue) == 1
+    q = queue[0]
+    assert q["name"] == "Salon a"
+    assert q["rating"] == "4.7" and q["reviews"] == "213"
+    assert "booking questions" in q["angle"]
+    assert q["praise"] == "Friendly and fast"
+    assert q["social"] == "@salon_a"
+    assert q["prompt"] == "Build a booking page"
+
+
+def test_a_brief_with_no_research_row_still_renders():
+    """A missing row must not blank the whole queue."""
+    queue = review_queue({}, {}, index([brief_row("a")]))
+    assert queue[0]["name"] == "Salon a"
+    assert queue[0]["angle"] == ""
+
+
+def test_decide_rejects_anything_that_is_not_approve_or_skip(client):
+    r = client.post("/api/decide", json={"lead_id": "a", "decision": "build it now"})
+    assert r.status_code == 400
+
+
+def test_decide_requires_a_lead(client):
+    assert client.post("/api/decide", json={"decision": "approved"}).status_code == 400
+
+
+def test_approving_writes_only_the_approval_cell(monkeypatch):
+    """Approving must not build, and must not touch any other column."""
+    writes = []
+
+    class FakeSheets:
+        url = "https://sheet"
+
+        def update_column(self, tab, column, values):
+            writes.append((tab.title, column, dict(values)))
+            return len(values)
+
+    from outreach import dashboard as dash
+
+    monkeypatch.setattr(dash, "_sheets_client", lambda config: FakeSheets())
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    client = create_app(config).test_client()
+
+    r = client.post("/api/decide", json={"lead_id": "a", "decision": "approved"})
+
+    assert r.get_json() == {"ok": True}
+    assert writes == [("Site Briefs", "Approval Status", {"a": "Approved"})]
+
+
+def test_skipping_writes_skip(monkeypatch):
+    writes = []
+
+    class FakeSheets:
+        def update_column(self, tab, column, values):
+            writes.append(dict(values))
+            return len(values)
+
+    from outreach import dashboard as dash
+
+    monkeypatch.setattr(dash, "_sheets_client", lambda config: FakeSheets())
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    client = create_app(config).test_client()
+    client.post("/api/decide", json={"lead_id": "a", "decision": "skip"})
+
+    assert writes == [{"a": "Skip"}]
+
+
+def test_deciding_on_a_missing_row_says_so_rather_than_claiming_success(monkeypatch):
+    class FakeSheets:
+        def update_column(self, tab, column, values):
+            return 0
+
+    from outreach import dashboard as dash
+
+    monkeypatch.setattr(dash, "_sheets_client", lambda config: FakeSheets())
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    client = create_app(config).test_client()
+
+    body = client.post("/api/decide", json={"lead_id": "ghost", "decision": "approved"})
+    assert "ghost" in body.get_json()["error"]

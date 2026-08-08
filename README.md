@@ -36,8 +36,10 @@ in your Gmail **drafts** and you press send.
 ## Just want to use it?
 
 **Double-click `Dashboard.bat`** (Windows) or run `outreach dashboard`. A local
-dashboard opens in your browser: what needs your attention today, where every
-lead sits in the funnel, and a button for each stage. Runs on `127.0.0.1` only.
+dashboard opens in your browser, laid out in the order you work: **1 Gather**
+(one button), **2 Review** (approve or skip each brief, one at a time),
+**3 Build**, **4 Send** — plus where every lead sits in the funnel. Runs on
+`127.0.0.1` only.
 
 Right-click `Dashboard.bat` → *Send to → Desktop (create shortcut)* for a
 desktop icon.
@@ -110,8 +112,9 @@ or `.venv\Scripts\Activate.ps1` on Windows). If you'd rather skip it, use the
 full path instead: `.venv/bin/outreach preflight` — or on Windows,
 `.venv\Scripts\outreach.exe preflight`.
 
-Each stage handles up to **100 businesses per run** and skips anything it has
-already done, so running a command twice is safe and costs nothing extra.
+Each stage handles up to **`limits.batch_size` businesses per run** (60 in the
+shipped campaign) and skips anything it has already done, so running a command
+twice is safe and costs nothing extra.
 
 ---
 
@@ -239,20 +242,46 @@ https://www.googleapis.com/auth/gmail.compose   create drafts
 
 Global flags: `--config PATH` to override the campaign file, `-v` for debug logging.
 
-### 100 companies per run, and it never repeats work
+### A batch a day, and never the same business twice
 
-Every stage processes at most **`limits.batch_size` (default 100)** businesses
-per invocation. Run the command again for the next batch.
+Every stage processes at most **`limits.batch_size`** businesses per invocation
+— 60 in the shipped campaign. Run the command again tomorrow for the next
+batch, and it will be a genuinely different batch:
 
-Re-running is safe and cheap because each stage skips what it has already done:
-
-- **Discovery** keys on `place_id`, so a second run over the same area refreshes
-  existing rows instead of duplicating them.
+- **Discovery skips every `place_id` already on the Leads tab**, and skipped
+  businesses don't consume the cap. Ask for 60 when 40 are already known and
+  you get 60 *new* ones, not 20.
 - **Every processing stage** only picks up leads whose upstream work is done and
   that have no row on its own output tab. A lead already researched costs
   **zero** Places requests and **zero** Claude calls on the next run; a lead
   already drafted costs zero Claude calls and creates no duplicate draft. Each
   of those is verified by a test.
+- Nothing can regress: `Stage` transitions are forward-only, so a lead you have
+  already emailed can never be knocked back to `Discovered`.
+
+`outreach run discovery --refresh` inverts the first rule — it re-reads known
+businesses and updates their Places fields. It finds nothing new, so it's a
+quarterly hygiene run, not the daily mode.
+
+### Where the next batch comes from
+
+**Google returns at most ~60 results for any one text query**, however you
+paginate. One query is a finite well: once discovery has taken those, that
+search will never yield another lead.
+
+So `campaign.areas` lists several places to search, and a run walks them in
+order — skipping known businesses — until the cap is full. Day one drains
+Georgetown, day two moves to Pulau Tikus, and so on. When every area is
+exhausted the report says so explicitly rather than reporting a quiet zero:
+
+```
+Every area in this campaign is used up -- Google has no more
+results to give for these searches. To keep finding leads, add
+areas or change the category in your campaign file.
+```
+
+Omit `areas` entirely and discovery falls back to the single `location`, which
+is what every campaign did before this existed.
 
 Research also **checkpoints every 10 leads** (`research.checkpoint_every`). If a
 run dies at lead 47, the first 40 are already saved and the next run starts at
@@ -301,7 +330,7 @@ nothing else. This is enforced by tests in `tests/test_sheets.py`.
 
 ```bash
 outreach run research --limit 5     # try it on five leads first
-outreach run research               # then the full batch of 100
+outreach run research               # then the rest of the batch
 ```
 
 Per lead, in order:
@@ -322,9 +351,9 @@ Google's caching terms. A test asserts it.
 
 ### What this costs per run
 
-For 100 leads: **100 Place Details requests** (the Enterprise SKU — reviews are
-the most expensive field set in the pipeline), up to 200 page fetches (free),
-and **100 Claude Opus 5 calls**.
+One Place Details request per lead (the Enterprise SKU — reviews are the most
+expensive field set in the pipeline), up to two page fetches per lead (free),
+and one Claude Opus 5 call per lead. For a 60-lead batch that is 60 of each.
 
 `research.effort` is the dial. It defaults to `medium`, which is genuinely
 strong on Opus 5 for summarisation work. Raise it to `high` if the briefs read
@@ -456,6 +485,13 @@ campaign:
   name: kl-cafes
   category: "cafe"
   location: "Bangsar, Kuala Lumpur, Malaysia"
+  # Optional but strongly recommended: each area is worth ~60 results and no
+  # more, so a campaign with one area runs dry in a day or two.
+  areas:
+    - "Bangsar, Kuala Lumpur, Malaysia"
+    - "Bangsar South, Kuala Lumpur, Malaysia"
+    - "Damansara Heights, Kuala Lumpur, Malaysia"
+    - "Taman Tun Dr Ismail, Kuala Lumpur, Malaysia"
 compliance:
   country_code: MY
 ```

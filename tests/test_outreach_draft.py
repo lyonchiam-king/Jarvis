@@ -434,8 +434,9 @@ def test_without_require_site_a_researched_lead_is_written_to_immediately():
 
 
 def test_penang_campaign_is_configured_demo_first():
+    """The one test that reads the campaign file's own values on purpose."""
     from outreach.config import load_config
 
     c = load_config("config/campaigns/penang-my.yaml", env_file=None)
-    assert c.outreach.require_site is True
-    assert c.lovable.auto_approve is True
+    assert c.outreach.require_site is True, "no message goes out without a demo"
+    assert c.lovable.auto_approve is False, "every prompt is reviewed by hand"

@@ -24,11 +24,28 @@ class CampaignSettings:
     category: str
     location: str
     language: str = "en"
+    # Extra search areas. Google caps a single text query at about 60 results
+    # no matter how you paginate, so one query is a finite well -- once you have
+    # taken those 60, it returns nothing new however often you run it. Listing
+    # neighbouring areas is what lets discovery keep finding businesses on day
+    # two, day three, and day thirty.
+    areas: tuple[str, ...] = ()
 
     @property
     def search_query(self) -> str:
         """The text handed to Places Text Search, e.g. 'hair salon in Penang'."""
         return f"{self.category} in {self.location}"
+
+    @property
+    def search_queries(self) -> tuple[str, ...]:
+        """Every query to walk, in order, until the batch cap is filled.
+
+        Falls back to the single ``location`` query when no areas are listed,
+        so an existing campaign file keeps working untouched.
+        """
+        if not self.areas:
+            return (self.search_query,)
+        return tuple(f"{self.category} in {area}" for area in self.areas)
 
 
 @dataclass(frozen=True)
@@ -182,6 +199,7 @@ def load_config(
         category=str(_require(campaign_raw, "category", where)),
         location=str(_require(campaign_raw, "location", where)),
         language=str(campaign_raw.get("language", "en")),
+        areas=tuple(str(a).strip() for a in (campaign_raw.get("areas") or []) if str(a).strip()),
     )
 
     d = raw.get("discovery") or {}

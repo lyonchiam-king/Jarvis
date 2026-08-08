@@ -10,9 +10,19 @@ campaign:
   category: "barber shop"
   location: "Manchester, United Kingdom"
   language: en
+  # Google caps a single text query at about 60 results, so one area is a
+  # finite well. Discovery walks this list, skipping businesses already on the
+  # Sheet, until the batch is full.
+  areas:
+    - "Manchester city centre, United Kingdom"
+    - "Chorlton, Manchester, United Kingdom"
+    - "Didsbury, Manchester, United Kingdom"
+    - "Levenshulme, Manchester, United Kingdom"
+    - "Salford, United Kingdom"
+    - "Stockport, United Kingdom"
 
 limits:
-  batch_size: 100
+  batch_size: 60
 
 research:
   model: claude-opus-5
@@ -23,7 +33,7 @@ research:
   checkpoint_every: 10
 
 discovery:
-  max_results: 100
+  max_results: 60
   page_size: 20
   min_rating: 0.0
   min_review_count: 5

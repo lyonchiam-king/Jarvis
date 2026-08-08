@@ -85,60 +85,167 @@ Write for a reader, not a template. No marketing language, no filler.
 SITE_SPEC_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
+        "visitor": {
+            "type": "string",
+            "description": (
+                "Who lands on this site, on what device, in what state of mind, "
+                "and the one thing they need within ten seconds. Be specific to "
+                "this business -- 'someone whose usual barber is closed, on a "
+                "phone, at 8pm' beats 'potential customers'."
+            ),
+        },
         "site_goal": {
             "type": "string",
-            "description": "The one job this site must do for this business.",
+            "description": (
+                "The one job this site must do. One sentence, one job -- if you "
+                "name two, you have not decided yet."
+            ),
         },
         "pages": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Page names. Keep it small -- 3 to 5 for an SME.",
+            "description": (
+                "Page names. Keep it small -- 1 to 4 for an SME. A single "
+                "excellent page beats four thin ones; only add a page when the "
+                "content genuinely cannot live on the home page."
+            ),
         },
-        "hero_headline": {"type": "string"},
-        "hero_subcopy": {"type": "string"},
+        "hero_headline": {
+            "type": "string",
+            "description": (
+                "Real copy, not a placeholder. Under 60 characters. It must be "
+                "impossible to paste onto a competitor's site -- if it would "
+                "work for any salon in town, it is not the headline."
+            ),
+        },
+        "hero_subcopy": {
+            "type": "string",
+            "description": (
+                "One sentence under the headline that answers 'and why should I "
+                "care?'. Concrete, no adjective stacking."
+            ),
+        },
         "key_sections": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Sections on the home page, in order, each named and described.",
+            "description": (
+                "Home page sections in scroll order, each as 'Name -- what it "
+                "contains and why it earns its place'. Order by what the "
+                "visitor needs, not by convention."
+            ),
         },
         "primary_cta": {
             "type": "string",
-            "description": "The single action the site pushes visitors toward.",
+            "description": (
+                "The exact button text for the single action the whole site "
+                "drives at. Verb first, 2-4 words, in the visitor's language "
+                "not the business's."
+            ),
+        },
+        "proof_points": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Trust signals that are TRUE from the evidence given -- a "
+                "rating with its review count, a named specialty customers "
+                "repeatedly praise, years in business if stated. Empty array if "
+                "the evidence supports none. Never manufacture one."
+            ),
+        },
+        "palette": {
+            "type": "string",
+            "description": (
+                "Actual decisions with hex values and where each is used: page "
+                "background, body text, one accent for the CTA. Justify the "
+                "choice from the business, not from taste. Three or four "
+                "colours total -- more is a sign of an undecided design."
+            ),
+        },
+        "typography": {
+            "type": "string",
+            "description": (
+                "Named typefaces available on Google Fonts, one for headings "
+                "and one for body, with the size and weight relationship "
+                "between them. Say why this pairing suits this business."
+            ),
+        },
+        "avoid": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Specific things that would be wrong for THIS business -- the "
+                "cliches of its category, the tone that would ring false. "
+                "'No stock photos of models' is useful; 'nothing ugly' is not."
+            ),
         },
         "visual_direction": {
             "type": "string",
             "description": (
-                "Concrete direction: palette, type, mood. Fit the business, not "
-                "a generic template."
+                "The feel in two or three sentences, tying the palette and type "
+                "together. What should someone sense in the first second?"
             ),
         },
     },
     "required": [
+        "visitor",
         "site_goal",
         "pages",
         "hero_headline",
         "hero_subcopy",
         "key_sections",
         "primary_cta",
+        "proof_points",
+        "palette",
+        "typography",
+        "avoid",
         "visual_direction",
     ],
     "additionalProperties": False,
 }
 
 SITE_SPEC_SYSTEM = """\
-You spec small, sharp websites for local businesses that currently have none. \
-The spec you produce is handed to a site builder, so it must be concrete: real \
-headlines, named sections, a specific visual direction.
+You are a senior web designer. You have spent years building small sites for \
+local businesses, and you are writing the brief that a builder will implement \
+literally. Write it the way the best designers do.
 
-Design for the business you are given, not for a template. A barber shop and a \
-tuition centre should not come out looking like the same site. Use the \
-research brief -- if customers complain about booking, the site's job is \
-booking; if they praise a specific person by name, the site should feature \
-them.
+**Start from the visitor, not the business.** Nobody visits a salon website to \
+admire it. They arrive on a phone, one-handed, mid-errand, needing one thing: \
+are you open, where are you, can I book. Name that person and that moment \
+first, and every later decision follows from it. A brief that opens with "a \
+modern, professional presence" is a brief written by someone who skipped this \
+step.
 
-Never invent facts about the business. If you don't know their prices, don't \
-write a pricing page. Keep the site small -- three to five pages is right for \
-an SME, and a single strong page often beats five weak ones.
+**Decide one job, then defend it.** Every section must move the visitor toward \
+the primary action. If a section doesn't, cut it -- and say so in `avoid`. The \
+discipline of a good small site is in what it leaves out. Most SME sites fail \
+by being a brochure when they should be a booking button.
+
+**Write real copy.** The headline you produce ships. It must be specific enough \
+that pasting it onto a competitor's site would be obviously wrong. "Quality \
+haircuts in Georgetown" is not a headline; it is a category. Use the words \
+customers themselves used in the reviews -- they are better copywriters than \
+either of us, and their phrasing is proof you listened.
+
+**Make real design decisions.** Name hex values, name typefaces, name the \
+relationship between heading and body size. "Modern and clean" is not a \
+direction, it is an evasion -- it tells the builder nothing and it will produce \
+the same beige template every other business has. Derive the choices from the \
+business: a 30-year-old barber shop and a new lash studio should not resolve to \
+the same palette, and if yours do, you have designed neither.
+
+**Design for the phone first and the thumb specifically.** Assume a mid-range \
+Android on a patchy connection. Tap targets big, phone number tappable, no \
+hover-dependent anything, nothing important below three scrolls.
+
+**Never invent a fact.** No prices you weren't given, no awards, no staff names, \
+no testimonials, no "established 1998" unless the evidence says so. A fabricated \
+detail is worse than a missing one: the owner will see this site, and one wrong \
+claim tells them you never looked at their business. Where a real detail is \
+needed but absent, the builder will mark it [TO CONFIRM] -- that is the correct \
+outcome, not a failure.
+
+Every field you fill is an instruction someone will follow exactly. Write \
+nothing you would not defend in a review.
 """
 
 OUTREACH_COPY_SCHEMA: dict[str, Any] = {
@@ -234,6 +341,13 @@ class SiteSpec:
     key_sections: tuple[str, ...]
     primary_cta: str
     visual_direction: str
+    # The design decisions. Defaulted so a spec built from the older seven
+    # fields still constructs; the model is required to fill all of them.
+    visitor: str = ""
+    proof_points: tuple[str, ...] = ()
+    palette: str = ""
+    typography: str = ""
+    avoid: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -249,52 +363,115 @@ def render_lovable_prompt(
     category: str,
     location: str,
     spec: SiteSpec,
+    phone: str = "",
+    address: str = "",
+    social_handle: str = "",
 ) -> str:
     """Turn the structured spec into the text you paste into Lovable.
 
     Deterministic on purpose: the model decides *what* the site should be, this
     function decides how that is worded. Same spec in, same prompt out, which
-    makes it reviewable and testable.
+    makes it reviewable, diffable, and testable -- and means a bad site is
+    traceable to either the spec or this template, never to a coin flip.
+
+    Structured the way a designer hands work over: who it's for, the one job,
+    the copy, the art direction, what to leave out, then the build rules.
     """
-    pages = "\n".join(f"- {p}" for p in spec.pages)
-    sections = "\n".join(f"{i}. {s}" for i, s in enumerate(spec.key_sections, start=1))
     where = f" in {location}" if location else ""
+    pages = "\n".join(f"- {p}" for p in spec.pages) or "- Home (single page)"
+    sections = "\n".join(f"{i}. {s}" for i, s in enumerate(spec.key_sections, start=1))
 
-    return f"""\
-Build a small marketing website for {business_name}, a {category or 'local business'}{where}.
+    out = [
+        f"Build a website for {business_name}, a "
+        f"{category or 'local business'}{where}.",
+        "",
+        "This business has never had a website. This site is the first "
+        "impression anyone gets of them online, and the owner will see it "
+        "before their customers do.",
+    ]
 
-GOAL
-{spec.site_goal}
+    if spec.visitor:
+        out += ["", "WHO IT IS FOR", spec.visitor]
 
-PAGES
-{pages}
+    out += [
+        "",
+        "THE ONE JOB",
+        spec.site_goal,
+        "",
+        f'Every element serves this. If a section does not move someone toward '
+        f'"{spec.primary_cta}", it does not belong on the page.',
+        "",
+        "PAGES",
+        pages,
+        "",
+        "HERO (use this copy as written)",
+        f"Headline: {spec.hero_headline}",
+        f"Subcopy:  {spec.hero_subcopy}",
+        f"Button:   {spec.primary_cta}",
+        "",
+        "HOME PAGE, IN SCROLL ORDER",
+        sections,
+    ]
 
-HOME PAGE HERO
-Headline: {spec.hero_headline}
-Subcopy: {spec.hero_subcopy}
-Primary call to action: {spec.primary_cta}
+    if spec.proof_points:
+        out += [
+            "",
+            "PROOF (all verified -- show these, invent nothing further)",
+            *(f"- {p}" for p in spec.proof_points),
+        ]
 
-HOME PAGE SECTIONS (in order)
-{sections}
+    out += ["", "ART DIRECTION"]
+    if spec.palette:
+        out.append(f"Palette: {spec.palette}")
+    if spec.typography:
+        out.append(f"Type:    {spec.typography}")
+    if spec.visual_direction:
+        out.append(f"Feel:    {spec.visual_direction}")
 
-VISUAL DIRECTION
-{spec.visual_direction}
+    if spec.avoid:
+        out += [
+            "",
+            "DO NOT (specific to this business)",
+            *(f"- {a}" for a in spec.avoid),
+        ]
 
-CONSTRAINTS
-- Mobile first. Most visitors will arrive on a phone.
-- Fast and light. No heavy frameworks, no carousels, no stock-photo filler.
-- Every claim on the site must be one the business can stand behind. Do not
-  invent prices, awards, testimonials, staff names, or years in business.
-- Use placeholder text clearly marked [TO CONFIRM] wherever a real detail is
-  needed but not supplied.
-- Make the phone number and location impossible to miss.
-- Send every booking or enquiry to a spreadsheet via the
-  Google Sheets connector, one row per enquiry with a timestamp.
-  This owner has never had a website and will not log into an
-  admin panel to check messages. A spreadsheet is a tool they already know.
-- Put a WhatsApp click-to-chat link next to any form. In this market that is
-  how people actually get in touch, and a form alone will lose enquiries.
-"""
+    contact = []
+    if phone:
+        contact.append(f"Phone: {phone} -- as a tappable tel: link, in the header")
+    if address:
+        contact.append(f"Address: {address} -- with a link to Google Maps")
+    if social_handle:
+        contact.append(
+            f"Social: {social_handle} -- link it prominently. Their customers "
+            "already follow them there, and it is the photo feed this site "
+            "would otherwise lack."
+        )
+    if contact:
+        out += ["", "REAL DETAILS (use exactly these, do not paraphrase)", *contact]
+
+    out += [
+        "",
+        "BUILD RULES",
+        "- Mobile first, and thumb first. Assume a mid-range Android on a patchy",
+        "  connection. Large tap targets, nothing that depends on hover, nothing",
+        "  important more than three scrolls down.",
+        "- Fast and light. No carousels, no popups, no cookie banner theatre, no",
+        "  stock photos of models who have never been to this business.",
+        "- Every claim must be one the owner can stand behind. Do not invent",
+        "  prices, awards, testimonials, staff names, or years in business.",
+        "- Where a real detail is needed but was not supplied, write it as",
+        "  [TO CONFIRM] rather than guessing. That is the correct outcome.",
+        "- Accessible by default: real contrast, real heading order, alt text,",
+        "  and a form every keyboard can complete.",
+        "- Send every booking or enquiry to a spreadsheet via the",
+        "  Google Sheets connector, one row per enquiry with a timestamp.",
+        "  This owner has never had a website and will not log into an",
+        "  admin panel to check messages. A spreadsheet is a tool they already know.",
+        "- Put a WhatsApp click-to-chat link next to any form. In this market that is",
+        "  how people actually get in touch, and a form alone will lose enquiries.",
+    ]
+
+    return "\n".join(out) + "\n"
 
 
 def build_site_spec_prompt(
@@ -326,7 +503,8 @@ def build_site_spec_prompt(
 
     lines += [
         "",
-        "Research brief:",
+        "Research brief (this is all the evidence there is -- anything not "
+        "here is not known):",
         f"- Tone: {tone or 'unknown'}",
         f"- Services: {services or 'unknown'}",
         f"- Price tier: {price_tier or 'unknown'}",
@@ -565,6 +743,11 @@ class BriefWriter:
             key_sections=_as_tuple(payload.get("key_sections")),
             primary_cta=str(payload.get("primary_cta", "")).strip(),
             visual_direction=str(payload.get("visual_direction", "")).strip(),
+            visitor=str(payload.get("visitor", "")).strip(),
+            proof_points=_as_tuple(payload.get("proof_points")),
+            palette=str(payload.get("palette", "")).strip(),
+            typography=str(payload.get("typography", "")).strip(),
+            avoid=_as_tuple(payload.get("avoid")),
         )
 
     def write_outreach_copy(self, prompt: str) -> OutreachCopy:

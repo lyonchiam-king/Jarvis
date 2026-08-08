@@ -140,6 +140,12 @@ def run(
                 category=lead.get("Category", ""),
                 location=config.campaign.location,
                 spec=spec,
+                # Passed straight through rather than via the model, so the
+                # phone number on the site is the one Google has, character for
+                # character. A hallucinated digit here costs a real customer.
+                phone=lead.get("Phone", ""),
+                address=lead.get("Address", ""),
+                social_handle=research_row.get("Social Handle", ""),
             )
 
             # No build happens here, ever. A brand-new row is seeded "Pending",
