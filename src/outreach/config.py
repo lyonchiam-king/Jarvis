@@ -77,6 +77,14 @@ class OutreachSettings:
     sender_title: str = ""
     company: str = ""
     channel_priority: tuple[str, ...] = ("whatsapp", "email")
+    # Required in every commercial email under CAN-SPAM, GDPR/ePrivacy, and
+    # Australia's Spam Act. Appended to the footer of every draft.
+    postal_address: str = ""
+    # Appended verbatim so the recipient always has a way out.
+    opt_out_note: str = (
+        "If you'd rather not hear from me again, just reply "
+        "'no thanks' and I won't contact you."
+    )
 
 
 @dataclass(frozen=True)
@@ -211,6 +219,11 @@ def load_config(
         sender_title=str(o.get("sender_title", "")),
         company=str(o.get("company", "")),
         channel_priority=tuple(o.get("channel_priority") or ("whatsapp", "email")),
+        postal_address=str(o.get("postal_address", "")),
+        opt_out_note=str(
+            o.get("opt_out_note")
+            or OutreachSettings.opt_out_note
+        ),
     )
 
     lv = raw.get("lovable") or {}

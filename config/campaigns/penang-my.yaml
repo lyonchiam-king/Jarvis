@@ -69,6 +69,10 @@ outreach:
   sender_name: "Lyon Chiam"
   sender_title: "Founder"
   company: "COAI"
+  # REQUIRED before Stage 5 will run. Goes in the footer of every draft --
+  # a real postal address is a legal requirement for commercial email under
+  # CAN-SPAM, GDPR/ePrivacy, and Australia's Spam Act.
+  postal_address: ""
   # Places rarely returns email for these businesses, so WhatsApp leads.
   channel_priority:
     - whatsapp

@@ -19,20 +19,18 @@ import click
 from . import compliance, schema
 from .auth import AuthError, get_credentials
 from .config import Config, ConfigError, load_config
+from .providers.gmail import GmailClient
 from .providers.llm import BriefWriter, LLMError
+from .providers.lovable import LovableAdapter, LovableUnavailable
 from .providers.places import PlacesClient, PlacesError
 from .sheets import SheetsClient, SheetsError
 from .stages import discovery as discovery_stage
 from .stages import init_sheet as init_sheet_stage
+from .stages import outreach_draft as outreach_stage
 from .stages import research as research_stage
+from .stages import site_brief as site_brief_stage
 
 log = logging.getLogger("outreach")
-
-NOT_BUILT = {
-    "site-brief": "Stage 4 (Lovable site briefs)",
-    "outreach-draft": "Stage 5 (Gmail drafts)",
-}
-
 
 def _setup_logging(verbose: bool) -> None:
     logging.basicConfig(
@@ -49,13 +47,28 @@ def _load(config_path: str | None) -> Config:
         raise click.ClickException(str(exc)) from exc
 
 
-def _sheets_client(config: Config, *, require_sheet_id: bool = True) -> SheetsClient:
+def _credentials(config: Config):
     try:
-        creds = get_credentials(
+        return get_credentials(
             config.secrets.oauth_client_file, config.secrets.token_file
         )
     except AuthError as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+def _writer(config: Config) -> BriefWriter:
+    try:
+        return BriefWriter(
+            config.secrets.anthropic_api_key,
+            model=config.research.model,
+            effort=config.research.effort,
+        )
+    except LLMError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _sheets_client(config: Config, *, require_sheet_id: bool = True) -> SheetsClient:
+    creds = _credentials(config)
 
     if require_sheet_id and not config.secrets.sheet_id:
         raise click.ClickException(
@@ -210,11 +223,8 @@ def run_discovery(ctx: click.Context, dry_run: bool) -> None:
         remaining = len(report.upsert.inserted_names) - 25
         if remaining > 0:
             click.echo(f"  ... and {remaining} more")
-    if not dry_run and config.secrets.sheet_id:
-        click.echo("")
-        click.echo(
-            f"https://docs.google.com/spreadsheets/d/{config.secrets.sheet_id}/edit"
-        )
+    if not dry_run:
+        _echo_sheet_link(config)
 
 
 @run.command("research")
@@ -234,36 +244,106 @@ def run_research(ctx: click.Context, limit: int | None) -> None:
     except PlacesError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    try:
-        writer = BriefWriter(
-            config.secrets.anthropic_api_key,
-            model=config.research.model,
-            effort=config.research.effort,
-        )
-    except LLMError as exc:
-        raise click.ClickException(str(exc)) from exc
-
+    writer = _writer(config)
     sheets = _sheets_client(config)
     report = research_stage.run(config, places, sheets, writer, limit=limit)
 
     click.echo("")
     for line in report.summary_lines():
         click.echo(line)
+    _echo_sheet_link(config)
+
+
+@run.command("site-brief")
+@click.option("--limit", type=int, default=None, help="Process fewer than the batch size.")
+@click.pass_context
+def run_site_brief(ctx: click.Context, limit: int | None) -> None:
+    """Stage 4 -- write a ready-to-paste Lovable prompt per researched lead."""
+    config = _load(ctx.obj["config_path"])
+    sheets = _sheets_client(config)
+    lovable = LovableAdapter(
+        enabled=config.lovable.enabled,
+        require_confirmation=config.lovable.require_confirmation,
+        confirm=click.confirm,
+    )
+    report = site_brief_stage.run(config, sheets, _writer(config), lovable, limit=limit)
+
+    click.echo("")
+    for line in report.summary_lines():
+        click.echo(line)
+    click.echo("")
+    click.echo(
+        "Prompts are in the Site Briefs tab. Set Approval Status to 'Approved' "
+        "on the ones you want built, then run `outreach run site-build` "
+        "(or just paste the prompt into Lovable yourself)."
+    )
+    _echo_sheet_link(config)
+
+
+@run.command("site-build")
+@click.option("--limit", type=int, default=None, help="Process fewer than the batch size.")
+@click.pass_context
+def run_site_build(ctx: click.Context, limit: int | None) -> None:
+    """Stage 4b -- build the approved sites via Lovable. Spends credits."""
+    config = _load(ctx.obj["config_path"])
+    sheets = _sheets_client(config)
+    lovable = LovableAdapter(
+        enabled=config.lovable.enabled,
+        require_confirmation=config.lovable.require_confirmation,
+        confirm=click.confirm,
+    )
+    try:
+        report = site_brief_stage.build_approved(config, sheets, lovable, limit=limit)
+    except LovableUnavailable as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo("")
+    for line in report.summary_lines():
+        click.echo(line)
+    _echo_sheet_link(config)
+
+
+@run.command("outreach-draft")
+@click.option("--limit", type=int, default=None, help="Process fewer than the batch size.")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Write the copy and print it, but create no Gmail drafts and touch no Sheet.",
+)
+@click.pass_context
+def run_outreach_draft(ctx: click.Context, limit: int | None, dry_run: bool) -> None:
+    """Stage 5 -- draft the email into Gmail and the WhatsApp text into the Sheet."""
+    config = _load(ctx.obj["config_path"])
+
+    try:
+        outreach_stage.preflight(config)
+    except (compliance.ComplianceBlocked, outreach_stage.MissingPostalAddress) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    sheets = _sheets_client(config)
+    gmail = None if dry_run else GmailClient(_credentials(config))
+
+    report = outreach_stage.run(
+        config, sheets, _writer(config), gmail, limit=limit, dry_run=dry_run
+    )
+
+    click.echo("")
+    for line in report.summary_lines():
+        click.echo(line)
+    if not dry_run:
+        click.echo("")
+        click.echo(
+            "Drafts are in your Gmail drafts folder. Nothing was sent -- "
+            "review each one and press send yourself."
+        )
+    _echo_sheet_link(config)
+
+
+def _echo_sheet_link(config: Config) -> None:
     if config.secrets.sheet_id:
         click.echo("")
         click.echo(
             f"https://docs.google.com/spreadsheets/d/{config.secrets.sheet_id}/edit"
-        )
-
-
-for _name, _label in NOT_BUILT.items():
-
-    @run.command(_name)
-    def _not_built(_label: str = _label) -> None:
-        """Not built yet."""
-        raise click.ClickException(
-            f"{_label} is not built yet. Stage 1 (discovery) is complete and "
-            "verified first, by design."
         )
 
 

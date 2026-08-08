@@ -28,8 +28,9 @@ from ..providers import social as social_provider
 from ..providers import web
 from ..providers.llm import BriefWriter, ResearchBrief, build_prompt
 from ..providers.places import PlaceDetails, PlacesClient
+from ..selection import select_pending
 from ..sheets import SheetsClient
-from ..stage import Stage, advance, parse, rank
+from ..stage import Stage, advance
 
 log = logging.getLogger("outreach")
 
@@ -87,39 +88,14 @@ def select_leads(
     *,
     batch_size: int,
 ) -> tuple[list[dict[str, str]], int, int]:
-    """Pick the leads this run should process.
-
-    Returns ``(selected, already_researched, not_ready)``. A lead is skipped if
-    it already has a Research row, or if its Stage has advanced past
-    `Discovered` -- both mean the work is done or no longer applies.
-    """
-    selected: list[dict[str, str]] = []
-    already = 0
-    not_ready = 0
-
-    for lead_id, (_row_number, row) in leads.items():
-        if lead_id in researched_ids:
-            already += 1
-            continue
-
-        current = parse(row.get("Stage"))
-        if current is None:
-            # Blank or unrecognised: treat as freshly discovered so a typo in
-            # the Sheet doesn't strand a lead forever.
-            current = Stage.DISCOVERED
-        if current is Stage.DISQUALIFIED:
-            not_ready += 1
-            continue
-        if rank(current) > rank(Stage.DISCOVERED):
-            # Already researched (or further along) but missing its Research
-            # row -- someone deleted it, or an older run half-completed.
-            already += 1
-            continue
-
-        if len(selected) < batch_size:
-            selected.append(row)
-
-    return selected, already, not_ready
+    """Leads still needing research. See ``outreach.selection``."""
+    return select_pending(
+        leads,
+        researched_ids,
+        requires=Stage.DISCOVERED,
+        target=Stage.RESEARCHED,
+        batch_size=batch_size,
+    )
 
 
 def _discover_email(
