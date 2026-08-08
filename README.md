@@ -245,8 +245,10 @@ Global flags: `--config PATH` to override the campaign file, `-v` for debug logg
 ### A batch a day, and never the same business twice
 
 Every stage processes at most **`limits.batch_size`** businesses per invocation
-— 60 in the shipped campaign. Run the command again tomorrow for the next
-batch, and it will be a genuinely different batch:
+— 60 in the shipped campaign. `--limit N` (or the dashboard's **How many** box)
+does fewer on a single run; it can lower the cap but never raise it above
+`batch_size`, so the campaign file stays the ceiling. Run the command again
+tomorrow for the next batch, and it will be a genuinely different batch:
 
 - **Discovery skips every `place_id` already on the Leads tab**, and skipped
   businesses don't consume the cap. Ask for 60 when 40 are already known and

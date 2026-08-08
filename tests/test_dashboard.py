@@ -639,3 +639,118 @@ def test_a_configured_install_reports_numbers_not_a_setup_prompt(monkeypatch):
     d = client.get("/api/summary").get_json()
     assert d["total"] == 7
     assert "setup_needed" not in d
+
+
+# --------------------------------------------------- "how many" per run
+
+
+def test_stage_args_appends_the_limit():
+    from outreach.dashboard import stage_args
+
+    assert stage_args("research", 5) == ["run", "research", "--limit", "5"]
+    assert stage_args("research") == ["run", "research"]
+
+
+def test_a_dry_run_still_takes_a_limit():
+    from outreach.dashboard import stage_args
+
+    assert stage_args("preview-leads", 3) == [
+        "run", "discovery", "--dry-run", "--limit", "3",
+    ]
+
+
+def test_preflight_never_gets_a_limit():
+    """It checks connections; a number would be meaningless and would error."""
+    from outreach.dashboard import stage_args
+
+    assert stage_args("preflight", 10) == ["preflight"]
+
+
+def test_every_stage_that_takes_a_limit_really_accepts_one():
+    """Guards against offering a number to a command that would reject it."""
+    from outreach.cli import main
+    from outreach.dashboard import STAGE_COMMANDS, TAKES_LIMIT
+
+    run_group = main.commands["run"]
+    for stage in TAKES_LIMIT:
+        args = STAGE_COMMANDS[stage]
+        command = run_group.commands[args[1]] if args[0] == "run" else main.commands[args[0]]
+        options = {opt for param in command.params for opt in param.opts}
+        assert "--limit" in options, f"{stage} is offered a limit it cannot take"
+
+
+def test_no_stage_outside_the_set_is_given_a_limit():
+    from outreach.cli import main
+    from outreach.dashboard import STAGE_COMMANDS, TAKES_LIMIT
+
+    run_group = main.commands["run"]
+    for stage, args in STAGE_COMMANDS.items():
+        if stage in TAKES_LIMIT:
+            continue
+        command = run_group.commands[args[1]] if args[0] == "run" else main.commands[args[0]]
+        options = {opt for param in command.params for opt in param.opts}
+        assert "--limit" not in options, f"{stage} could take a limit but isn't offered one"
+
+
+def test_the_run_endpoint_passes_the_limit_through(monkeypatch, client):
+    seen = {}
+
+    from outreach.dashboard import Runner
+
+    def fake_start(self, label, stages, limit=None):
+        seen["stages"], seen["limit"] = stages, limit
+        return True
+
+    monkeypatch.setattr(Runner, "start", fake_start)
+    client.post("/api/run", json={"what": "research", "limit": "7"})
+
+    assert seen == {"stages": ["research"], "limit": 7}
+
+
+def test_a_blank_how_many_means_the_whole_batch(monkeypatch, client):
+    seen = {}
+
+    from outreach.dashboard import Runner
+
+    monkeypatch.setattr(
+        Runner, "start", lambda self, label, stages, limit=None: seen.update(limit=limit) or True
+    )
+    client.post("/api/run", json={"what": "research", "limit": ""})
+
+    assert seen["limit"] is None
+
+
+@pytest.mark.parametrize("bad", ["abc", "0", "-3", "999999"])
+def test_a_nonsense_how_many_is_refused(client, bad):
+    r = client.post("/api/run", json={"what": "research", "limit": bad})
+    assert r.status_code == 400
+    assert "How many" in r.get_json()["error"]
+
+
+def test_the_page_offers_a_how_many_box(client):
+    body = client.get("/").data
+    assert b'id="howmany"' in body
+    assert b"How many" in body
+
+
+def test_the_target_card_exposes_the_batch_cap(client):
+    assert b'id="t-batch"' in client.get("/").data
+
+
+def test_the_batch_cap_can_be_raised_from_the_page(campaign_app):
+    client, path = campaign_app
+    d = client.post("/api/campaign", json={"batch_size": "25"}).get_json()
+
+    assert d["batch_size"] == 25
+    assert load_config(path, env_file=None).discovery_cap == 25
+
+
+def test_a_nonsense_batch_cap_is_refused(campaign_app):
+    client, path = campaign_app
+    before = path.read_text()
+
+    assert client.post("/api/campaign", json={"batch_size": "lots"}).status_code == 400
+    assert "at least 1" in client.post(
+        "/api/campaign", json={"batch_size": "0"}
+    ).get_json()["error"]
+    assert path.read_text() == before

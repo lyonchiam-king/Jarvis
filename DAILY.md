@@ -90,8 +90,9 @@ before spending anything.
 
 ### 3. A small real batch — about 60 cents
 
-Press **Find leads**, then **Research**, then **Write briefs**. Ten leads is
-plenty for a first look; you can stop the moment you have enough.
+Type **10** in the **How many** box, then press **Find leads**, **Research**,
+and **Write briefs** in turn. Ten is plenty for a first look, and with the
+number set you cannot accidentally spend on sixty.
 
 Now open your Sheet (link at the top) and read the **Research** tab. This is
 the honest test: is *Suggested Website Angle* specific and true, or could it
@@ -218,6 +219,26 @@ minutes — output streams down the page, and you can walk away.
 **It never gives you the same business twice.** Every run skips everything
 already on your Sheet, so today's 60 are 60 you have never seen. You cannot
 double-charge yourself or double-message anyone by running it again.
+
+#### Doing fewer than a full batch
+
+Next to the button is a **How many** box. Leave it blank for the full batch, or
+type a number to do fewer — and it applies to **whichever button you press**,
+including the single steps under *Run one step on its own*.
+
+| You want | Do this |
+|---|---|
+| The usual 60 of everything | Leave it blank, press **Run this morning's batch** |
+| Research only 5, to check quality | Type `5`, press **Research** |
+| 20 new leads today, nothing else | Type `20`, press **Find leads** |
+| Briefs for just 10 | Type `10`, press **Write briefs** |
+
+This is the cheapest habit in the whole tool. Before any expensive step, run it
+at `5` first, read the output, *then* run the rest.
+
+The number can go below your batch cap but never above it — so a slipped digit
+can't turn `6` into `60`. To change the cap itself, press **Change** in
+*What you're hunting* and set **Most a single run may do**.
 
 > **Expect `0 need messages drafted` on your first run.** Nothing has a demo
 > yet, so there is nothing to write about. That corrects itself from tomorrow.

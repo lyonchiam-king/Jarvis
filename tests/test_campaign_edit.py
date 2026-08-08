@@ -177,3 +177,76 @@ def test_the_next_section_is_never_swallowed():
     out = rewrite_campaign(SIMPLE, areas=["Ipoh"])
     assert yaml.safe_load(out)["limits"]["batch_size"] == 60
     assert yaml.safe_load(out)["compliance"]["country_code"] == "MY"
+
+
+# ------------------------------------------------------- the batch-size cap
+
+
+WITH_DISCOVERY = SIMPLE + """
+discovery:
+  max_results: 60
+  page_size: 20
+"""
+
+
+def test_batch_size_is_replaced():
+    out = rewrite_campaign(WITH_DISCOVERY, batch_size=25)
+    assert yaml.safe_load(out)["limits"]["batch_size"] == 25
+
+
+def test_discovery_max_results_moves_with_it():
+    """The two are ANDed at runtime, so raising one alone would do nothing."""
+    out = rewrite_campaign(WITH_DISCOVERY, batch_size=120)
+    loaded = yaml.safe_load(out)
+
+    assert loaded["limits"]["batch_size"] == 120
+    assert loaded["discovery"]["max_results"] == 120
+
+
+def test_a_raised_cap_actually_raises_the_effective_cap(tmp_path):
+    out = rewrite_campaign(PENANG.read_text(), batch_size=120)
+    path = tmp_path / "c.yaml"
+    path.write_text(out)
+
+    cfg = load_config(path, env_file=None)
+    assert cfg.batch_size == 120
+    assert cfg.discovery_cap == 120, "discovery would otherwise still stop at 60"
+
+
+def test_batch_size_is_written_unquoted_so_it_stays_a_number():
+    out = rewrite_campaign(WITH_DISCOVERY, batch_size=25)
+    assert "batch_size: 25" in out
+    assert '"25"' not in out
+
+
+def test_other_discovery_settings_are_untouched():
+    out = rewrite_campaign(WITH_DISCOVERY, batch_size=25)
+    assert yaml.safe_load(out)["discovery"]["page_size"] == 20
+
+
+def test_zero_and_negative_batch_sizes_are_refused():
+    for bad in (0, -5):
+        with pytest.raises(CampaignEditError, match="at least 1"):
+            rewrite_campaign(WITH_DISCOVERY, batch_size=bad)
+
+
+def test_an_absurd_batch_size_is_refused():
+    with pytest.raises(CampaignEditError, match="ceiling"):
+        rewrite_campaign(WITH_DISCOVERY, batch_size=5000)
+
+
+def test_a_file_without_a_limits_section_says_so():
+    no_limits = SIMPLE.replace("limits:\n  batch_size: 60\n", "")
+    with pytest.raises(CampaignEditError, match="no top-level `limits:`"):
+        rewrite_campaign(no_limits, batch_size=25)
+
+
+def test_batch_size_and_target_can_change_together():
+    out = rewrite_campaign(
+        WITH_DISCOVERY, category="cafe", areas=["Ipoh"], batch_size=30
+    )
+    loaded = yaml.safe_load(out)
+
+    assert loaded["campaign"]["category"] == "cafe"
+    assert loaded["campaign"]["areas"] == ["Ipoh"]
+    assert loaded["limits"]["batch_size"] == 30

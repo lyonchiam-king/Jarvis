@@ -40,18 +40,15 @@ def _scalar(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _campaign_bounds(lines: list[str]) -> tuple[int, int]:
-    """Index of the line after ``campaign:``, and of the block's end."""
+def _section_bounds(lines: list[str], name: str) -> tuple[int, int] | None:
+    """Index of the line after ``name:``, and of that block's end."""
     start = None
     for i, line in enumerate(lines):
-        if re.match(r"^campaign\s*:", line):
+        if re.match(rf"^{re.escape(name)}\s*:", line):
             start = i + 1
             break
     if start is None:
-        raise CampaignEditError(
-            "This campaign file has no top-level `campaign:` section, so there "
-            "is nothing safe to edit. Fix the file by hand."
-        )
+        return None
 
     end = len(lines)
     for i in range(start, len(lines)):
@@ -61,15 +58,57 @@ def _campaign_bounds(lines: list[str]) -> tuple[int, int]:
     return start, end
 
 
-def _replace_scalar(lines: list[str], start: int, end: int, key: str, value: str) -> bool:
+def _campaign_bounds(lines: list[str]) -> tuple[int, int]:
+    bounds = _section_bounds(lines, "campaign")
+    if bounds is None:
+        raise CampaignEditError(
+            "This campaign file has no top-level `campaign:` section, so there "
+            "is nothing safe to edit. Fix the file by hand."
+        )
+    return bounds
+
+
+def _replace_scalar(
+    lines: list[str],
+    start: int,
+    end: int,
+    key: str,
+    value: str,
+    *,
+    quote: bool = True,
+) -> bool:
     """Rewrite ``  key: ...`` in place. Returns whether it was found."""
     pattern = re.compile(rf"^(\s+){re.escape(key)}\s*:")
+    rendered = _scalar(value) if quote else value
     for i in range(start, end):
         match = pattern.match(lines[i])
         if match:
-            lines[i] = f"{match.group(1)}{key}: {_scalar(value)}"
+            lines[i] = f"{match.group(1)}{key}: {rendered}"
             return True
     return False
+
+
+def _set_batch_size(lines: list[str], size: int) -> None:
+    """Set the one cap that governs every stage.
+
+    ``discovery.max_results`` moves with it. The two are ANDed at runtime
+    (``discovery_cap`` takes the smaller), so raising only the batch size would
+    silently do nothing -- the worst kind of setting.
+    """
+    campaign = _section_bounds(lines, "limits")
+    if campaign is None:
+        raise CampaignEditError(
+            "This campaign file has no top-level `limits:` section. "
+            "Add one with `batch_size:` under it, or edit the file by hand."
+        )
+    start, end = campaign
+    if not _replace_scalar(lines, start, end, "batch_size", str(size), quote=False):
+        raise CampaignEditError("No `batch_size:` line found under `limits:`.")
+
+    discovery = _section_bounds(lines, "discovery")
+    if discovery is not None:
+        start, end = discovery
+        _replace_scalar(lines, start, end, "max_results", str(size), quote=False)
 
 
 def _replace_areas(lines: list[str], start: int, end: int, areas: list[str]) -> None:
@@ -133,12 +172,21 @@ def rewrite_campaign(
     category: str | None = None,
     location: str | None = None,
     areas: list[str] | None = None,
+    batch_size: int | None = None,
 ) -> str:
     """Return ``text`` with the campaign target replaced.
 
     Raises ``CampaignEditError`` if the result would not parse, so a bad edit
     can never leave the user with a campaign file the pipeline cannot load.
     """
+    if batch_size is not None and batch_size < 1:
+        raise CampaignEditError("The batch size must be at least 1.")
+    if batch_size is not None and batch_size > 200:
+        raise CampaignEditError(
+            f"A batch of {batch_size} is more than a day's work to review, and "
+            "Google only returns about 60 results per area anyway. 200 is the "
+            "ceiling here; run the batch twice if you really want more."
+        )
     if category is not None and not category.strip():
         raise CampaignEditError("Category cannot be empty -- it is what you search for.")
     if location is not None and not location.strip():
@@ -170,6 +218,9 @@ def rewrite_campaign(
         # must be the last edit.
         start, end = _campaign_bounds(lines)
         _replace_areas(lines, start, end, cleaned)
+
+    if batch_size is not None:
+        _set_batch_size(lines, batch_size)
 
     result = "\n".join(lines)
     if text.endswith("\n"):

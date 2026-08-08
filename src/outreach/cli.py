@@ -308,8 +308,9 @@ def run() -> None:
     is_flag=True,
     help="Update businesses already on the Sheet instead of hunting for new ones.",
 )
+@click.option("--limit", type=int, default=None, help="Find fewer than the batch size.")
 @click.pass_context
-def run_discovery(ctx: click.Context, dry_run: bool, refresh: bool) -> None:
+def run_discovery(ctx: click.Context, dry_run: bool, refresh: bool, limit: int | None) -> None:
     """Stage 1 -- find businesses with no website and write them to Leads.
 
     Every run looks for businesses you have never seen: anything already on the
@@ -327,7 +328,7 @@ def run_discovery(ctx: click.Context, dry_run: bool, refresh: bool) -> None:
     sheets = None if dry_run else _sheets_client(config)
 
     report = discovery_stage.run(
-        config, places, sheets, dry_run=dry_run, refresh=refresh
+        config, places, sheets, dry_run=dry_run, refresh=refresh, limit=limit
     )
 
     click.echo("")

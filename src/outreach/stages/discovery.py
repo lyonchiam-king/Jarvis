@@ -124,8 +124,13 @@ def run(
     *,
     dry_run: bool = False,
     refresh: bool = False,
+    limit: int | None = None,
 ) -> DiscoveryReport:
     """Search, filter, and write. ``sheets`` may be None when ``dry_run``.
+
+    ``limit`` finds fewer than the campaign's cap on this one run -- useful for
+    a first look, or a small day. It can only ever lower the cap, never raise
+    it above ``limits.batch_size``.
 
     With ``refresh`` the run re-reads businesses already on the Sheet and
     updates their Places fields, instead of skipping them to hunt for new ones.
@@ -153,7 +158,7 @@ def run(
     leads: list[Lead] = []
     seen_ids: set[str] = set()
     queries = config.campaign.search_queries
-    cap = config.discovery_cap
+    cap = min(limit, config.discovery_cap) if limit else config.discovery_cap
 
     if known_ids:
         log.info("Skipping %d business(es) already on the Sheet.", len(known_ids))

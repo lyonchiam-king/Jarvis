@@ -51,6 +51,31 @@ STAGE_COMMANDS = {
 
 FULL_RUN = ["discovery", "research", "site-brief", "outreach-draft"]
 
+# Stages that accept `--limit N`. `preflight` just checks connections, so a
+# number would be meaningless there.
+TAKES_LIMIT = {
+    "discovery",
+    "research",
+    "site-brief",
+    "site-build",
+    "outreach-draft",
+    "preview-leads",
+    "preview-messages",
+}
+
+# A guard against a slipped digit, not a policy: the campaign's own batch_size
+# is the real cap and the CLI enforces it. This only stops a typo becoming a
+# very long run.
+MAX_LIMIT = 500
+
+
+def stage_args(stage: str, limit: int | None = None) -> list[str]:
+    """CLI arguments for a stage, with the per-run count applied if it takes one."""
+    args = list(STAGE_COMMANDS[stage])
+    if limit and stage in TAKES_LIMIT:
+        args += ["--limit", str(limit)]
+    return args
+
 
 @dataclass
 class Summary:
@@ -209,19 +234,19 @@ class Runner:
         self.running: str | None = None
         self._lock = threading.Lock()
 
-    def start(self, label: str, stages: list[str]) -> bool:
+    def start(self, label: str, stages: list[str], limit: int | None = None) -> bool:
         with self._lock:
             if self.running:
                 return False
             self.running = label
             self.lines.clear()
-        threading.Thread(target=self._run, args=(stages,), daemon=True).start()
+        threading.Thread(target=self._run, args=(stages, limit), daemon=True).start()
         return True
 
-    def _run(self, stages: list[str]) -> None:
+    def _run(self, stages: list[str], limit: int | None = None) -> None:
         try:
             for stage in stages:
-                args = STAGE_COMMANDS[stage]
+                args = stage_args(stage, limit)
                 self.lines.append(f"$ outreach {' '.join(args)}")
                 process = subprocess.Popen(
                     [sys.executable, "-m", "outreach", *args],
@@ -325,6 +350,14 @@ def create_app(config: Config) -> Flask:
         if areas is not None and not isinstance(areas, list):
             return jsonify({"error": "areas must be a list of strings"}), 400
 
+        raw_size = payload.get("batch_size")
+        batch_size: int | None = None
+        if raw_size not in (None, ""):
+            try:
+                batch_size = int(raw_size)
+            except (TypeError, ValueError):
+                return jsonify({"error": "Batch size must be a whole number"}), 400
+
         path = current().source_path
         try:
             original = path.read_text()
@@ -333,6 +366,7 @@ def create_app(config: Config) -> Flask:
                 category=category,
                 location=location,
                 areas=[str(a) for a in areas] if areas is not None else None,
+                batch_size=batch_size,
             )
         except CampaignEditError as exc:
             return jsonify({"error": str(exc)}), 200
@@ -360,6 +394,7 @@ def create_app(config: Config) -> Flask:
                 "category": c.campaign.category,
                 "location": c.campaign.location,
                 "areas": list(c.campaign.areas),
+                "batch_size": c.batch_size,
             }
         )
 
@@ -510,11 +545,25 @@ def create_app(config: Config) -> Flask:
 
     @app.route("/api/run", methods=["POST"])
     def api_run():
-        what = (request.json or {}).get("what", "")
+        payload = request.json or {}
+        what = payload.get("what", "")
+
+        raw = payload.get("limit")
+        limit: int | None = None
+        if raw not in (None, ""):
+            try:
+                limit = int(raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "How many must be a whole number"}), 400
+            if limit < 1:
+                return jsonify({"error": "How many must be at least 1"}), 400
+            if limit > MAX_LIMIT:
+                return jsonify({"error": f"How many cannot exceed {MAX_LIMIT}"}), 400
+
         if what == "full":
-            started = runner.start("Full pipeline", FULL_RUN)
+            started = runner.start("Full pipeline", FULL_RUN, limit)
         elif what in STAGE_COMMANDS:
-            started = runner.start(what, [what])
+            started = runner.start(what, [what], limit)
         else:
             return jsonify({"error": "unknown action"}), 400
         if not started:
@@ -714,11 +763,15 @@ PAGE = """<!doctype html>
   <div class="card">
     <div class="row">
       <button class="primary" data-run="full">Run this morning's batch</button>
+      <label for="howmany" class="sub" style="display:inline">How many</label>
+      <input id="howmany" type="number" min="1" step="1" style="width:82px"
+             placeholder="all">
       <span class="status" id="running"></span>
     </div>
     <p class="hint">
-      Skips every business it has already seen, so each run brings a fresh batch.
-      Running it twice is free.
+      Leave <b>How many</b> blank for the full batch, or type a number to do
+      fewer &mdash; it applies to whichever button you press. Every run skips
+      businesses it has already seen, so running twice is free.
     </p>
     <details style="margin-top:12px">
       <summary class="sub">Run one step on its own</summary>
@@ -729,6 +782,8 @@ PAGE = """<!doctype html>
         <button data-run="site-build">Build approved</button>
         <button data-run="outreach-draft">Draft messages</button>
       </div>
+      <p class="hint"><b>How many</b> above applies to these too &mdash; set it to
+        5, press <b>Research</b>, and only five leads are researched.</p>
       <div class="row" style="margin-top:10px">
         <button data-run="preview-leads">Preview leads</button>
         <button data-run="preview-messages">Preview messages</button>
@@ -853,11 +908,16 @@ async function poll() {
 
 document.querySelectorAll('button[data-run]').forEach(b =>
   b.addEventListener('click', async () => {
-    await fetch('/api/run', {
+    const r = await fetch('/api/run', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({what: b.dataset.run})
+      body: JSON.stringify({what: b.dataset.run, limit: $('#howmany').value.trim()})
     });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      $('#running').innerHTML = `<span class="err">${esc(d.error || 'Could not start')}</span>`;
+      return;
+    }
     poll();
   }));
 
@@ -905,6 +965,12 @@ function drawTarget(editing) {
     <p class="hint">Google gives about 60 results per area and no more, so one area
       runs dry in a day or two. List several and each run moves down the list,
       skipping businesses you already have.</p>
+    <label class="sub" for="t-batch">Most a single run may do</label>
+    <input id="t-batch" type="number" min="1" max="200" style="width:110px;margin:5px 0 4px"
+           value="${target.batch_size}">
+    <p class="hint">Your ceiling, for every step. The <b>How many</b> box below
+      can go under this but never over it, so a slipped digit cannot turn into a
+      hundred-lead bill.</p>
     <div class="row" style="margin-top:10px">
       <button class="primary" onclick="saveTarget()">Save</button>
       <button onclick="drawTarget(false)">Cancel</button>
@@ -919,6 +985,7 @@ async function saveTarget() {
     category: $('#t-cat').value,
     location: $('#t-loc').value,
     areas: $('#t-areas').value.split('\\n').map(s => s.trim()).filter(Boolean),
+    batch_size: $('#t-batch').value.trim(),
   };
   document.querySelectorAll('#target button').forEach(b => b.disabled = true);
   $('#t-msg').textContent = 'Saving…';
