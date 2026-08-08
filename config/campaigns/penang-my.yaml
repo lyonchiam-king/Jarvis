@@ -11,10 +11,15 @@ campaign:
   location: "Georgetown, Penang, Malaysia"
   language: en
 
+# One cap for every stage. `run discovery` and `run research` each process at
+# most this many businesses per invocation; run the command again for the next
+# batch. Bounded runs are what make the pipeline resumable.
+limits:
+  batch_size: 100
+
 discovery:
-  # Stop after this many qualifying (no-website) leads. Each API page costs
-  # money -- see README "Cost control".
-  max_results: 60
+  # Discovery stops at the tighter of this and limits.batch_size.
+  max_results: 100
   # Places API (New) caps Text Search at 20 per page.
   page_size: 20
   # Skip low-signal listings. 0 disables the filter.
@@ -44,6 +49,21 @@ discovery:
     - business.site      # Google Business Profile auto-sites
     - shopee.com.my
     - lazada.com.my
+
+research:
+  # Claude Opus 5. Effort is the cost/latency dial: `medium` is strong for
+  # summarising reviews into a brief; raise to `high` if briefs read thin.
+  model: claude-opus-5
+  effort: medium
+  # How many Google reviews to feed the model per business. Raw review text is
+  # summarised and then discarded -- never written to the Sheet.
+  max_reviews: 8
+  social_lookup: true
+  email_discovery: true
+  request_timeout: 15.0
+  # Write partial results to the Sheet every N leads, so an interrupted run
+  # never redoes completed work.
+  checkpoint_every: 10
 
 outreach:
   sender_name: "Lyon Chiam"

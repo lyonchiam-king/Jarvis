@@ -92,6 +92,8 @@ RESEARCH = Tab(
         Column("Social Bio"),
         Column("Social Recent Post"),
         Column("Social Lookup Status"),
+        Column("Email Found"),
+        Column("Email Source", note="website | social_page | not found"),
         Column("Research Status"),
         Column("Researched At"),
     ),

@@ -7,8 +7,8 @@ dashboard.
 Region-agnostic by design. Penang is a config file, not a code path. Pointing
 this at Manchester or Jakarta is a YAML edit.
 
-**Status:** Stage 1 (discovery) is complete and tested. Stages 2–5 are
-scaffolded and will refuse to run until built.
+**Status:** Stages 1 (discovery) and 2 (research) are complete and tested.
+Stages 4–5 are scaffolded and will refuse to run until built.
 
 ---
 
@@ -39,13 +39,18 @@ in your Gmail **drafts** and you press send.
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 
-cp .env.example .env          # then fill in PLACES_API_KEY
+cp .env.example .env          # fill in PLACES_API_KEY (+ ANTHROPIC_API_KEY for Stage 2)
 outreach preflight            # verifies key, OAuth, Sheet access
 outreach init-sheet           # creates the spreadsheet, prints SHEET_ID
 # paste SHEET_ID into .env
 outreach run discovery --dry-run   # see what you'd get, write nothing
 outreach run discovery             # write to the Sheet
+outreach run research --limit 5    # research five leads, read the briefs
+outreach run research              # then the full batch
 ```
+
+Each stage handles up to **100 businesses per run** and skips anything it has
+already done, so running a command twice is safe and costs nothing extra.
 
 ---
 
@@ -96,11 +101,25 @@ Paste into `.env` as `PLACES_API_KEY`.
 Then — **this part matters** — go back to the consent screen and set
 publishing status to **In production**.
 
-> While the app sits in **Testing**, Google expires your refresh token every
-> **7 days** and you re-authenticate constantly. "In production" stops that.
-> The app stays unverified, so you'll see a "Google hasn't verified this app"
-> screen once — click **Advanced → Go to (app) (unsafe)**. That warning is
-> about *other people* trusting your app; you are the only user.
+> ### You log in once. Not every 7 days.
+>
+> The 7-day expiry is a penalty Google applies **only while the app sits in
+> "Testing"**. It is not normal behaviour and you should never experience it.
+>
+> | Publishing status | Refresh token |
+> |---|---|
+> | **Testing** | Expires every 7 days → constant re-login |
+> | **In production** | **Does not expire** — one-time login |
+>
+> "In production" sounds like it means verification and app review. It doesn't.
+> Your app stays **unverified**: you click through one "Google hasn't verified
+> this app" screen (**Advanced → Go to (app) (unsafe)**) on that single login,
+> and never see it again. That warning exists to protect *strangers* from
+> trusting an unknown app — you are the only user and you wrote it.
+>
+> After that, `credentials/token.json` refreshes itself silently. The token
+> only dies if you revoke access, change your Google password, or don't run the
+> pipeline for 6 months.
 
 ### 5. Create the OAuth client
 
@@ -149,8 +168,27 @@ https://www.googleapis.com/auth/gmail.compose   create drafts
 | `outreach compliance` | Prints the outreach rules on file for the campaign's country. |
 | `outreach run discovery` | **Stage 1.** Finds no-website businesses, writes to `Leads`. |
 | `outreach run discovery --dry-run` | Searches and reports without touching the Sheet or needing Google credentials. |
+| `outreach run research` | **Stage 2.** Pulls reviews + social, writes a brief per lead to `Research`. |
+| `outreach run research --limit 5` | Same, but process fewer than the batch size — good for a first trial. |
 
 Global flags: `--config PATH` to override the campaign file, `-v` for debug logging.
+
+### 100 companies per run, and it never repeats work
+
+Every stage processes at most **`limits.batch_size` (default 100)** businesses
+per invocation. Run the command again for the next batch.
+
+Re-running is safe and cheap because each stage skips what it has already done:
+
+- **Discovery** keys on `place_id`, so a second run over the same area refreshes
+  existing rows instead of duplicating them.
+- **Research** only picks up leads still at `Discovered` that have no row in the
+  `Research` tab. A lead already researched costs **zero** Places requests and
+  **zero** Claude calls on the next run — verified by a test.
+
+Research also **checkpoints every 10 leads** (`research.checkpoint_every`). If a
+run dies at lead 47, the first 40 are already saved and the next run starts at
+41 — it doesn't re-buy the reviews or re-spend the tokens.
 
 ---
 
@@ -177,7 +215,7 @@ it.
 
 ### Other tabs
 
-- **`Research`** — tone, services, price tier, customer praise/pain points, suggested website angle, social bio and recent post
+- **`Research`** — tone, services, price tier, customer praise/pain points, suggested website angle, social handle/bio/post, email found and where it came from
 - **`Site Briefs`** — the Lovable prompt, plus a manual `Approval Status` column you set to `Approved` before anything is built
 - **`Outreach Log`** — Gmail draft ID and link, WhatsApp message text to copy, plus manual `Status` / `Sent At` / `Notes`
 - **`Errors`** — timestamp, stage, lead, error type, message, whether retrying could help
@@ -188,6 +226,44 @@ Columns marked manual in `src/outreach/schema.py` are **never written by
 automation**. The upsert computes contiguous runs of automated columns and
 writes only those A1 ranges — a refresh of `place-1` writes `Leads!A2:O2` and
 nothing else. This is enforced by tests in `tests/test_sheets.py`.
+
+---
+
+## Stage 2 — research
+
+```bash
+outreach run research --limit 5     # try it on five leads first
+outreach run research               # then the full batch of 100
+```
+
+Per lead, in order:
+
+1. **Google Place Details** — reviews, editorial summary, price level, opening hours
+2. **Social lookup** (only for `social_only` leads) — handle, bio, recent post
+3. **Email discovery** — `mailto:` links and published addresses from the social page or any real site
+4. **Claude Opus 5** — turns all of it into a structured brief with a concrete pitch angle
+5. **Write** the `Research` row and advance the lead's Stage to `Researched`
+
+Steps 2 and 3 fail often and that's expected — a `login required` status on a
+Facebook page is Tuesday, not a bug. The brief still gets written from the
+Google reviews alone.
+
+**Raw review text is never stored.** It goes to the model, the model returns a
+summary, and the source text is discarded — this is what keeps the Sheet inside
+Google's caching terms. A test asserts it.
+
+### What this costs per run
+
+For 100 leads: **100 Place Details requests** (the Enterprise SKU — reviews are
+the most expensive field set in the pipeline), up to 200 page fetches (free),
+and **100 Claude Opus 5 calls**.
+
+`research.effort` is the dial. It defaults to `medium`, which is genuinely
+strong on Opus 5 for summarisation work. Raise it to `high` if the briefs read
+thin; the model itself stays Opus 5 either way.
+
+Start with `--limit 5`, read the briefs, then decide whether to tune `effort`
+or `max_reviews` before spending on a full batch.
 
 ---
 
@@ -275,7 +351,15 @@ exists and why WhatsApp text is generated for every lead.
 **One bad lead never kills a run.** Each lead is processed inside
 `ErrorLog.guard`; anything that escapes is written to the `Errors` tab with a
 `Retryable` flag and the loop moves on. Errors are buffered and flushed in one
-write at the end, so a Sheets hiccup can't take down a run either.
+write at the end, so a Sheets hiccup can't take down a run either. In research
+this extends to checkpoints: a failed Sheet write is logged and the run keeps
+going rather than discarding the leads it has already briefed.
+
+**Social lookups are expected to fail.** Facebook and Instagram serve a login
+wall to anonymous requests, so `login required` is the normal status, not an
+error. The lookup still salvages the handle from the URL, and the brief is
+written from Google reviews regardless. Nothing here bypasses a login or
+touches anything behind authentication.
 
 **Cost control.** Places bills per request, and the field mask selects the
 pricing tier. `websiteUri` and `rating` put us in the Pro tier — unavoidable,
@@ -292,10 +376,13 @@ writes nothing, so prefer it while tuning filters.
 .venv/bin/python -m pytest -q
 ```
 
-58 tests, no network access required. Covers website classification (including
-lookalike domains like `notfacebook.com`), Places pagination and error
-handling, discovery filtering, forward-only stage transitions, the compliance
-gate, and the manual-column write protection.
+117 tests, no network access required. Covers website classification (including
+lookalike domains like `notfacebook.com`), Places pagination and Place Details
+parsing, discovery filtering, forward-only stage transitions, the compliance
+gate, manual-column write protection, and for Stage 2: the skip-already-done
+selection logic, the batch cap, checkpoint flushing, per-lead failure isolation,
+email-candidate filtering, login-wall handling, Claude refusal/truncation
+paths, and the assertion that raw review text never reaches the Sheet.
 
 ---
 
@@ -314,7 +401,11 @@ src/outreach/
   compliance.py       per-country outreach gate
   errors.py           per-lead error capture
   models.py           Lead, WebsiteStatus
-  providers/places.py Places API (New) client
+  providers/
+    places.py         Places API (New): text search + place details
+    web.py            page fetching, email extraction
+    social.py         best-effort Facebook / Instagram lookup
+    llm.py            Claude Opus 5 structured research briefs
   stages/             one module per pipeline stage
 tests/
 ```
@@ -323,8 +414,7 @@ tests/
 
 ## Not built yet
 
-Stages 2–5 are scaffolded — `outreach run research` and friends exit with a
-clear message rather than pretending. Still to come: research briefs from
-reviews and social, email discovery, Lovable prompt generation (coded behind
-`lovable.enabled: false` so no credits are spent by accident), and Gmail draft
-creation.
+Stages 4–5 are scaffolded — `outreach run site-brief` and `run outreach-draft`
+exit with a clear message rather than pretending. Still to come: Lovable prompt
+generation (coded behind `lovable.enabled: false` so no credits are spent by
+accident) and Gmail draft creation.

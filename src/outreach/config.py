@@ -32,6 +32,35 @@ class CampaignSettings:
 
 
 @dataclass(frozen=True)
+class LimitsSettings:
+    """One cap governing how many businesses any single stage run touches.
+
+    Every stage honours this, so `run discovery` and `run research` process at
+    most the same number of companies per invocation. Keeping runs bounded is
+    what makes the pipeline resumable: you run it again and it picks up the
+    next batch.
+    """
+
+    batch_size: int = 100
+
+
+@dataclass(frozen=True)
+class ResearchSettings:
+    # Claude Opus 5 is the default. Effort is the cost/latency dial -- on this
+    # model `medium` is genuinely strong for summarisation work; raise it if
+    # the briefs read thin.
+    model: str = "claude-opus-5"
+    effort: str = "medium"
+    max_reviews: int = 8
+    social_lookup: bool = True
+    email_discovery: bool = True
+    request_timeout: float = 15.0
+    # Flush partial results to the Sheet every N leads, so an interrupted run
+    # never has to redo completed work.
+    checkpoint_every: int = 10
+
+
+@dataclass(frozen=True)
 class DiscoverySettings:
     max_results: int = 60
     page_size: int = 20
@@ -79,7 +108,19 @@ class Config:
     lovable: LovableSettings
     compliance: ComplianceSettings
     secrets: Secrets
+    limits: LimitsSettings = field(default_factory=LimitsSettings)
+    research: ResearchSettings = field(default_factory=ResearchSettings)
     source_path: Path = field(default=Path("."))
+
+    @property
+    def batch_size(self) -> int:
+        """How many businesses a single stage run may process."""
+        return self.limits.batch_size
+
+    @property
+    def discovery_cap(self) -> int:
+        """Discovery stops at the tighter of its own cap and the global one."""
+        return min(self.discovery.max_results, self.limits.batch_size)
 
 
 def _require(mapping: dict, key: str, where: str) -> object:
@@ -141,6 +182,29 @@ def load_config(
         social_domains=tuple(d.get("social_domains") or ()),
     )
 
+    lim = raw.get("limits") or {}
+    batch_size = int(lim.get("batch_size", 100))
+    if batch_size < 1:
+        raise ConfigError(f"limits.batch_size must be at least 1, got {batch_size}")
+    limits = LimitsSettings(batch_size=batch_size)
+
+    r = raw.get("research") or {}
+    effort = str(r.get("effort", "medium")).lower()
+    valid_effort = {"low", "medium", "high", "xhigh", "max"}
+    if effort not in valid_effort:
+        raise ConfigError(
+            f"research.effort must be one of {sorted(valid_effort)}, got {effort!r}"
+        )
+    research = ResearchSettings(
+        model=str(r.get("model", "claude-opus-5")),
+        effort=effort,
+        max_reviews=int(r.get("max_reviews", 8)),
+        social_lookup=bool(r.get("social_lookup", True)),
+        email_discovery=bool(r.get("email_discovery", True)),
+        request_timeout=float(r.get("request_timeout", 15.0)),
+        checkpoint_every=max(1, int(r.get("checkpoint_every", 10))),
+    )
+
     o = raw.get("outreach") or {}
     outreach = OutreachSettings(
         sender_name=str(o.get("sender_name", "")),
@@ -184,5 +248,7 @@ def load_config(
         lovable=lovable,
         compliance=compliance,
         secrets=secrets,
+        limits=limits,
+        research=research,
         source_path=path,
     )

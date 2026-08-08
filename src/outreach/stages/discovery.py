@@ -150,8 +150,8 @@ def run(
                 leads.append(_to_lead(place, config, website_status))
                 report.qualified += 1
 
-            if len(leads) >= d.max_results:
-                log.info("Reached max_results=%d; stopping search.", d.max_results)
+            if len(leads) >= config.discovery_cap:
+                log.info("Reached batch cap of %d; stopping search.", config.discovery_cap)
                 break
     except Exception as exc:  # noqa: BLE001 -- a search-level failure, not per-lead
         errors.record(exc)

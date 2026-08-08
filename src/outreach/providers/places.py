@@ -30,6 +30,29 @@ from ..models import WebsiteStatus
 log = logging.getLogger("outreach")
 
 SEARCH_TEXT_URL = "https://places.googleapis.com/v1/places:searchText"
+DETAILS_URL = "https://places.googleapis.com/v1/places/{place_id}"
+
+# Place Details field mask. Unlike search, these are bare field names with no
+# `places.` prefix -- the response is a single Place, not a list.
+#
+# Asking for `reviews` puts this call in the Enterprise SKU: it is the most
+# expensive request in the pipeline. That is why research is capped by
+# limits.batch_size and skips leads it has already done.
+DETAILS_FIELDS = (
+    "id",
+    "displayName",
+    "formattedAddress",
+    "nationalPhoneNumber",
+    "internationalPhoneNumber",
+    "websiteUri",
+    "rating",
+    "userRatingCount",
+    "priceLevel",
+    "primaryTypeDisplayName",
+    "editorialSummary",
+    "regularOpeningHours.weekdayDescriptions",
+    "reviews",
+)
 
 # Exactly what discovery consumes -- nothing speculative.
 SEARCH_FIELDS = (
@@ -74,6 +97,95 @@ class PlaceResult:
     category: str
     maps_url: str
     business_status: str
+
+
+@dataclass(frozen=True)
+class Review:
+    """One Google review, stripped of author identity.
+
+    Author name, photo, and profile URL are deliberately not captured: they are
+    personal data about an individual, and the pipeline's compliance stance is
+    business information only. Rating and text are enough to write a brief.
+    """
+
+    rating: int
+    text: str
+    when: str = ""
+
+
+@dataclass(frozen=True)
+class PlaceDetails:
+    place_id: str
+    name: str = ""
+    address: str = ""
+    phone: str = ""
+    website_uri: str = ""
+    rating: float | None = None
+    review_count: int = 0
+    price_level: str = ""
+    category: str = ""
+    editorial_summary: str = ""
+    opening_hours: tuple[str, ...] = ()
+    reviews: tuple[Review, ...] = ()
+
+
+_PRICE_LABELS = {
+    "PRICE_LEVEL_FREE": "Free",
+    "PRICE_LEVEL_INEXPENSIVE": "Budget",
+    "PRICE_LEVEL_MODERATE": "Mid-range",
+    "PRICE_LEVEL_EXPENSIVE": "Premium",
+    "PRICE_LEVEL_VERY_EXPENSIVE": "Luxury",
+}
+
+
+def _parse_details(raw: dict) -> PlaceDetails:
+    display = raw.get("displayName") or {}
+    primary = raw.get("primaryTypeDisplayName") or {}
+    editorial = raw.get("editorialSummary") or {}
+    hours = raw.get("regularOpeningHours") or {}
+
+    reviews: list[Review] = []
+    for entry in raw.get("reviews") or []:
+        body = (entry.get("text") or entry.get("originalText") or {}).get("text") or ""
+        if not body.strip():
+            continue
+        try:
+            rating = int(entry.get("rating") or 0)
+        except (TypeError, ValueError):
+            rating = 0
+        reviews.append(
+            Review(
+                rating=rating,
+                text=body.strip(),
+                when=entry.get("relativePublishTimeDescription") or "",
+            )
+        )
+
+    try:
+        rating_value = float(raw["rating"]) if raw.get("rating") is not None else None
+    except (TypeError, ValueError):
+        rating_value = None
+
+    try:
+        review_count = int(raw.get("userRatingCount") or 0)
+    except (TypeError, ValueError):
+        review_count = 0
+
+    price_raw = raw.get("priceLevel") or ""
+    return PlaceDetails(
+        place_id=raw.get("id") or "",
+        name=display.get("text") or "",
+        address=raw.get("formattedAddress") or "",
+        phone=raw.get("nationalPhoneNumber") or raw.get("internationalPhoneNumber") or "",
+        website_uri=raw.get("websiteUri") or "",
+        rating=rating_value,
+        review_count=review_count,
+        price_level=_PRICE_LABELS.get(price_raw, ""),
+        category=primary.get("text") or "",
+        editorial_summary=editorial.get("text") or "",
+        opening_hours=tuple(hours.get("weekdayDescriptions") or ()),
+        reviews=tuple(reviews),
+    )
 
 
 def classify_website(
@@ -162,17 +274,23 @@ class PlacesClient:
         self.timeout = timeout
         self.request_count = 0
 
-    def _post(self, body: dict) -> dict:
+    def _send(
+        self,
+        method: str,
+        url: str,
+        field_mask: tuple[str, ...],
+        body: dict | None = None,
+    ) -> dict:
         headers = {
             "Content-Type": "application/json",
             "X-Goog-Api-Key": self.api_key,
-            "X-Goog-FieldMask": ",".join(SEARCH_FIELDS),
+            "X-Goog-FieldMask": ",".join(field_mask),
         }
         delay = 1.0
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             try:
-                response = self.session.post(
-                    SEARCH_TEXT_URL, json=body, headers=headers, timeout=self.timeout
+                response = self.session.request(
+                    method, url, json=body, headers=headers, timeout=self.timeout
                 )
             except (requests.Timeout, requests.ConnectionError) as exc:
                 if attempt == _MAX_ATTEMPTS:
@@ -202,6 +320,21 @@ class PlacesClient:
             )
 
         raise PlacesError("Places API exhausted retries")
+
+    def _post(self, body: dict) -> dict:
+        return self._send("POST", SEARCH_TEXT_URL, SEARCH_FIELDS, body)
+
+    def place_details(self, place_id: str) -> "PlaceDetails":
+        """Fetch reviews and richer profile data for one place.
+
+        One request per lead, on the Enterprise SKU because of `reviews`.
+        """
+        if not place_id:
+            raise PlacesError("place_details requires a place_id")
+        payload = self._send(
+            "GET", DETAILS_URL.format(place_id=place_id), DETAILS_FIELDS
+        )
+        return _parse_details(payload)
 
     def search_text(
         self,

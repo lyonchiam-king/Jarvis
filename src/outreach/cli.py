@@ -19,16 +19,16 @@ import click
 from . import compliance, schema
 from .auth import AuthError, get_credentials
 from .config import Config, ConfigError, load_config
+from .providers.llm import BriefWriter, LLMError
 from .providers.places import PlacesClient, PlacesError
 from .sheets import SheetsClient, SheetsError
 from .stages import discovery as discovery_stage
 from .stages import init_sheet as init_sheet_stage
+from .stages import research as research_stage
 
 log = logging.getLogger("outreach")
 
 NOT_BUILT = {
-    "research": "Stage 2 (research)",
-    "email-discovery": "Stage 2b (email discovery)",
     "site-brief": "Stage 4 (Lovable site briefs)",
     "outreach-draft": "Stage 5 (Gmail drafts)",
 }
@@ -211,6 +211,45 @@ def run_discovery(ctx: click.Context, dry_run: bool) -> None:
         if remaining > 0:
             click.echo(f"  ... and {remaining} more")
     if not dry_run and config.secrets.sheet_id:
+        click.echo("")
+        click.echo(
+            f"https://docs.google.com/spreadsheets/d/{config.secrets.sheet_id}/edit"
+        )
+
+
+@run.command("research")
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Process fewer than the configured batch size (for a trial run).",
+)
+@click.pass_context
+def run_research(ctx: click.Context, limit: int | None) -> None:
+    """Stage 2 -- research each discovered lead into a structured brief."""
+    config = _load(ctx.obj["config_path"])
+
+    try:
+        places = PlacesClient(config.secrets.places_api_key)
+    except PlacesError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    try:
+        writer = BriefWriter(
+            config.secrets.anthropic_api_key,
+            model=config.research.model,
+            effort=config.research.effort,
+        )
+    except LLMError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    sheets = _sheets_client(config)
+    report = research_stage.run(config, places, sheets, writer, limit=limit)
+
+    click.echo("")
+    for line in report.summary_lines():
+        click.echo(line)
+    if config.secrets.sheet_id:
         click.echo("")
         click.echo(
             f"https://docs.google.com/spreadsheets/d/{config.secrets.sheet_id}/edit"

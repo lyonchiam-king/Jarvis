@@ -357,6 +357,47 @@ class SheetsClient:
 
         return result
 
+    def update_column(
+        self, tab: Tab, column: str, values_by_key: dict[str, object]
+    ) -> int:
+        """Write one column for specific rows, keyed by the tab's first column.
+
+        Used when a stage owns exactly one field -- advancing `Stage` on the
+        Leads tab, say. Writing the single cell instead of the whole automated
+        run avoids round-tripping every other value through a string, which
+        would quietly turn a rating of 4.5 into the text "4.5".
+        """
+        if not values_by_key:
+            return 0
+        if tab.columns[tab.index_of(column)].manual:
+            raise SheetsError(f"{tab.title}.{column} is a manual column; refusing to write")
+
+        existing = self.read_rows(tab)
+        letter = column_letter(tab.index_of(column))
+        data = [
+            {
+                "range": f"'{tab.title}'!{letter}{existing[key][0]}",
+                "values": [[value]],
+            }
+            for key, value in values_by_key.items()
+            if key in existing
+        ]
+        if not data:
+            return 0
+
+        for chunk in _chunks(data, 100):
+            _with_retry(
+                lambda c=chunk: self._service.spreadsheets()
+                .values()
+                .batchUpdate(
+                    spreadsheetId=self.spreadsheet_id,
+                    body={"valueInputOption": "RAW", "data": c},
+                )
+                .execute(),
+                f"update {tab.title}.{column}",
+            )
+        return len(data)
+
     def append(self, tab: Tab, rows: Sequence[dict[str, object]]) -> int:
         """Append rows unconditionally. Used for the append-only Errors tab."""
         if not rows:

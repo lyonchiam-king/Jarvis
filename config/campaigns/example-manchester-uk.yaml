@@ -11,8 +11,19 @@ campaign:
   location: "Manchester, United Kingdom"
   language: en
 
+limits:
+  batch_size: 100
+
+research:
+  model: claude-opus-5
+  effort: medium
+  max_reviews: 8
+  social_lookup: true
+  email_discovery: true
+  checkpoint_every: 10
+
 discovery:
-  max_results: 40
+  max_results: 100
   page_size: 20
   min_rating: 0.0
   min_review_count: 5
