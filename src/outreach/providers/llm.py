@@ -190,6 +190,23 @@ person would actually send on their phone.
 """
 
 
+# Models that reject `output_config.effort` with a 400. Effort arrived with the
+# 4.6 generation; the older small models predate it. Sending it to one of these
+# fails every single lead, so the parameter is omitted rather than gambled.
+_MODELS_WITHOUT_EFFORT = (
+    "claude-haiku-4-5",
+    "claude-haiku-3",
+    "claude-sonnet-4-5",
+    "claude-sonnet-3",
+    "claude-opus-4-1",
+    "claude-opus-4-0",
+)
+
+
+def supports_effort(model: str) -> bool:
+    return not any(model.startswith(prefix) for prefix in _MODELS_WITHOUT_EFFORT)
+
+
 class LLMError(Exception):
     """The model could not produce a brief for this lead."""
 
@@ -462,6 +479,20 @@ class BriefWriter:
         self.effort = effort
         self.max_tokens = max_tokens
         self.call_count = 0
+        self._warned_effort = False
+
+    def _output_config(self, schema: dict[str, Any]) -> dict[str, Any]:
+        config: dict[str, Any] = {"format": {"type": "json_schema", "schema": schema}}
+        if supports_effort(self.model):
+            config["effort"] = self.effort
+        elif not self._warned_effort:
+            log.info(
+                "%s does not support the effort parameter -- ignoring "
+                "research.effort=%s for this model.",
+                self.model, self.effort,
+            )
+            self._warned_effort = True
+        return config
 
     def _call(self, system: str, prompt: str, schema: dict[str, Any]) -> dict:
         self.call_count += 1
@@ -473,10 +504,7 @@ class BriefWriter:
                 max_tokens=self.max_tokens,
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
-                output_config={
-                    "effort": self.effort,
-                    "format": {"type": "json_schema", "schema": schema},
-                },
+                output_config=self._output_config(schema),
             )
         except LLMError:
             raise

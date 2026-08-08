@@ -343,3 +343,41 @@ def test_prompt_includes_reviews_and_states_when_there_are_none():
         reviews=[],
     )
     assert "Reviews: none available." in without
+
+
+# ------------------------------------------------- model capability guards
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("claude-opus-5", True),
+        ("claude-sonnet-5", True),
+        ("claude-opus-4-8", True),
+        ("claude-sonnet-4-6", True),
+        ("claude-haiku-4-5", False),
+        ("claude-haiku-4-5-20251001", False),
+        ("claude-sonnet-4-5", False),
+        ("claude-opus-4-1", False),
+    ],
+)
+def test_supports_effort(model, expected):
+    assert llm.supports_effort(model) is expected
+
+
+def test_effort_is_sent_to_models_that_accept_it():
+    client = FakeClient(_response(VALID))
+    llm.BriefWriter("k", client=client, model="claude-sonnet-5", effort="high").write("e")
+
+    assert client.kwargs["output_config"]["effort"] == "high"
+
+
+def test_effort_is_omitted_for_models_that_reject_it():
+    """Haiku 4.5 400s on output_config.effort -- sending it fails every lead."""
+    client = FakeClient(_response(VALID))
+    llm.BriefWriter("k", client=client, model="claude-haiku-4-5", effort="medium").write("e")
+
+    output_config = client.kwargs["output_config"]
+    assert "effort" not in output_config
+    # The structured-output format must survive the omission.
+    assert output_config["format"]["type"] == "json_schema"
