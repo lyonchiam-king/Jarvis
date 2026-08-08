@@ -35,14 +35,25 @@ in your Gmail **drafts** and you press send.
 
 ## Quick start
 
+Needs **Python 3.10 or newer** (`python3 --version`). macOS ships 3.9 — if
+that's what you have, `brew install python@3.12` first.
+
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
+source .venv/bin/activate     # ← without this, `outreach` isn't on your PATH
+pip install -e ".[dev]"
 
-cp .env.example .env          # fill in PLACES_API_KEY (+ ANTHROPIC_API_KEY for Stage 2)
-outreach preflight            # verifies key, OAuth, Sheet access
+mkdir -p credentials          # your OAuth client JSON goes here (gitignored)
+cp .env.example .env          # fill in PLACES_API_KEY + ANTHROPIC_API_KEY
+```
+
+Then, in order:
+
+```bash
+outreach preflight            # checks key, billing, OAuth, Sheet access
 outreach init-sheet           # creates the spreadsheet, prints SHEET_ID
 # paste SHEET_ID into .env
+
 outreach run discovery --dry-run   # see what you'd get, write nothing
 outreach run discovery             # write to the Sheet
 outreach run research --limit 5    # research five leads, read the briefs
@@ -51,6 +62,10 @@ outreach run site-brief            # Lovable prompts into the Sheet
 outreach run outreach-draft --dry-run   # see the copy before spending
 outreach run outreach-draft        # drafts land in your Gmail
 ```
+
+Every new terminal needs `source .venv/bin/activate` again. If you'd rather
+skip that, prefix commands with the full path instead: `.venv/bin/outreach
+preflight`.
 
 Each stage handles up to **100 businesses per run** and skips anything it has
 already done, so running a command twice is safe and costs nothing extra.
