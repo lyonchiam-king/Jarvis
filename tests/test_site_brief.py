@@ -347,7 +347,7 @@ def test_social_profile_is_included_in_the_site_spec_prompt():
     assert "@sunsalon" in prompt
     assert "Family salon since 1998" in prompt
     assert "New colour range in stock" in prompt
-    assert "Link this profile prominently" in prompt
+    assert "Link every one of these prominently" in prompt
 
 
 def test_prompt_forbids_inventing_a_social_profile_when_none_was_found():
@@ -544,3 +544,77 @@ def test_the_spec_model_is_asked_for_real_design_decisions():
         assert field in SITE_SPEC_SCHEMA["required"]
     assert "hex" in SITE_SPEC_SYSTEM
     assert "Never invent a fact" in SITE_SPEC_SYSTEM
+
+
+# ------------------------------- every social profile, with platform and link
+
+
+def test_the_brief_lists_every_profile_with_its_platform_and_url():
+    prompt = render_lovable_prompt(
+        business_name="Espario Hair Salon",
+        category="hair salon",
+        location="George Town",
+        spec=FULL_SPEC,
+        social_profiles=(
+            "Facebook @Espariohairsalon "
+            "https://www.facebook.com/Espariohairsalon-107771601074381\n"
+            "Instagram @espariohair https://instagram.com/espariohair"
+        ),
+    )
+
+    assert "SOCIAL PROFILES" in prompt
+    assert "Facebook @Espariohairsalon" in prompt
+    assert "https://www.facebook.com/Espariohairsalon-107771601074381" in prompt
+    assert "Instagram @espariohair" in prompt
+    assert "https://instagram.com/espariohair" in prompt
+
+
+def test_the_builder_is_forbidden_from_inventing_a_profile():
+    """A guessed handle sends real customers to a stranger's account."""
+    prompt = render_lovable_prompt(
+        business_name="X", category="salon", location="Penang", spec=FULL_SPEC,
+        social_profiles="Instagram @realsalon https://instagram.com/realsalon",
+    )
+    assert "do not invent a handle for a platform that is not listed" in prompt
+    assert "do not guess a" in prompt
+
+
+def test_no_socials_means_no_social_section():
+    prompt = render_lovable_prompt(
+        business_name="X", category="salon", location="Penang", spec=FULL_SPEC
+    )
+    assert "SOCIAL PROFILES" not in prompt
+
+
+def test_stage_4_passes_the_whole_profile_list_through():
+    sheets = FakeSheets(
+        index([lead("a")]),
+        index([
+            {
+                **research_row("a"),
+                "Social Handle": "@espariohair",
+                "Social Profiles": (
+                    "Facebook @Espariohairsalon https://facebook.com/Espariohairsalon-107771601074381\n"
+                    "Instagram @espariohair https://instagram.com/espariohair"
+                ),
+            }
+        ]),
+    )
+    site_brief.run(config(), sheets, FakeWriter(), LovableAdapter())
+
+    prompt = sheets.upserts[0][1][0]["Lovable Prompt"]
+    assert "Facebook" in prompt and "Instagram" in prompt
+    assert "https://instagram.com/espariohair" in prompt
+
+
+def test_the_spec_model_is_given_the_platforms_too():
+    from outreach.providers.llm import build_site_spec_prompt
+
+    prompt = build_site_spec_prompt(
+        name="X", category="salon", location="Penang",
+        tone="warm", services="cut", price_tier="mid-range",
+        praise="", pain_points="", angle="",
+        social_profiles="TikTok @salonpg https://tiktok.com/@salonpg",
+    )
+    assert "TikTok @salonpg" in prompt
+    assert "https://tiktok.com/@salonpg" in prompt

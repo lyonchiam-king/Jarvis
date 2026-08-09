@@ -62,3 +62,77 @@ def test_stage_parse_tolerates_human_typing():
     assert parse("  site briefed ") is Stage.SITE_BRIEFED
     assert parse("EMAIL DRAFTED") is Stage.EMAIL_DRAFTED
     assert parse("nonsense") is None
+
+
+# ------------------------------------------- column order is a migration hazard
+
+
+def test_column_order_is_append_only():
+    """Rows are read by position, so inserting a column mid-tab corrupts data.
+
+    ``read_rows`` zips a row's cells against the *schema's* header list, not
+    the header row in the Sheet. On a Sheet that already has data, inserting a
+    column anywhere but the end shifts every value after it by one -- silently,
+    and only for existing rows.
+
+    So this is a golden list. Appending to the end of a tuple is fine and this
+    test will tell you to add the name here. If you need to insert or reorder,
+    that is a data migration, not an edit.
+    """
+    from outreach import schema
+
+    expected = {
+        "Leads": [
+            "Lead ID", "Stage", "Business Name", "Category", "Address", "Phone",
+            "Rating", "Review Count", "Website Status", "Website URL",
+            "Maps URL", "Campaign", "Country", "Discovered At", "Last Refreshed",
+            "Priority", "Owner Notes", "Next Action",
+        ],
+        "Research": [
+            "Lead ID", "Business Name", "Tone", "Services", "Price Tier",
+            "Customer Praise", "Customer Pain Points", "Suggested Website Angle",
+            "Social Handle", "Social Bio", "Social Recent Post",
+            "Social Lookup Status", "Email Found", "Email Source",
+            "Research Status", "Researched At", "Social Profiles",
+        ],
+        "Site Briefs": [
+            "Lead ID", "Business Name", "Lovable Prompt", "Approval Status",
+            "Lovable Project ID", "Preview URL", "Created At",
+        ],
+        "Outreach Log": [
+            "Lead ID", "Business Name", "Channel", "Recipient", "Email Source",
+            "Subject", "Body Preview", "Gmail Draft ID", "Gmail Draft Link",
+            "WhatsApp Message", "Drafted At", "Status", "Sent At", "Notes",
+        ],
+        "Errors": [
+            "Timestamp", "Stage", "Lead ID", "Business Name", "Error Type",
+            "Message", "Retryable",
+        ],
+    }
+
+    for tab in schema.ALL_TABS:
+        assert tab.headers == expected[tab.title], (
+            f"{tab.title} column order changed. If you appended a column, add "
+            f"its name to the end of this list. If you inserted or reordered "
+            f"one, existing Sheets will misread every row after it."
+        )
+
+
+def test_the_new_social_column_is_last_on_research():
+    """Proves the append-only rule was followed for the column just added."""
+    from outreach import schema
+
+    assert schema.RESEARCH.headers[-1] == "Social Profiles"
+
+
+def test_a_row_written_before_a_new_column_existed_still_reads():
+    """An existing Sheet has shorter rows; they must pad, not shift."""
+    from outreach import schema
+
+    old_row = ["lead-1", "Salon A"] + [""] * 14   # 16 cells, pre-"Social Profiles"
+    padded = old_row + [""] * (len(schema.RESEARCH.columns) - len(old_row))
+    parsed = dict(zip(schema.RESEARCH.headers, padded))
+
+    assert parsed["Lead ID"] == "lead-1"
+    assert parsed["Business Name"] == "Salon A"
+    assert parsed["Social Profiles"] == ""

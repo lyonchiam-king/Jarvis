@@ -314,7 +314,7 @@ it.
 
 ### Other tabs
 
-- **`Research`** — tone, services, price tier, customer praise/pain points, suggested website angle, social handle/bio/post, email found and where it came from
+- **`Research`** — tone, services, price tier, customer praise/pain points, suggested website angle, social handle/bio/post, **`Social Profiles`** (every profile found, as `platform handle url`, one per line), email found and where it came from
 - **`Site Briefs`** — the Lovable prompt, plus a manual `Approval Status` column you set to `Approved` before anything is built
 - **`Outreach Log`** — Gmail draft ID and link, WhatsApp message text to copy, plus manual `Status` / `Sent At` / `Notes`
 - **`Errors`** — timestamp, stage, lead, error type, message, whether retrying could help

@@ -366,6 +366,7 @@ def render_lovable_prompt(
     phone: str = "",
     address: str = "",
     social_handle: str = "",
+    social_profiles: str = "",
 ) -> str:
     """Turn the structured spec into the text you paste into Lovable.
 
@@ -440,14 +441,30 @@ def render_lovable_prompt(
         contact.append(f"Phone: {phone} -- as a tappable tel: link, in the header")
     if address:
         contact.append(f"Address: {address} -- with a link to Google Maps")
-    if social_handle:
-        contact.append(
-            f"Social: {social_handle} -- link it prominently. Their customers "
-            "already follow them there, and it is the photo feed this site "
-            "would otherwise lack."
-        )
     if contact:
         out += ["", "REAL DETAILS (use exactly these, do not paraphrase)", *contact]
+
+    profiles = [line.strip() for line in social_profiles.splitlines() if line.strip()]
+    if profiles:
+        out += [
+            "",
+            "SOCIAL PROFILES (link every one, using these exact URLs)",
+            *(f"- {line}" for line in profiles),
+            "",
+            "Put them where a customer would look: in the header or the footer,"
+            " as the platform's own icon, opening in a new tab. These are the"
+            " only social links that may appear on the site -- do not invent a"
+            " handle for a platform that is not listed here, and do not guess a"
+            " URL from the business name.",
+        ]
+    elif social_handle:
+        out += [
+            "",
+            "SOCIAL PROFILES",
+            f"- {social_handle} -- link it prominently. Their customers already "
+            "follow them there, and it is the photo feed this site would "
+            "otherwise lack.",
+        ]
 
     out += [
         "",
@@ -488,6 +505,7 @@ def build_site_spec_prompt(
     social_handle: str = "",
     social_bio: str = "",
     social_post: str = "",
+    social_profiles: str = "",
     phone: str = "",
     address: str = "",
 ) -> str:
@@ -516,18 +534,21 @@ def build_site_spec_prompt(
     # The social profile matters twice over: it's the business's own voice
     # (better evidence of tone than anything inferred from reviews), and the
     # site should link to it rather than compete with it.
-    if social_handle or social_bio or social_post:
+    if social_profiles or social_handle or social_bio or social_post:
         lines += ["", "Their own social presence:"]
-        if social_handle:
+        if social_profiles:
+            lines.append("- Profiles (platform, handle, link):")
+            lines += [f"    {line}" for line in social_profiles.splitlines() if line.strip()]
+        elif social_handle:
             lines.append(f"- Handle: {social_handle}")
         if social_bio:
             lines.append(f"- Bio: {social_bio}")
         if social_post:
             lines.append(f"- Recent post: {social_post}")
         lines.append(
-            "- Link this profile prominently on the site. It is where their "
-            "existing customers already follow them, and their photo feed is "
-            "content the site would otherwise lack."
+            "- Link every one of these prominently on the site. This is where "
+            "their existing customers already follow them, and their photo "
+            "feed is content the site would otherwise lack."
         )
     else:
         lines += ["", "No social profile found -- do not invent or link one."]

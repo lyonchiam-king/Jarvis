@@ -146,6 +146,7 @@ def run(
                 phone=lead.get("Phone", ""),
                 address=lead.get("Address", ""),
                 social_handle=research_row.get("Social Handle", ""),
+                social_profiles=research_row.get("Social Profiles", ""),
             )
 
             # No build happens here, ever. A brand-new row is seeded "Pending",
@@ -317,4 +318,5 @@ def _spec_prompt(
         social_handle=research_row.get("Social Handle", ""),
         social_bio=research_row.get("Social Bio", ""),
         social_post=research_row.get("Social Recent Post", ""),
+        social_profiles=research_row.get("Social Profiles", ""),
     )

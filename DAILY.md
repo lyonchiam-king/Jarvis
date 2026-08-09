@@ -68,6 +68,21 @@ build if anyone ever changes that binding.
 About twenty minutes, and it costs roughly a dollar. Do it once before you
 trust it with a real batch.
 
+### 0. One-time, after this update
+
+The Research tab gained a **Social Profiles** column. Add it to your existing
+Sheet by opening **Run one step on its own** → **Check setup**, then running
+this once in PowerShell:
+
+```powershell
+.\.venv\Scripts\outreach.exe init-sheet
+```
+
+It only touches row 1 — every lead, brief and draft you already have is left
+exactly as it is. Leads researched before today will have that column blank;
+they are not re-researched automatically, which is deliberate — re-running
+research on them would cost money for a field you can also just leave empty.
+
 ### 1. Check the wiring — free
 
 Double-click your new desktop icon. In step 1, open **Run one step on its own**

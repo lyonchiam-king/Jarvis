@@ -360,3 +360,29 @@ def test_reviews_are_summarised_but_never_written_to_the_sheet():
         str(v) for _tab, rows in sheets.upserts for r in rows for v in r.values()
     )
     assert review_text not in written
+
+
+def test_the_research_row_records_every_social_profile():
+    from outreach.providers.social import SocialLink, SocialProfile
+    from outreach.stages.research import _brief_row
+
+    profile = SocialProfile(
+        handle="@espariohair",
+        links=(
+            SocialLink("Facebook", "@Espariohairsalon",
+                       "https://facebook.com/Espariohairsalon-107771601074381"),
+            SocialLink("Instagram", "@espariohair",
+                       "https://instagram.com/espariohair"),
+        ),
+    )
+    brief = ResearchBrief(
+        tone="warm", services=("cut",), price_tier="mid-range",
+        customer_praise="", customer_pain_points="", suggested_website_angle="",
+    )
+    row = _brief_row({"Lead ID": "a"}, brief, profile, "", "not found")
+
+    assert row["Social Profiles"] == (
+        "Facebook @Espariohairsalon https://facebook.com/Espariohairsalon-107771601074381\n"
+        "Instagram @espariohair https://instagram.com/espariohair"
+    )
+    assert row["Social Handle"] == "@espariohair", "the old column still works"

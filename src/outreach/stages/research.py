@@ -152,6 +152,7 @@ def _brief_row(
         "Email Source": email_source,
         "Research Status": "ok",
         "Researched At": utc_now(),
+        "Social Profiles": profile.links_text,
     }
 
 

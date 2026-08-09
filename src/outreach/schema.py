@@ -96,6 +96,13 @@ RESEARCH = Tab(
         Column("Email Source", note="website | social_page | not found"),
         Column("Research Status"),
         Column("Researched At"),
+        # Appended rather than slotted next to "Social Handle" on purpose:
+        # rows are read by column position, so inserting a column mid-tab
+        # would shift every value after it on sheets that already have data.
+        Column(
+            "Social Profiles",
+            note="platform, handle and full URL -- one profile per line",
+        ),
     ),
 )
 
