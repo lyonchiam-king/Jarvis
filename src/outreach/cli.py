@@ -222,6 +222,27 @@ def init_sheet(ctx: click.Context, title: str | None) -> None:
         click.echo(f"  SHEET_ID={sheet_id}")
 
 
+@main.command("test-model")
+@click.pass_context
+def test_model(ctx: click.Context) -> None:
+    """Check the configured model can hold every schema the pipeline needs.
+
+    Three calls against one invented business. Worth running whenever you
+    change provider or model -- especially the site spec, which is where a
+    model that looks fine on the research brief usually falls over.
+    """
+    from . import modelcheck
+
+    config = _load(ctx.obj["config_path"])
+    report = modelcheck.run(config, _writer(config))
+
+    click.echo("")
+    for line in report.lines():
+        click.echo(line)
+    if not report.ok:
+        raise SystemExit(1)
+
+
 @main.command("dashboard")
 @click.option("--port", default=8765, help="Port to serve on.")
 @click.option("--no-browser", is_flag=True, help="Don't open a browser tab.")

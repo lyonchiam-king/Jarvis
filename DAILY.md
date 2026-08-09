@@ -389,47 +389,72 @@ opt-out obligation from the compliance rules.
 
 ## Using a different model
 
-The pipeline ships on Claude Opus 5, but the model is a setting. Open
-**What you're hunting** → the campaign file, or edit
-`config\campaigns\penang-my.yaml` directly:
+The pipeline ships on Claude Opus 5, but the model is a setting you change
+from the dashboard. The **Model** card near the top shows what's in use:
 
-```yaml
-research:
-  provider: ollama-cloud          # anthropic | ollama | ollama-cloud | openrouter
-  model: kimi-k2.6
-```
+> **claude-opus-5** — via anthropic · ANTHROPIC_API_KEY is set
+> [Test it] [Change]
 
-Then add the matching key to `.env`:
+Press **Change** and you get three fields:
 
-| Provider | Where it runs | Key in `.env` |
-|---|---|---|
-| `anthropic` | Anthropic (the default) | `ANTHROPIC_API_KEY` |
-| `ollama` | Ollama on **this machine** | none needed |
-| `ollama-cloud` | ollama.com | `OLLAMA_API_KEY` |
-| `openrouter` | openrouter.ai | `OPENROUTER_API_KEY` |
+- **Where it runs** — `anthropic`, `ollama` (this machine), `ollama-cloud`,
+  `openrouter`, or `openai-compatible`
+- **Model** — e.g. `kimi-k2.6` on ollama-cloud,
+  `moonshotai/kimi-k2-thinking` on openrouter
+- **API key** — saved into your `.env`
 
-Press **Check setup** afterwards — it names the model and provider it's about
-to use and tells you if the key is missing.
+**The key is write-only.** It goes into `.env`, is never shown again, and is
+never sent back to the page. The dashboard only ever remembers *whether* one is
+set. Leave the field blank to keep the key you already have.
 
-### The one thing to know before you switch
+Local Ollama needs no key at all. For a self-hosted box on your network, fill
+in **Endpoint** with something like `http://192.168.1.10:11434/v1`.
+
+### How to be sure it actually works — press **Test it**
 
 **Anthropic guarantees the reply matches the required shape. The others don't.**
 
-Every stage here needs strict JSON back — a brief with named fields, a site
-spec with a palette and a motion language. Anthropic enforces that at the API
-level. Ollama and OpenRouter are *asked* to, and most good models comply, but
-some treat it as a suggestion and a smaller local model may just reply in prose.
+Every stage needs strict JSON back — a research brief with six named fields, a
+site brief with **nineteen**, including a palette and a motion language.
+Anthropic enforces that at the API level. Ollama and OpenRouter *ask* for it;
+good models comply, some treat it as a suggestion, and a small local model may
+just reply in prose.
 
-So on any other provider the reply is checked, and if fields are missing it is
-sent back once with exactly what was wrong. If it fails twice, **that lead is
-skipped and logged to the Errors tab** rather than a half-filled brief being
-written. Watch that tab on your first run with a new model: a handful of errors
-is normal, a lot means the model isn't up to the schema and you should switch
-back or try a bigger one.
+So don't take my word for it — **Test it** makes three real calls against an
+invented barber shop and tells you:
 
-**Try it on 5 leads first.** Set **How many** to 5, run Research, and read the
-briefs. If the angles are as sharp as Opus gave you, scale up. If they're
-vague, you've spent 5 leads finding out instead of 60.
+```
+Testing kimi-k2.6 via ollama-cloud
+
+[ OK ]   2.1s  Research brief (6 fields): valid, every required field present
+[ OK ]   1.8s  Outreach copy (3 fields): valid, every required field present
+[FAIL]   4.0s  Site spec (19 fields -- the hard one): reply was missing
+               required field(s): motion_language, micro_interactions
+
+Not ready. What went wrong:
+  ...
+    fields it left out: motion_language, micro_interactions
+```
+
+That third line is the one that matters. **A model that passes the brief and
+fails the spec will research your leads happily and then fail every single site
+brief** — you'd only find out after paying for the research. Costs a few cents;
+run it after every model change.
+
+### If a model half-works
+
+Every non-Anthropic reply is checked. Missing fields get one corrective retry
+naming exactly what was absent. Fail twice and **that lead goes to the Errors
+tab** rather than a half-filled brief reaching your Sheet — a stub becomes a
+demo site with holes in it and an email built on nothing.
+
+So the debugging loop is:
+
+1. **Test it** — does the model hold all three schemas at all?
+2. If yes, run Research on **5 leads** and read the angles. Passing the test
+   proves the *shape*, not the quality of the thinking.
+3. Watch the **Errors** tab. A couple is normal; a lot means the model isn't up
+   to it. Switch back to `anthropic`, or try a larger model.
 
 ---
 

@@ -895,3 +895,134 @@ def test_the_page_has_somewhere_to_show_the_queue(client):
 
 def test_next_up_is_empty_without_a_sheet(client):
     assert client.get("/api/next-up").get_json() == {"queues": {}}
+
+
+# --------------------------------------------- choosing and testing the model
+
+
+@pytest.fixture
+def model_app(tmp_path, monkeypatch):
+    """An app on a throwaway campaign file and a throwaway .env."""
+    from pathlib import Path
+
+    src = Path("config/campaigns/penang-my.yaml")
+    campaign = tmp_path / "campaign.yaml"
+    campaign.write_text(src.read_text())
+    (tmp_path / ".env").write_text("PLACES_API_KEY=abc\n")
+    monkeypatch.chdir(tmp_path)
+
+    config = load_config(campaign, env_file=None)
+    return create_app(config).test_client(), campaign, tmp_path / ".env"
+
+
+def test_the_model_endpoint_reports_the_provider_and_key_state(model_app):
+    client, _campaign, _env = model_app
+    d = client.get("/api/model").get_json()
+
+    assert d["provider"] == "anthropic"
+    assert d["model"] == "claude-opus-5"
+    assert d["key_env"] == "ANTHROPIC_API_KEY"
+    assert d["guaranteed"] is True
+    assert "ollama-cloud" in d["providers"]
+
+
+def test_the_api_key_is_never_sent_to_the_browser(model_app):
+    """It only ever learns whether one is set."""
+    client, _campaign, env_file = model_app
+    env_file.write_text("OLLAMA_API_KEY=super-secret\n")
+    client.post("/api/model", json={"provider": "ollama-cloud", "model": "kimi-k2.6"})
+
+    body = client.get("/api/model").data.decode()
+
+    assert "super-secret" not in body
+    assert client.get("/api/model").get_json()["key_set"] is True
+
+
+def test_switching_provider_and_model_rewrites_the_campaign(model_app):
+    client, campaign, _env = model_app
+    d = client.post(
+        "/api/model", json={"provider": "openrouter", "model": "moonshotai/kimi-k2-thinking"}
+    ).get_json()
+
+    assert d["ok"] is True
+    cfg = load_config(campaign, env_file=None)
+    assert cfg.research.provider == "openrouter"
+    assert cfg.research.model == "moonshotai/kimi-k2-thinking"
+
+
+def test_the_campaign_comments_survive_a_model_switch(model_app):
+    client, campaign, _env = model_app
+    before = campaign.read_text().count("#")
+
+    client.post("/api/model", json={"provider": "ollama", "model": "llama3"})
+
+    assert campaign.read_text().count("#") == before
+
+
+def test_saving_a_key_writes_it_to_env_for_the_chosen_provider(model_app):
+    from outreach.env_edit import is_set
+
+    client, _campaign, env_file = model_app
+    client.post(
+        "/api/model",
+        json={"provider": "ollama-cloud", "model": "kimi-k2.6", "api_key": "olm-123"},
+    )
+
+    assert is_set(env_file, "OLLAMA_API_KEY")
+    assert "olm-123" in env_file.read_text()
+    assert "PLACES_API_KEY=abc" in env_file.read_text(), "the rest of .env survives"
+
+
+def test_a_blank_key_leaves_the_existing_one_alone(model_app):
+    client, _campaign, env_file = model_app
+    env_file.write_text("OLLAMA_API_KEY=keep-me\n")
+
+    client.post("/api/model", json={"provider": "ollama-cloud", "model": "x", "api_key": ""})
+
+    assert "keep-me" in env_file.read_text()
+
+
+def test_local_ollama_takes_no_key(model_app):
+    client, _campaign, _env = model_app
+    r = client.post("/api/model", json={"provider": "ollama", "api_key": "pointless"})
+    assert r.status_code == 400
+
+
+def test_an_unknown_provider_is_refused(model_app):
+    client, campaign, _env = model_app
+    before = campaign.read_text()
+
+    assert client.post("/api/model", json={"provider": "gpt5000"}).status_code == 400
+    assert campaign.read_text() == before
+
+
+def test_an_empty_model_name_is_refused_and_nothing_is_written(model_app):
+    client, campaign, _env = model_app
+    before = campaign.read_text()
+
+    d = client.post("/api/model", json={"model": "   "}).get_json()
+
+    assert "cannot be empty" in d["error"]
+    assert campaign.read_text() == before
+
+
+def test_a_rejected_switch_leaves_a_loadable_campaign(model_app):
+    client, campaign, _env = model_app
+    client.post("/api/model", json={"model": ""})
+    client.post("/api/model", json={"provider": "nonsense"})
+
+    assert load_config(campaign, env_file=None).research.model == "claude-opus-5"
+
+
+def test_test_model_is_a_button_the_dashboard_can_press():
+    from outreach.cli import main
+    from outreach.dashboard import STAGE_COMMANDS
+
+    assert STAGE_COMMANDS["test-model"] == ["test-model"]
+    assert "test-model" in main.commands
+
+
+def test_the_page_has_a_model_section(client):
+    body = client.get("/").data
+    assert b'id="model"' in body
+    assert b'data-run="test-model"' in body

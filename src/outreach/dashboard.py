@@ -15,7 +15,9 @@ import sys
 import threading
 import webbrowser
 from collections import deque
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from flask import Flask, jsonify, render_template_string, request
 
@@ -45,6 +47,7 @@ STAGE_COMMANDS = {
     "site-build": ["run", "site-build"],
     "outreach-draft": ["run", "outreach-draft"],
     "preflight": ["preflight"],
+    "test-model": ["test-model"],
     "preview-leads": ["run", "discovery", "--dry-run"],
     "preview-messages": ["run", "outreach-draft", "--dry-run"],
 }
@@ -398,6 +401,85 @@ def create_app(config: Config) -> Flask:
                 "file": str(c.source_path),
             }
         )
+
+    @app.route("/api/model")
+    def api_model():
+        """The model in use, and whether its key is present. Never the key."""
+        from .config import PROVIDER_DEFAULTS, PROVIDER_KEY_ENV
+        from .env_edit import is_set
+
+        c = current()
+        env_name = PROVIDER_KEY_ENV.get(c.research.provider, "")
+        return jsonify(
+            {
+                "provider": c.research.provider,
+                "model": c.research.model,
+                "base_url": c.research.base_url,
+                "providers": sorted(PROVIDER_DEFAULTS),
+                "key_env": env_name,
+                "key_needed": c.research.provider != "ollama",
+                "key_set": bool(env_name) and is_set(Path(".env"), env_name),
+                "guaranteed": c.research.provider == "anthropic",
+            }
+        )
+
+    @app.route("/api/model", methods=["POST"])
+    def api_set_model():
+        """Change provider/model, and optionally store that provider's key.
+
+        The key is write-only. It goes into .env and is never read back to the
+        page -- the browser only ever learns whether one is set.
+        """
+        from .campaign_edit import CampaignEditError, rewrite_research
+        from .config import PROVIDER_DEFAULTS, PROVIDER_KEY_ENV, ConfigError, load_config
+        from .env_edit import EnvEditError, set_key
+
+        payload = request.json or {}
+        provider = (payload.get("provider") or "").strip().lower() or None
+        # Absent means "leave it alone"; present but blank is a mistake worth
+        # naming, since the field is pre-filled and clearing it looks deliberate.
+        model = payload.get("model")
+        if model is not None:
+            model = model.strip()
+            if not model:
+                return jsonify({"error": "Model cannot be empty -- name the model to use."}), 200
+        base_url = payload.get("base_url")
+        api_key = payload.get("api_key") or ""
+
+        if provider is not None and provider not in PROVIDER_DEFAULTS:
+            return jsonify({"error": f"Unknown provider {provider!r}"}), 400
+
+        # The key first: if this fails, the campaign file is still untouched.
+        if api_key.strip():
+            target = provider or current().research.provider
+            env_name = PROVIDER_KEY_ENV.get(target)
+            if not env_name:
+                return jsonify({"error": f"{target} takes no API key"}), 400
+            try:
+                set_key(Path(".env"), env_name, api_key.strip())
+                os.environ[env_name] = api_key.strip()
+            except EnvEditError as exc:
+                return jsonify({"error": str(exc)}), 200
+
+        path = current().source_path
+        try:
+            original = path.read_text()
+            updated = rewrite_research(
+                original, provider=provider, model=model, base_url=base_url
+            )
+            path.write_text(updated)
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        except OSError as exc:
+            return jsonify({"error": f"Could not save {path}: {exc}"}), 200
+
+        try:
+            state["config"] = load_config(path)
+        except ConfigError as exc:
+            path.write_text(original)
+            return jsonify({"error": f"Reverted -- {exc}"}), 200
+
+        return jsonify({"ok": True})
 
     @app.route("/api/campaign", methods=["POST"])
     def api_set_campaign():
@@ -846,6 +928,9 @@ PAGE = """<!doctype html>
   <h2>What you're hunting</h2>
   <div class="card" id="target">Loading&hellip;</div>
 
+  <h2>Model</h2>
+  <div class="card" id="model">Loading&hellip;</div>
+
   <h2>What needs you today</h2>
   <div class="todo" id="todo"></div>
 
@@ -891,6 +976,7 @@ PAGE = """<!doctype html>
         <button data-run="preview-leads">Preview leads</button>
         <button data-run="preview-messages">Preview messages</button>
         <button data-run="preflight">Check setup</button>
+        <button data-run="test-model">Test the model</button>
       </div>
     </details>
   </div>
@@ -1005,28 +1091,133 @@ async function poll() {
   const busy = !!d.running;
   $('#running').textContent = busy ? `Running ${d.running}\\u2026` : '';
   document.querySelectorAll('button[data-run]').forEach(b => b.disabled = busy);
+  if (!busy && poll.wasBusy) loadModel();
   if (!busy && poll.wasBusy) { refresh(); loadNextUp(); }
   poll.wasBusy = busy;
 }
 
-document.querySelectorAll('button[data-run]').forEach(b =>
-  b.addEventListener('click', async () => {
-    const r = await fetch('/api/run', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        what: b.dataset.run,
-        limit: $('#howmany').value.trim(),
-        social_first: $('#socialfirst').checked,
-      })
+function bindRunButtons() {
+  document.querySelectorAll('button[data-run]:not([data-bound])').forEach(b => {
+    b.dataset.bound = '1';
+    b.addEventListener('click', async () => {
+      const r = await fetch('/api/run', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          what: b.dataset.run,
+          limit: $('#howmany') ? $('#howmany').value.trim() : '',
+          social_first: $('#socialfirst') ? $('#socialfirst').checked : null,
+        })
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        $('#running').innerHTML = `<span class="err">${esc(d.error || 'Could not start')}</span>`;
+        return;
+      }
+      poll();
     });
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
-      $('#running').innerHTML = `<span class="err">${esc(d.error || 'Could not start')}</span>`;
-      return;
-    }
-    poll();
-  }));
+  });
+}
+bindRunButtons();
+
+// ------------------------------------------------------------------- model
+
+let modelInfo = null;
+
+async function loadModel() {
+  try { modelInfo = await (await fetch('/api/model')).json(); } catch { return; }
+  drawModel();
+}
+
+function drawModel(editing) {
+  const el = $('#model');
+  const m = modelInfo;
+  if (!el || !m) return;
+
+  const keyState = !m.key_needed
+    ? '<span class="ok">no key needed</span>'
+    : m.key_set
+      ? `<span class="ok">${esc(m.key_env)} is set</span>`
+      : `<span class="err">${esc(m.key_env)} is missing</span>`;
+
+  if (!editing) {
+    el.innerHTML = `<div class="row" style="justify-content:space-between">
+      <div>
+        <div style="font-size:19px;font-weight:600">${esc(m.model)}</div>
+        <div class="sub">via ${esc(m.provider)} &middot; ${keyState}</div>
+      </div>
+      <div class="row">
+        <button data-run="test-model">Test it</button>
+        <button onclick="drawModel(true)">Change</button>
+      </div>
+    </div>
+    ${m.guaranteed ? '' : `<p class="hint" style="margin-top:10px">
+      Only Anthropic guarantees the reply fits the schema. Press
+      <b>Test it</b> after any change &mdash; three calls, a few cents, and it
+      tells you whether this model can hold all nineteen fields the site brief
+      needs.</p>`}`;
+    bindRunButtons();
+    return;
+  }
+
+  const options = m.providers.map(p =>
+    `<option value="${esc(p)}" ${p === m.provider ? 'selected' : ''}>${esc(p)}</option>`
+  ).join('');
+
+  el.innerHTML = `
+    <label class="sub" for="m-prov">Where it runs</label>
+    <select id="m-prov" style="width:100%;margin:5px 0 14px;font:inherit;padding:8px 11px;
+      border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)">
+      ${options}</select>
+    <label class="sub" for="m-model">Model</label>
+    <input id="m-model" style="width:100%;margin:5px 0 4px" value="${esc(m.model)}"
+           placeholder="claude-opus-5">
+    <p class="hint" style="margin:0 0 14px">e.g. <code>kimi-k2.6</code> on
+      ollama-cloud, <code>moonshotai/kimi-k2-thinking</code> on openrouter,
+      <code>claude-opus-5</code> on anthropic.</p>
+    <label class="sub" for="m-key">API key <span id="m-keyenv"></span></label>
+    <input id="m-key" type="password" autocomplete="off" style="width:100%;margin:5px 0 4px"
+           placeholder="leave blank to keep the current one">
+    <p class="hint" style="margin:0 0 14px">Saved into your <code>.env</code>. It is
+      never shown again and never sent back to this page &mdash; the dashboard
+      only remembers whether one is set.</p>
+    <label class="sub" for="m-url">Endpoint <span class="sub">(optional)</span></label>
+    <input id="m-url" style="width:100%;margin:5px 0 4px" value="${esc(m.base_url || '')}"
+           placeholder="leave blank for the provider default">
+    <p class="hint">Only needed for a self-hosted box, e.g.
+      <code>http://192.168.1.10:11434/v1</code>.</p>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" onclick="saveModel()">Save</button>
+      <button onclick="drawModel(false)">Cancel</button>
+      <span class="sub" id="m-msg"></span>
+    </div>`;
+}
+
+async function saveModel() {
+  const body = {
+    provider: $('#m-prov').value,
+    model: $('#m-model').value,
+    base_url: $('#m-url').value,
+    api_key: $('#m-key').value,
+  };
+  document.querySelectorAll('#model button').forEach(b => b.disabled = true);
+  $('#m-msg').textContent = 'Saving…';
+
+  let d;
+  try {
+    d = await (await fetch('/api/model', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    })).json();
+  } catch { d = {error: 'Could not reach the dashboard'}; }
+
+  if (!d.ok) {
+    $('#m-msg').innerHTML = `<span class="err">${esc(d.error || 'Failed')}</span>`;
+    document.querySelectorAll('#model button').forEach(b => b.disabled = false);
+    return;
+  }
+  await loadModel();
+}
 
 // --------------------------------------------------- who is next in the queue
 
@@ -1288,6 +1479,7 @@ async function saveBuilt(leadId, i) {
 
 refresh();
 loadTarget();
+loadModel();
 loadNextUp();
 loadReview();
 loadQueue();

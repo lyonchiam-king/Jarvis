@@ -230,6 +230,52 @@ def rewrite_campaign(
     return result
 
 
+def rewrite_research(
+    text: str,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> str:
+    """Set the model settings under ``research:``, comments intact.
+
+    ``base_url`` is inserted when absent, because the shipped campaign file
+    carries it only as a commented-out hint -- a user switching to a LAN
+    Ollama box would otherwise have nowhere for it to go.
+    """
+    if provider is not None and not provider.strip():
+        raise CampaignEditError("Provider cannot be empty.")
+    if model is not None and not model.strip():
+        raise CampaignEditError("Model cannot be empty -- name the model to use.")
+
+    lines = text.splitlines()
+    bounds = _section_bounds(lines, "research")
+    if bounds is None:
+        raise CampaignEditError(
+            "This campaign file has no top-level `research:` section."
+        )
+    start, end = bounds
+
+    for key, value in (("provider", provider), ("model", model)):
+        if value is None:
+            continue
+        if not _replace_scalar(lines, start, end, key, value.strip()):
+            lines.insert(start, f"  {key}: {_scalar(value.strip())}")
+            start, end = _section_bounds(lines, "research")  # type: ignore[misc]
+
+    if base_url is not None:
+        cleaned = base_url.strip()
+        if not _replace_scalar(lines, start, end, "base_url", cleaned):
+            if cleaned:
+                lines.insert(start, f"  base_url: {_scalar(cleaned)}")
+
+    result = "\n".join(lines)
+    if text.endswith("\n"):
+        result += "\n"
+    _validate(result)
+    return result
+
+
 def _validate(text: str) -> None:
     try:
         parsed = yaml.safe_load(text)
