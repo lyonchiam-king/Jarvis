@@ -684,6 +684,16 @@ def test_motion_is_named_in_the_stack_lovable_actually_has():
     assert "transform and opacity only" in prompt
 
 
+def test_the_builder_is_given_the_apis_not_adjectives():
+    """A builder told 'smooth animations' produces a default fade; a builder
+    given whileInView, AnimatePresence and layoutId produces an effect."""
+    prompt = motion_prompt()
+    assert "whileInView" in prompt
+    assert "AnimatePresence" in prompt
+    assert "layoutId" in prompt
+    assert "useReducedMotion" in prompt
+
+
 def test_the_techniques_that_break_a_phone_are_ruled_out():
     """Award-gallery moves that cost a booking on 4G."""
     prompt = motion_prompt()
@@ -698,16 +708,29 @@ def test_content_must_survive_the_animation_never_running():
 
 
 def test_the_performance_budget_outranks_the_visual_ideas():
+    """Rewritten (see task brief): the old wording -- 'it outranks every
+    visual idea above' -- read literally as a veto over the whole motion
+    section above it, which is exactly backwards. LCP is set by the hero, so
+    the budget is scoped to the hero and the first tap; below the fold is
+    then explicitly free to move within the transform/opacity rule."""
     prompt = motion_prompt()
     assert "2.5s" in prompt
-    assert "drop the effect -- not the budget" in prompt
+    assert "governs the hero and the first tap" in prompt
+    assert "Below the fold, animate" in prompt
+    assert "freely inside the transform/opacity rule" in prompt
 
 
-def test_a_spec_with_no_motion_renders_no_motion_section():
+def test_a_thin_spec_still_gets_the_motion_floor():
+    """The bug this guards: a spec with no signature_moment, no
+    motion_language and micro_interactions=() used to render no motion
+    section at all, so a thin spec shipped a static page. The floor is fixed
+    text, not derived from spec values, so it survives even here."""
     prompt = render_lovable_prompt(
         business_name="X", category="salon", location="Penang", spec=FULL_SPEC
     )
-    assert "MOTION AND INTERACTION" not in prompt
+    assert "MOTION AND INTERACTION" in prompt
+    assert "BUILD ALL OF THESE" in prompt
+    assert "Signature moment:" not in prompt, "nothing to report, so it reports nothing"
 
 
 # ------------------------------------------------ sources the builder studies
@@ -747,6 +770,63 @@ def test_no_sources_means_no_study_section():
     assert "STUDY THESE FIRST" not in motion_prompt()
 
 
+# ------------------------------------------------------------- imagery
+
+
+def test_imagery_guidance_appears_only_when_there_are_sources():
+    assert "IMAGERY" not in motion_prompt()
+    assert "IMAGERY" in motion_prompt(maps_url="https://maps.google.com/?cid=123")
+
+
+def test_imagery_names_all_three_source_types_and_the_sequence():
+    """Lyon: pull all three, then select, then decide reuse or recreate per
+    photo -- not merely read the pages for tone."""
+    prompt = motion_prompt(
+        maps_url="https://maps.google.com/?cid=123",
+        social_profiles=(
+            "Instagram @chuliahair https://instagram.com/chuliahair\n"
+            "Facebook @chuliahair https://facebook.com/chuliahair"
+        ),
+    )
+    imagery = prompt[prompt.index("IMAGERY"):prompt.index("WHO IT IS FOR")]
+
+    assert "Google Business Profile photos" in imagery
+    assert "Instagram" in imagery
+    assert "Facebook" in imagery
+    assert "Pull every photo" in imagery
+    assert "Then select." in imagery
+    assert "use it as-is" in imagery
+    assert "recreate the same subject and framing" in imagery
+
+
+def test_imagery_states_the_judgement_call_with_a_concrete_comparison():
+    prompt = motion_prompt(maps_url="https://maps.google.com/?cid=123")
+    assert "Penang shoplot" in prompt
+    assert "2019" in prompt
+    assert "hero image must come from the real premises" in prompt
+
+
+def test_imagery_never_substitutes_stock_for_either_case():
+    prompt = motion_prompt(maps_url="https://maps.google.com/?cid=123")
+    assert "Never substitute stock photography" in prompt
+
+
+def test_imagery_admits_when_a_login_walled_platform_will_not_open():
+    """Instagram and Facebook are login-walled and often can't be fetched;
+    Google Business photos usually can. The prompt must say so plainly
+    rather than paper over it -- a site built on invented photography is
+    worse than one that admits it used a placeholder."""
+    prompt = motion_prompt(maps_url="https://maps.google.com/?cid=123")
+    assert "login-walled" in prompt
+    assert "say which one plainly" in prompt
+    assert "never invent a photo you could not see" in prompt
+
+
+def test_showcase_cards_point_at_imagery_instead_of_repeating_it():
+    prompt = rich(maps_url="https://maps.google.com/?cid=123")
+    assert "Follow IMAGERY above for the photo" in prompt
+
+
 def test_stage_4_passes_the_maps_url_through():
     sheets = FakeSheets(
         index([{**lead("a"), "Maps URL": "https://maps.google.com/?cid=99"}]),
@@ -765,6 +845,52 @@ def test_the_model_is_told_to_design_motion_for_this_business():
     assert "milliseconds" in SITE_SPEC_SYSTEM
     assert "signature moment" in SITE_SPEC_SYSTEM
     assert "portfolios whose job is to be" in SITE_SPEC_SYSTEM
+
+
+def test_the_spec_model_is_told_the_photos_are_its_raw_material():
+    """Task 6: two paragraphs telling the model that visual_direction and
+    avoid should be written against what is actually photographable for THIS
+    business, and that the hero still does not animate even as the ambition
+    of signature_moment and motion_language goes up."""
+    from outreach.providers.llm import SITE_SPEC_SYSTEM
+
+    assert "image library" in SITE_SPEC_SYSTEM
+    assert "actually photographable for THIS business" in SITE_SPEC_SYSTEM
+    assert "Raise the ambition" in SITE_SPEC_SYSTEM
+    assert "the hero itself does not animate" in SITE_SPEC_SYSTEM
+
+
+def test_the_required_field_count_has_not_moved():
+    """Ratchet, not a red-then-green test: it passes today and is meant to
+    keep passing. SITE_SPEC_SCHEMA["required"] is deliberately capped at 19
+    (modelcheck.py calls it out to Lyon as 'the demanding one') because a
+    20th required field costs every weaker non-Anthropic model, not just the
+    prompt template. This guards against that cap quietly moving."""
+    from outreach.providers.llm import SITE_SPEC_SCHEMA
+
+    assert len(SITE_SPEC_SCHEMA["required"]) == 19
+
+
+def test_the_prompt_stays_pasteable():
+    """Lyon pastes FULL_SPEC-sized prompts into Lovable's box by hand. The
+    ceiling is the richest realistic prompt (every optional field filled,
+    both social sources present) measured after Tasks 4-6, plus modest
+    headroom -- so the next person who wants to add another block has to
+    make a trade instead of silently pushing the prompt past what's
+    actually pasteable."""
+    prompt = rich(
+        maps_url="https://maps.google.com/?cid=123",
+        social_profiles=(
+            "Instagram @chuliahair https://instagram.com/chuliahair\n"
+            "Facebook @chuliahair https://facebook.com/chuliahair"
+        ),
+        phone="04-262 1188",
+        address="58 Lebuh Chulia, 10200 George Town",
+    )
+    # Measured at 9150 chars post Tasks 4-6 (IMAGERY, the motion floor, and
+    # the scoped performance-budget bullet). 9500 leaves ~350 chars of
+    # headroom -- enough to fix a typo, not enough to add a section for free.
+    assert len(prompt) < 9500
 
 
 # ------------------------------- a build order, not a description of a website

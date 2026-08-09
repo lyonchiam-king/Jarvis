@@ -369,6 +369,19 @@ claim tells them you never looked at their business. Where a real detail is \
 needed but absent, the builder will mark it [TO CONFIRM] -- that is the correct \
 outcome, not a failure.
 
+**Their social feed and their Google Business photos are the image library \
+this site will be built from.** Write `visual_direction` and `avoid` against \
+what is actually photographable for THIS business -- the real corner shoplot, \
+the real chairs, the real dishes on the pass -- not a mood that would need \
+photography nobody has taken.
+
+**Raise the ambition of `signature_moment` and `motion_language`.** The \
+audience for this brief has already seen the default template fade; give the \
+builder something with more intent than that, sized to what this business \
+actually is. The one constraint that does not move: the hero itself does not \
+animate. It is visible and complete the instant the page paints, whatever \
+else on the page moves.
+
 Every field you fill is an instruction someone will follow exactly. Write \
 nothing you would not defend in a review.
 """
@@ -548,6 +561,27 @@ def render_lovable_prompt(
             "what they genuinely offer. If you cannot open one, say so plainly "
             "and work from the brief below -- do not invent what you would have "
             "found there.",
+            "",
+            "IMAGERY",
+            "Pull every photo you can from the sources above before you design "
+            "anything: Google Business Profile photos (the owner's own, and the "
+            "ones customers attached to their reviews -- this one almost always "
+            "opens), then Instagram, then Facebook. Instagram and Facebook are "
+            "login-walled and often will not let a fetch through; if one will "
+            "not open, say which one plainly and work from whichever sources "
+            "did -- never invent a photo you could not see.",
+            "",
+            "Then select. Sharp, well-lit, and it shows the actual place or the "
+            "actual work -- use it as-is; a real customer photo of this Penang "
+            "shoplot outranks any stock image, however polished. The actual "
+            "place or work but blurry or a dated phone snapshot -- recreate the "
+            "same subject and framing to a higher standard; a dim 2019 "
+            "snapshot does not outrank a stock image, the shot it should have "
+            "been does. Never substitute stock photography for either, and "
+            "never fill a gap with an invented photo -- an honest tinted "
+            "placeholder beats a fabricated one. The hero image must come from "
+            "the real premises or the real work; nothing generic sits above "
+            "the fold.",
         ]
 
     if spec.visitor:
@@ -587,9 +621,8 @@ def render_lovable_prompt(
             *(f"{i}. {item}" for i, item in enumerate(spec.showcase_items, start=1)),
             "",
             "Each card: image area, name, its tags as small badges, and a tap "
-            "target opening a modal with a little more detail. Use real photos "
-            "from the sources above where you can find them; otherwise a solid "
-            "tinted block from the palette, never a stock photo.",
+            "target opening a modal with a little more detail. Follow IMAGERY "
+            "above for the photo -- never a stock photo.",
         ]
 
     if spec.interactive_feature:
@@ -626,30 +659,51 @@ def render_lovable_prompt(
         motion += [f"Motion language:   {spec.motion_language}"]
     if spec.micro_interactions:
         motion += ["Micro-interactions:", *(f"  - {m}" for m in spec.micro_interactions)]
+
+    # Rendered even when the spec supplied nothing bespoke: a thin spec must
+    # not silently ship a static page. The floor list below is fixed text,
+    # not derived from spec values, so it survives micro_interactions=None
+    # and an empty signature_moment alike.
+    out += ["", "MOTION AND INTERACTION"]
     if motion:
-        out += [
-            "",
-            "MOTION AND INTERACTION",
-            *motion,
-            "",
-            "This is the difference between a template and a site that feels",
-            "expensive. Build it properly, and build it so it never costs the",
-            "visitor anything:",
-            "- Framer Motion is already available. Use it, or plain CSS",
-            "  transitions -- whichever is simpler for the effect.",
-            "- Animate transform and opacity only. Animating width, height, top",
-            "  or left forces layout on every frame and stutters on a mid-range",
-            "  phone.",
-            "- Reveal on scroll with IntersectionObserver, once per element,",
-            "  never re-triggering. Content must be in the DOM and readable",
-            "  even if the animation never runs.",
-            "- Honour prefers-reduced-motion: fall back to a plain fade or to",
-            "  nothing. Some people get motion sickness from parallax.",
-            "- No scroll-jacking, no page-load animation gate, no cursor",
-            "  effects, no WebGL or Three.js. Those belong on a designer's",
-            "  portfolio, not on a shop that needs the booking. On a phone the",
-            "  cursor ones do not exist at all.",
-        ]
+        out += motion
+    out += [
+        "",
+        "Stack: React + Tailwind + shadcn/ui. Framer Motion is already available"
+        " -- use motion.* directly. whileInView with viewport={{ once: true }}"
+        " for on-scroll reveals, AnimatePresence for the showcase modal,"
+        " layoutId for the card-to-modal shared-element move,"
+        " useReducedMotion() as the a11y fallback. Spring for a snappy"
+        " motion_language, tween for a slow one. Reach for shadcn's Dialog,"
+        " Sheet, Tabs and Accordion over hand-rolled equivalents -- they"
+        " already handle focus and escape.",
+        "",
+        "BUILD ALL OF THESE -- a page with none of them is not a pass:",
+        "1. The signature moment above, or the closest fit if none was given.",
+        "2. Sections below the fold reveal on scroll, staggered sibling to sibling.",
+        "3. The primary CTA answers the tap: a scale or opacity change on"
+        " press, not only on hover, which does not exist on a phone.",
+        "4. A showcase card expands into its modal as a shared-element move,"
+        " not a hard cut.",
+        "5. The mobile bar enters with its own animation once the visitor has"
+        " scrolled past the hero -- it is not present from frame one.",
+        "",
+        "The hero itself does not animate: final position, full opacity, no"
+        " entrance, no load gate, the instant the page paints. That alone"
+        " protects the performance budget below -- everything after the hero"
+        " is free to move.",
+        "",
+        "- Animate transform and opacity only -- width, height, top or left"
+        " force layout on every frame and stutter on a mid-range phone.",
+        "- Reveal on scroll with whileInView, viewport={{ once: true }};"
+        " never re-trigger. Content is in the DOM and readable even if the animation never runs.",
+        "- Honour prefers-reduced-motion via useReducedMotion(): plain fade,"
+        " or nothing. Some people get motion sickness from parallax.",
+        "- No scroll-jacking, no page-load animation gate, no cursor effects,"
+        " no WebGL or Three.js. Those belong on a designer's portfolio, not a"
+        " shop that needs the booking -- and the cursor ones do not exist on"
+        " a phone.",
+    ]
 
     if spec.avoid:
         out += [
@@ -713,11 +767,13 @@ def render_lovable_prompt(
         "  [TO CONFIRM] rather than guessing. That is the correct outcome.",
         "- Accessible by default: real contrast, real heading order, alt text,",
         "  and a form every keyboard can complete.",
-        "- Performance budget, and it outranks every visual idea above:",
-        "  largest contentful paint under 2.5s on a mid-range Android on 4G,",
-        "  no layout shift as things load, and the primary action tappable",
-        "  within one second of the page appearing. If an effect cannot fit",
-        "  inside that, drop the effect -- not the budget.",
+        "- Performance budget governs the hero and the first tap, not the",
+        "  rest of the page: largest contentful paint under 2.5s on a",
+        "  mid-range Android on 4G, no layout shift as things load, primary",
+        "  action tappable within one second. The hero renders at final",
+        "  position and full opacity with no entrance animation and no load",
+        "  gate -- that alone protects the budget. Below the fold, animate",
+        "  freely inside the transform/opacity rule above.",
         "- Real images beat illustrations, but they must be sized and lazy",
         "  loaded below the fold, with width and height set so nothing jumps.",
         "- Send every booking or enquiry to a spreadsheet via the",
