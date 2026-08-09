@@ -235,6 +235,21 @@ minutes — output streams down the page, and you can walk away.
 already on your Sheet, so today's 60 are 60 you have never seen. You cannot
 double-charge yourself or double-message anyone by running it again.
 
+#### Businesses with a Facebook or Instagram page go first
+
+The checkbox under the button, on by default. Those leads have more to work
+with — a bio, photos, posts in their own voice — so the research is richer and
+the demo comes out better. And they have already decided they want to be found
+online, which is most of the argument made for you.
+
+Leads with no web presence at all aren't dropped, just queued behind. So with
+**How many** set to 20, your money goes on the best 20 available rather than
+whichever happen to sit highest in the Sheet. Within each group, better-reviewed
+businesses come first — reviews are what the brief is built from, and three of
+them make a thin one.
+
+Untick it to work in plain Sheet order.
+
 #### Doing fewer than a full batch
 
 Next to the button is a **How many** box. Leave it blank for the full batch, or

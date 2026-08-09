@@ -761,3 +761,121 @@ def test_the_model_is_told_to_design_motion_for_this_business():
     assert "milliseconds" in SITE_SPEC_SYSTEM
     assert "signature moment" in SITE_SPEC_SYSTEM
     assert "portfolios whose job is to be" in SITE_SPEC_SYSTEM
+
+
+# ------------------------------- a build order, not a description of a website
+
+
+RICH_SPEC = replace(
+    MOTION_SPEC,
+    highlights=("Walk-ins Welcome", "Scalp Check First", "Closed Tuesdays"),
+    showcase_items=(
+        "Scalp-first cut and treatment -- 45 min, Consultation included",
+        "Colour correction -- Half day, Bond repair",
+        "Student trim -- Under RM30, No appointment",
+    ),
+    interactive_feature=(
+        "A three-question picker titled 'What's going on with your hair?' -- "
+        "tabs for Concern, Length, When. Each answer updates a live summary "
+        "card naming the treatment it points to, and the button beneath it "
+        "opens WhatsApp with that treatment already written into the message."
+    ),
+    mobile_bar=("Call -> tel: link", "WhatsApp -> click-to-chat with the salon"),
+)
+
+
+def rich(**kwargs):
+    return render_lovable_prompt(
+        business_name="Chulia Hair House", category="hair salon",
+        location="Georgetown", spec=RICH_SPEC, **kwargs,
+    )
+
+
+def test_the_highlights_strip_is_specified():
+    prompt = rich()
+    assert "HIGHLIGHTS STRIP" in prompt
+    assert "Walk-ins Welcome" in prompt
+
+
+def test_offerings_become_numbered_cards_with_tags():
+    """Enumerated items produce a page; 'showcase the services' produces a stub."""
+    prompt = rich()
+    assert "1. Scalp-first cut and treatment -- 45 min, Consultation included" in prompt
+    assert "3. Student trim" in prompt
+    assert "opening a modal" in prompt
+
+
+def test_cards_prefer_real_photos_over_stock():
+    prompt = rich()
+    assert "never a stock photo" in prompt
+
+
+def test_the_interactive_piece_is_briefed_and_tied_to_the_cta():
+    prompt = rich()
+    assert "THE INTERACTIVE PIECE" in prompt
+    assert "three-question picker" in prompt
+    assert 'handing them to "Book a time"' in prompt
+
+
+def test_the_interactive_piece_must_hold_state_and_work_by_thumb():
+    prompt = rich()
+    assert "work with a thumb" in prompt
+    assert "hold its state" in prompt
+
+
+def test_the_mobile_bar_is_pinned_and_does_not_cover_content():
+    prompt = rich()
+    assert "FLOATING BAR ON MOBILE" in prompt
+    assert "Call -> tel: link" in prompt
+    assert "pad the page bottom by its height" in prompt
+
+
+def test_the_build_order_reads_top_to_bottom():
+    """A builder works down the page; the brief must be in that order."""
+    prompt = rich(maps_url="https://maps.google.com/?cid=1", phone="04-262 1188")
+    order = [
+        "STUDY THESE FIRST",
+        "WHO IT IS FOR",
+        "THE ONE JOB",
+        "HERO",
+        "HOME PAGE, IN SCROLL ORDER",
+        "HIGHLIGHTS STRIP",
+        "WHAT THEY OFFER",
+        "THE INTERACTIVE PIECE",
+        "ART DIRECTION",
+        "MOTION AND INTERACTION",
+        "FLOATING BAR ON MOBILE",
+        "REAL DETAILS",
+        "BUILD RULES",
+    ]
+    positions = [prompt.index(section) for section in order]
+    assert positions == sorted(positions), "the brief is out of build order"
+
+
+def test_a_thin_spec_still_renders_without_empty_headings():
+    prompt = render_lovable_prompt(
+        business_name="X", category="salon", location="Penang", spec=FULL_SPEC
+    )
+    for absent in (
+        "HIGHLIGHTS STRIP", "WHAT THEY OFFER", "THE INTERACTIVE PIECE",
+        "FLOATING BAR ON MOBILE",
+    ):
+        assert absent not in prompt
+
+
+def test_the_model_must_supply_the_structural_fields():
+    from outreach.providers.llm import SITE_SPEC_SCHEMA, SITE_SPEC_SYSTEM
+
+    for field in ("highlights", "showcase_items", "interactive_feature", "mobile_bar"):
+        assert field in SITE_SPEC_SCHEMA["required"]
+    assert "Name the pattern" in SITE_SPEC_SYSTEM
+    assert "mirrors how they sell" in SITE_SPEC_SYSTEM
+
+
+def test_sections_are_asked_for_as_named_ui_patterns():
+    from outreach.providers.llm import SITE_SPEC_SCHEMA
+
+    described = SITE_SPEC_SCHEMA["properties"]["key_sections"]["description"]
+    assert "UI pattern" in described
+    for pattern in ("sticky nav", "card grid", "tabbed builder", "review ticker"):
+        assert pattern in described

@@ -12,6 +12,8 @@ already done costs no API calls on the next run.
 
 from __future__ import annotations
 
+from typing import Callable
+
 from .stage import Stage, parse, rank
 
 
@@ -22,13 +24,19 @@ def select_pending(
     requires: Stage,
     target: Stage,
     batch_size: int,
+    prefer: Callable[[dict[str, str]], object] | None = None,
 ) -> tuple[list[dict[str, str]], int, int]:
     """Return ``(selected, already_done, not_ready)``.
 
     ``requires`` is the stage a lead must have reached for this work to make
     sense; ``target`` is the stage this run will advance it to.
+
+    ``prefer`` sorts the eligible leads before the batch cap is applied, so a
+    bounded run spends its budget on the best candidates rather than on
+    whichever happens to sit highest in the Sheet. The sort is stable, so leads
+    of equal rank keep Sheet order.
     """
-    selected: list[dict[str, str]] = []
+    eligible: list[dict[str, str]] = []
     already = 0
     not_ready = 0
 
@@ -58,7 +66,9 @@ def select_pending(
             not_ready += 1
             continue
 
-        if len(selected) < batch_size:
-            selected.append(row)
+        eligible.append(row)
 
-    return selected, already, not_ready
+    if prefer is not None:
+        eligible.sort(key=prefer)
+
+    return eligible[:batch_size], already, not_ready

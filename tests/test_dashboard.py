@@ -706,7 +706,7 @@ def test_the_run_endpoint_passes_the_limit_through(monkeypatch, client):
 
     from outreach.dashboard import Runner
 
-    def fake_start(self, label, stages, limit=None):
+    def fake_start(self, label, stages, limit=None, social_first=None):
         seen["stages"], seen["limit"] = stages, limit
         return True
 
@@ -722,7 +722,11 @@ def test_a_blank_how_many_means_the_whole_batch(monkeypatch, client):
     from outreach.dashboard import Runner
 
     monkeypatch.setattr(
-        Runner, "start", lambda self, label, stages, limit=None: seen.update(limit=limit) or True
+        Runner,
+        "start",
+        lambda self, label, stages, limit=None, social_first=None: (
+            seen.update(limit=limit) or True
+        ),
     )
     client.post("/api/run", json={"what": "research", "limit": ""})
 

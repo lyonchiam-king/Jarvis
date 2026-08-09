@@ -353,8 +353,17 @@ def run_discovery(ctx: click.Context, dry_run: bool, refresh: bool, limit: int |
     default=None,
     help="Process fewer than the configured batch size (for a trial run).",
 )
+@click.option(
+    "--social-first/--sheet-order",
+    "social_first",
+    default=None,
+    help=(
+        "Research businesses that have a Facebook or Instagram page before "
+        "those with no web presence. Defaults to research.social_first."
+    ),
+)
 @click.pass_context
-def run_research(ctx: click.Context, limit: int | None) -> None:
+def run_research(ctx: click.Context, limit: int | None, social_first: bool | None) -> None:
     """Stage 2 -- research each discovered lead into a structured brief."""
     config = _load(ctx.obj["config_path"])
 
@@ -365,7 +374,9 @@ def run_research(ctx: click.Context, limit: int | None) -> None:
 
     writer = _writer(config)
     sheets = _sheets_client(config)
-    report = research_stage.run(config, places, sheets, writer, limit=limit)
+    report = research_stage.run(
+        config, places, sheets, writer, limit=limit, social_first=social_first
+    )
 
     click.echo("")
     for line in report.summary_lines():

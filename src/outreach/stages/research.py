@@ -41,6 +41,8 @@ class ResearchReport:
     already_researched: int = 0
     not_ready: int = 0
     selected: int = 0
+    selected_with_social: int = 0
+    social_first: bool = True
     briefed: int = 0
     social_found: int = 0
     emails_found: int = 0
@@ -55,6 +57,8 @@ class ResearchReport:
             f"  already researched      {self.already_researched}  (skipped)",
             f"  not yet discovered      {self.not_ready}  (skipped)",
             f"  selected this run       {self.selected}",
+            f"    with a social page    {self.selected_with_social}"
+            + ("  (picked first)" if self.social_first else ""),
             "",
             f"Briefs written            {self.briefed}",
             f"  social data found       {self.social_found}",
@@ -82,11 +86,33 @@ class _Pending:
         self.stage_updates.clear()
 
 
+def social_rank(lead: dict[str, str]) -> tuple[int, int]:
+    """Sort key putting the leads worth researching first.
+
+    A business whose only web presence is a Facebook page is the better lead
+    twice over. There is more to research -- a bio, photos, posts in their own
+    voice -- so the brief and the demo site come out richer. And they have
+    already decided they want to be findable online, which is most of the
+    argument already made.
+
+    Within each group, more reviews first: reviews are the raw material the
+    research brief is built from, and a business with three of them yields a
+    thin one.
+    """
+    has_social = 0 if lead.get("Website Status") == "social_only" else 1
+    try:
+        reviews = int(lead.get("Review Count") or 0)
+    except (TypeError, ValueError):
+        reviews = 0
+    return (has_social, -reviews)
+
+
 def select_leads(
     leads: dict[str, tuple[int, dict[str, str]]],
     researched_ids: set[str],
     *,
     batch_size: int,
+    social_first: bool = True,
 ) -> tuple[list[dict[str, str]], int, int]:
     """Leads still needing research. See ``outreach.selection``."""
     return select_pending(
@@ -95,6 +121,7 @@ def select_leads(
         requires=Stage.DISCOVERED,
         target=Stage.RESEARCHED,
         batch_size=batch_size,
+        prefer=social_rank if social_first else None,
     )
 
 
@@ -178,6 +205,7 @@ def run(
     writer: BriefWriter,
     *,
     limit: int | None = None,
+    social_first: bool | None = None,
 ) -> ResearchReport:
     report = ResearchReport()
     errors = ErrorLog("research")
@@ -188,8 +216,15 @@ def run(
     report.candidates = len(leads)
 
     batch_size = min(limit or config.batch_size, config.batch_size)
+    prioritise = (
+        config.research.social_first if social_first is None else social_first
+    )
     selected, already, not_ready = select_leads(
-        leads, researched, batch_size=batch_size
+        leads, researched, batch_size=batch_size, social_first=prioritise
+    )
+    report.social_first = prioritise
+    report.selected_with_social = sum(
+        1 for lead in selected if lead.get("Website Status") == "social_only"
     )
     report.already_researched = already
     report.not_ready = not_ready
@@ -203,6 +238,11 @@ def run(
         "Researching %d lead(s); %d already done, %d not ready.",
         len(selected), already, not_ready,
     )
+    if prioritise:
+        log.info(
+            "  %d of them have a social page, and were picked first.",
+            report.selected_with_social,
+        )
 
     pending = _Pending()
 

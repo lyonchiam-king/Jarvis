@@ -75,6 +75,11 @@ class ResearchSettings:
     # Flush partial results to the Sheet every N leads, so an interrupted run
     # never has to redo completed work.
     checkpoint_every: int = 10
+    # Research the businesses with a Facebook or Instagram page before the ones
+    # with no web presence at all. They yield a richer brief and a better demo,
+    # and they have already decided they want to be findable online. With a
+    # batch cap in play this is what your budget gets spent on.
+    social_first: bool = True
 
 
 @dataclass(frozen=True)
@@ -239,6 +244,7 @@ def load_config(
         email_discovery=bool(r.get("email_discovery", True)),
         request_timeout=float(r.get("request_timeout", 15.0)),
         checkpoint_every=max(1, int(r.get("checkpoint_every", 10))),
+        social_first=bool(r.get("social_first", True)),
     )
 
     o = raw.get("outreach") or {}

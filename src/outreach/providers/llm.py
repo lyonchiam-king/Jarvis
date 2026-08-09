@@ -129,9 +129,12 @@ SITE_SPEC_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                "Home page sections in scroll order, each as 'Name -- what it "
-                "contains and why it earns its place'. Order by what the "
-                "visitor needs, not by convention."
+                "Home page sections in scroll order, each as 'Name -- UI "
+                "pattern -- what it contains'. Name the pattern so a builder "
+                "knows the shape: sticky nav, hero with overlay, badge strip, "
+                "card grid opening a modal, tabbed builder, two-column story, "
+                "review ticker, map and hours. Order by what the visitor "
+                "needs, not by convention."
             ),
         },
         "primary_cta": {
@@ -185,6 +188,51 @@ SITE_SPEC_SCHEMA: dict[str, Any] = {
                 "together. What should someone sense in the first second?"
             ),
         },
+        "highlights": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Exactly three short badges for a strip under the hero -- the "
+                "differentiators a customer would care about, 2-5 words each. "
+                "True from the evidence only. Think 'Pork-Free', 'Open Kitchen', "
+                "'Walk-ins Welcome', 'Closed Thursdays'."
+            ),
+        },
+        "showcase_items": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "3-6 of the things this business actually sells, each as "
+                "'Name -- tag, tag'. The tags are sensory or benefit badges, "
+                "2-4 words. Dishes for a restaurant, treatments for a salon, "
+                "subjects for a tuition centre. Named specifically enough that "
+                "a card could be built for each -- 'Haircut' is not an item, "
+                "'Scalp-first cut and treatment' is. Empty only if the evidence "
+                "names nothing at all."
+            ),
+        },
+        "interactive_feature": {
+            "type": "string",
+            "description": (
+                "One bespoke interactive tool that mirrors how this business "
+                "actually sells, described well enough to build: the control, "
+                "the steps, and what updates live. A set-menu builder with "
+                "tabs and a running total; a 'find your treatment' picker with "
+                "three questions; a slot chooser that composes a WhatsApp "
+                "message. This is the thing that makes the site feel built for "
+                "them rather than generated. It must work by touch and must "
+                "end at the primary action."
+            ),
+        },
+        "mobile_bar": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "The one or two actions pinned to the bottom of the screen on "
+                "mobile, as 'Label -> what it does'. Usually calling and "
+                "messaging. This is where most conversions happen on a phone."
+            ),
+        },
         "signature_moment": {
             "type": "string",
             "description": (
@@ -230,6 +278,10 @@ SITE_SPEC_SCHEMA: dict[str, Any] = {
         "signature_moment",
         "motion_language",
         "micro_interactions",
+        "highlights",
+        "showcase_items",
+        "interactive_feature",
+        "mobile_bar",
     ],
     "additionalProperties": False,
 }
@@ -279,6 +331,20 @@ every template already has.
 Match the motion to the business. A spa eases in slowly and settles; a barber \
 snaps; a tuition centre is crisp and unfussy. If your motion brief would suit \
 any of the three equally, you have not designed it.
+
+**Name the pattern, and fill it with real things.** A builder can execute \
+"card grid, four cards, each opening a modal" and cannot execute "a section \
+about our services". So say which UI pattern each section is, and then \
+enumerate what goes in it -- the actual named treatments, dishes or courses, \
+each with two short tags. A brief that says "showcase the menu" produces a \
+placeholder; one that lists four dishes with their tags produces a page.
+
+**Give it one tool that mirrors how they sell.** Not decoration -- a small \
+interactive thing that does a job: a set-menu builder with tabs and a running \
+total, a three-question picker that lands on the right treatment, a slot \
+chooser that composes the WhatsApp message for them. This is what separates a \
+site built for this business from a template with their name on it. It must \
+work by touch, and it must end at the primary action.
 
 **Give it one signature moment.** One interaction someone would mention to a \
 friend, and it must be about this business -- a before/after that wipes as you \
@@ -404,6 +470,10 @@ class SiteSpec:
     # fields still constructs; the model is required to fill all of them.
     visitor: str = ""
     proof_points: tuple[str, ...] = ()
+    highlights: tuple[str, ...] = ()
+    showcase_items: tuple[str, ...] = ()
+    interactive_feature: str = ""
+    mobile_bar: tuple[str, ...] = ()
     palette: str = ""
     typography: str = ""
     avoid: tuple[str, ...] = ()
@@ -503,6 +573,37 @@ def render_lovable_prompt(
         sections,
     ]
 
+    if spec.highlights:
+        out += [
+            "",
+            "HIGHLIGHTS STRIP (directly under the hero, one row of badges)",
+            *(f"- {h}" for h in spec.highlights),
+        ]
+
+    if spec.showcase_items:
+        out += [
+            "",
+            "WHAT THEY OFFER (build a card for each, in this order)",
+            *(f"{i}. {item}" for i, item in enumerate(spec.showcase_items, start=1)),
+            "",
+            "Each card: image area, name, its tags as small badges, and a tap "
+            "target opening a modal with a little more detail. Use real photos "
+            "from the sources above where you can find them; otherwise a solid "
+            "tinted block from the palette, never a stock photo.",
+        ]
+
+    if spec.interactive_feature:
+        out += [
+            "",
+            "THE INTERACTIVE PIECE (build this properly -- it is the thing that",
+            "makes the site feel made for them)",
+            spec.interactive_feature,
+            "",
+            "It must work with a thumb, hold its state as they move through it, "
+            "show what they have chosen so far, and finish by handing them to "
+            f'"{spec.primary_cta}" with their choices already filled in.',
+        ]
+
     if spec.proof_points:
         out += [
             "",
@@ -562,6 +663,17 @@ def render_lovable_prompt(
         contact.append(f"Phone: {phone} -- as a tappable tel: link, in the header")
     if address:
         contact.append(f"Address: {address} -- with a link to Google Maps")
+    if spec.mobile_bar:
+        out += [
+            "",
+            "FLOATING BAR ON MOBILE (fixed to the bottom of the screen, always",
+            "visible, above everything else)",
+            *(f"- {action}" for action in spec.mobile_bar),
+            "",
+            "This is where most phone conversions happen. It must never cover "
+            "the last line of content -- pad the page bottom by its height.",
+        ]
+
     if contact:
         out += ["", "REAL DETAILS (use exactly these, do not paraphrase)", *contact]
 
@@ -897,6 +1009,10 @@ class BriefWriter:
             palette=str(payload.get("palette", "")).strip(),
             typography=str(payload.get("typography", "")).strip(),
             avoid=_as_tuple(payload.get("avoid")),
+            highlights=_as_tuple(payload.get("highlights")),
+            showcase_items=_as_tuple(payload.get("showcase_items")),
+            interactive_feature=str(payload.get("interactive_feature", "")).strip(),
+            mobile_bar=_as_tuple(payload.get("mobile_bar")),
             signature_moment=str(payload.get("signature_moment", "")).strip(),
             motion_language=str(payload.get("motion_language", "")).strip(),
             micro_interactions=_as_tuple(payload.get("micro_interactions")),

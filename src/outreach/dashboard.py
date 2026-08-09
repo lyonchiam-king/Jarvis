@@ -69,11 +69,17 @@ TAKES_LIMIT = {
 MAX_LIMIT = 500
 
 
-def stage_args(stage: str, limit: int | None = None) -> list[str]:
-    """CLI arguments for a stage, with the per-run count applied if it takes one."""
+def stage_args(
+    stage: str, limit: int | None = None, *, social_first: bool | None = None
+) -> list[str]:
+    """CLI arguments for a stage, with the per-run options applied."""
     args = list(STAGE_COMMANDS[stage])
     if limit and stage in TAKES_LIMIT:
         args += ["--limit", str(limit)]
+    # Only research ranks its queue; the later stages work whatever research
+    # produced, in Sheet order.
+    if social_first is not None and stage == "research":
+        args.append("--social-first" if social_first else "--sheet-order")
     return args
 
 
@@ -234,19 +240,32 @@ class Runner:
         self.running: str | None = None
         self._lock = threading.Lock()
 
-    def start(self, label: str, stages: list[str], limit: int | None = None) -> bool:
+    def start(
+        self,
+        label: str,
+        stages: list[str],
+        limit: int | None = None,
+        social_first: bool | None = None,
+    ) -> bool:
         with self._lock:
             if self.running:
                 return False
             self.running = label
             self.lines.clear()
-        threading.Thread(target=self._run, args=(stages, limit), daemon=True).start()
+        threading.Thread(
+            target=self._run, args=(stages, limit, social_first), daemon=True
+        ).start()
         return True
 
-    def _run(self, stages: list[str], limit: int | None = None) -> None:
+    def _run(
+        self,
+        stages: list[str],
+        limit: int | None = None,
+        social_first: bool | None = None,
+    ) -> None:
         try:
             for stage in stages:
-                args = stage_args(stage, limit)
+                args = stage_args(stage, limit, social_first=social_first)
                 self.lines.append(f"$ outreach {' '.join(args)}")
                 process = subprocess.Popen(
                     [sys.executable, "-m", "outreach", *args],
@@ -564,10 +583,14 @@ def create_app(config: Config) -> Flask:
             if limit > MAX_LIMIT:
                 return jsonify({"error": f"How many cannot exceed {MAX_LIMIT}"}), 400
 
+        social_first = payload.get("social_first")
+        if social_first is not None:
+            social_first = bool(social_first)
+
         if what == "full":
-            started = runner.start("Full pipeline", FULL_RUN, limit)
+            started = runner.start("Full pipeline", FULL_RUN, limit, social_first)
         elif what in STAGE_COMMANDS:
-            started = runner.start(what, [what], limit)
+            started = runner.start(what, [what], limit, social_first)
         else:
             return jsonify({"error": "unknown action"}), 400
         if not started:
@@ -777,6 +800,13 @@ PAGE = """<!doctype html>
       fewer &mdash; it applies to whichever button you press. Every run skips
       businesses it has already seen, so running twice is free.
     </p>
+    <label class="hint" style="display:flex;gap:8px;align-items:flex-start;margin-top:2px">
+      <input type="checkbox" id="socialfirst" checked style="margin-top:3px;width:auto">
+      <span><b>Research the ones with a Facebook or Instagram page first.</b>
+      They have more for us to work with, so the brief and the demo come out
+      better &mdash; and they have already decided they want to be found online.
+      With <b>How many</b> set, this is what your budget gets spent on.</span>
+    </label>
     <details style="margin-top:12px">
       <summary class="sub">Run one step on its own</summary>
       <div class="row" style="margin-top:10px">
@@ -915,7 +945,11 @@ document.querySelectorAll('button[data-run]').forEach(b =>
     const r = await fetch('/api/run', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({what: b.dataset.run, limit: $('#howmany').value.trim()})
+      body: JSON.stringify({
+        what: b.dataset.run,
+        limit: $('#howmany').value.trim(),
+        social_first: $('#socialfirst').checked,
+      })
     });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));

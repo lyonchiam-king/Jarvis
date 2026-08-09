@@ -389,3 +389,103 @@ def test_the_research_row_records_every_social_profile():
         "Instagram @espariohair https://instagram.com/espariohair"
     )
     assert row["Social Handle"] == "@espariohair", "the old column still works"
+
+
+# ----------------------------------- socials first: spend the budget on the best
+
+
+def social_lead(lead_id, *, social=False, reviews=10):
+    return {
+        **lead_row(lead_id, website_status="social_only" if social else "none"),
+        "Review Count": str(reviews),
+    }
+
+
+def test_leads_with_a_social_page_are_researched_first():
+    """They have more to work with, so the brief and the demo come out better."""
+    leads = leads_index(
+        [
+            social_lead("plain1"),
+            social_lead("fb1", social=True),
+            social_lead("plain2"),
+            social_lead("fb2", social=True),
+        ]
+    )
+    selected, _, _ = research.select_leads(leads, set(), batch_size=2)
+
+    assert [r["Lead ID"] for r in selected] == ["fb1", "fb2"]
+
+
+def test_within_a_group_the_better_reviewed_go_first():
+    """Reviews are the raw material; three of them make a thin brief."""
+    leads = leads_index(
+        [
+            social_lead("thin", social=True, reviews=3),
+            social_lead("rich", social=True, reviews=180),
+            social_lead("mid", social=True, reviews=40),
+        ]
+    )
+    selected, _, _ = research.select_leads(leads, set(), batch_size=3)
+
+    assert [r["Lead ID"] for r in selected] == ["rich", "mid", "thin"]
+
+
+def test_leads_without_socials_are_not_dropped_only_deferred():
+    leads = leads_index([social_lead("plain"), social_lead("fb", social=True)])
+    selected, _, _ = research.select_leads(leads, set(), batch_size=10)
+
+    assert {r["Lead ID"] for r in selected} == {"plain", "fb"}
+    assert selected[0]["Lead ID"] == "fb"
+
+
+def test_sheet_order_can_be_asked_for():
+    leads = leads_index([social_lead("plain"), social_lead("fb", social=True)])
+    selected, _, _ = research.select_leads(
+        leads, set(), batch_size=10, social_first=False
+    )
+    assert [r["Lead ID"] for r in selected] == ["plain", "fb"]
+
+
+def test_ordering_never_changes_which_leads_are_eligible():
+    """Ranking is about spending the budget well, not about skipping anyone."""
+    leads = leads_index(
+        [
+            social_lead("done", social=True),
+            social_lead("fresh"),
+            {**social_lead("gone"), "Stage": "Disqualified"},
+        ]
+    )
+    ranked, already_a, not_ready_a = research.select_leads(leads, {"done"}, batch_size=10)
+    plain, already_b, not_ready_b = research.select_leads(
+        leads, {"done"}, batch_size=10, social_first=False
+    )
+
+    assert {r["Lead ID"] for r in ranked} == {r["Lead ID"] for r in plain} == {"fresh"}
+    assert (already_a, not_ready_a) == (already_b, not_ready_b) == (1, 1)
+
+
+def test_a_missing_review_count_does_not_crash_the_sort():
+    leads = leads_index(
+        [
+            {**lead_row("no_count", website_status="social_only")},
+            {**lead_row("bad", website_status="social_only"), "Review Count": "n/a"},
+        ]
+    )
+    selected, _, _ = research.select_leads(leads, set(), batch_size=10)
+    assert len(selected) == 2
+
+
+def test_the_run_reports_how_many_of_the_batch_have_socials():
+    leads = leads_index(
+        [social_lead("fb", social=True), social_lead("plain")]
+    )
+    sheets = FakeSheets(leads)
+    report = research.run(config(), FakePlaces(), sheets, FakeWriter(), limit=1)
+
+    assert report.selected == 1
+    assert report.selected_with_social == 1
+    assert any("picked first" in line for line in report.summary_lines())
+
+
+def test_the_campaign_ships_with_socials_first_on():
+    assert config().research.social_first is True
