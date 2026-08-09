@@ -767,3 +767,61 @@ def test_a_nonsense_batch_cap_is_refused(campaign_app):
         "/api/campaign", json={"batch_size": "0"}
     ).get_json()["error"]
     assert path.read_text() == before
+
+
+# --------------------------- the socials preference reaches every ranked stage
+
+
+def test_the_socials_checkbox_reaches_the_brief_step():
+    """It was only being passed to research, so briefing ignored it."""
+    from outreach.dashboard import stage_args
+
+    assert "--social-first" in stage_args("site-brief", social_first=True)
+    assert "--sheet-order" in stage_args("site-brief", social_first=False)
+
+
+def test_it_reaches_drafting_too():
+    from outreach.dashboard import stage_args
+
+    assert "--social-first" in stage_args("outreach-draft", social_first=True)
+
+
+def test_discovery_is_never_given_it():
+    """Discovery has no queue to rank -- it is finding the leads."""
+    from outreach.dashboard import stage_args
+
+    assert stage_args("discovery", social_first=True) == ["run", "discovery"]
+
+
+def test_every_ranked_stage_accepts_the_flag_it_is_given():
+    from outreach.cli import main
+    from outreach.dashboard import RANKS_ITS_QUEUE, STAGE_COMMANDS
+
+    run_group = main.commands["run"]
+    for stage in RANKS_ITS_QUEUE:
+        command = run_group.commands[STAGE_COMMANDS[stage][1]]
+        options = {opt for param in command.params for opt in param.opts}
+        assert "--social-first" in options, f"{stage} cannot take --social-first"
+
+
+def test_a_full_run_carries_the_preference_into_every_step():
+    from outreach.dashboard import FULL_RUN, RANKS_ITS_QUEUE, stage_args
+
+    ranked = [s for s in FULL_RUN if s in RANKS_ITS_QUEUE]
+    assert len(ranked) == 3, "research, site-brief and outreach-draft all rank"
+    for stage in ranked:
+        assert "--social-first" in stage_args(stage, social_first=True)
+
+
+def test_the_review_queue_shows_the_social_leads_first():
+    """You review one at a time, so the best should be the one in front of you."""
+    leads = index(
+        [
+            {**lead_row("plain"), "Website Status": "none"},
+            {**lead_row("fb"), "Website Status": "social_only"},
+        ]
+    )
+    briefs = index([brief_row("plain"), brief_row("fb")])
+
+    queue = review_queue(leads, {}, briefs)
+    assert [q["lead_id"] for q in queue] == ["fb", "plain"]

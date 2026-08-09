@@ -386,8 +386,17 @@ def run_research(ctx: click.Context, limit: int | None, social_first: bool | Non
 
 @run.command("site-brief")
 @click.option("--limit", type=int, default=None, help="Process fewer than the batch size.")
+@click.option(
+    "--social-first/--sheet-order",
+    "social_first",
+    default=None,
+    help=(
+        "Work through businesses that have a Facebook or Instagram page "
+        "before those with no web presence. Defaults to research.social_first."
+    ),
+)
 @click.pass_context
-def run_site_brief(ctx: click.Context, limit: int | None) -> None:
+def run_site_brief(ctx: click.Context, limit: int | None, social_first: bool | None) -> None:
     """Stage 4 -- write a ready-to-paste Lovable prompt per researched lead."""
     config = _load(ctx.obj["config_path"])
     sheets = _sheets_client(config)
@@ -396,7 +405,10 @@ def run_site_brief(ctx: click.Context, limit: int | None) -> None:
         require_confirmation=config.lovable.require_confirmation,
         confirm=click.confirm,
     )
-    report = site_brief_stage.run(config, sheets, _writer(config), lovable, limit=limit)
+    report = site_brief_stage.run(
+        config, sheets, _writer(config), lovable,
+        limit=limit, social_first=social_first,
+    )
 
     click.echo("")
     for line in report.summary_lines():
@@ -440,8 +452,19 @@ def run_site_build(ctx: click.Context, limit: int | None) -> None:
     is_flag=True,
     help="Write the copy and print it, but create no Gmail drafts and touch no Sheet.",
 )
+@click.option(
+    "--social-first/--sheet-order",
+    "social_first",
+    default=None,
+    help=(
+        "Work through businesses that have a Facebook or Instagram page "
+        "before those with no web presence. Defaults to research.social_first."
+    ),
+)
 @click.pass_context
-def run_outreach_draft(ctx: click.Context, limit: int | None, dry_run: bool) -> None:
+def run_outreach_draft(
+    ctx: click.Context, limit: int | None, dry_run: bool, social_first: bool | None
+) -> None:
     """Stage 5 -- draft the email into Gmail and the WhatsApp text into the Sheet."""
     config = _load(ctx.obj["config_path"])
 
@@ -454,7 +477,8 @@ def run_outreach_draft(ctx: click.Context, limit: int | None, dry_run: bool) -> 
     gmail = None if dry_run else GmailClient(_credentials(config))
 
     report = outreach_stage.run(
-        config, sheets, _writer(config), gmail, limit=limit, dry_run=dry_run
+        config, sheets, _writer(config), gmail,
+        limit=limit, dry_run=dry_run, social_first=social_first,
     )
 
     click.echo("")

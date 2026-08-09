@@ -22,7 +22,7 @@ from ..errors import ErrorLog
 from ..models import utc_now
 from ..providers import gmail as gmail_provider
 from ..providers.llm import BriefWriter, build_outreach_prompt
-from ..selection import select_pending
+from ..selection import select_pending, social_rank
 from ..sheets import SheetsClient
 from ..stage import Stage, advance
 
@@ -119,6 +119,7 @@ def run(
     *,
     limit: int | None = None,
     dry_run: bool = False,
+    social_first: bool | None = None,
 ) -> OutreachReport:
     preflight(config)
 
@@ -135,12 +136,16 @@ def run(
     # With require_site on, the demo is the pitch: a lead is not ready to be
     # written to until there is a site for them to look at.
     requires = Stage.SITE_BUILT if config.outreach.require_site else Stage.RESEARCHED
+    prioritise = (
+        config.research.social_first if social_first is None else social_first
+    )
     selected, already, not_ready = select_pending(
         leads,
         set(existing),
         requires=requires,
         target=Stage.EMAIL_DRAFTED,
         batch_size=batch_size,
+        prefer=social_rank if prioritise else None,
     )
     report.already_done = already
     report.not_ready = not_ready

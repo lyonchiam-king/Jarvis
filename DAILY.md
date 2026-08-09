@@ -248,7 +248,18 @@ whichever happen to sit highest in the Sheet. Within each group, better-reviewed
 businesses come first — reviews are what the brief is built from, and three of
 them make a thin one.
 
+It applies to **researching, briefing and drafting alike** — so a lead can't
+jump the queue at a later step just because it was researched earlier.
+
 Untick it to work in plain Sheet order.
+
+> **A note if you researched leads before this existed.** Those are already
+> sitting at `Researched` in whatever order they were done. Pressing
+> **Write briefs** now takes the social ones from that backlog first, but the
+> backlog itself was gathered without the preference — so if it contains no
+> social leads at all, the first brief you get will be a website-less business.
+> That is the backlog, not the setting. It sorts itself out from the next
+> **Find leads** onward.
 
 #### Doing fewer than a full batch
 

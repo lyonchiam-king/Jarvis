@@ -879,3 +879,57 @@ def test_sections_are_asked_for_as_named_ui_patterns():
     assert "UI pattern" in described
     for pattern in ("sticky nav", "card grid", "tabbed builder", "review ticker"):
         assert pattern in described
+
+
+# ---------------------------- the preference has to hold past the research step
+
+
+def ranked_lead(lead_id, *, social=False, reviews=10):
+    return {
+        **lead(lead_id),
+        "Website Status": "social_only" if social else "none",
+        "Review Count": str(reviews),
+    }
+
+
+def test_briefs_are_written_for_the_social_leads_first():
+    """The bug: research ranked its queue, site-brief did not, so an older
+    website-less lead jumped straight to the front of the brief step."""
+    sheets = FakeSheets(
+        index(
+            [
+                ranked_lead("old_no_social"),
+                ranked_lead("fb", social=True),
+            ]
+        ),
+        index([research_row("old_no_social"), research_row("fb")]),
+    )
+    site_brief.run(config(), sheets, FakeWriter(), LovableAdapter(), limit=1)
+
+    written = [r["Lead ID"] for _tab, rows in sheets.upserts for r in rows]
+    assert written == ["fb"]
+
+
+def test_sheet_order_can_still_be_asked_for():
+    sheets = FakeSheets(
+        index([ranked_lead("plain"), ranked_lead("fb", social=True)]),
+        index([research_row("plain"), research_row("fb")]),
+    )
+    site_brief.run(
+        config(), sheets, FakeWriter(), LovableAdapter(), limit=1, social_first=False
+    )
+
+    written = [r["Lead ID"] for _tab, rows in sheets.upserts for r in rows]
+    assert written == ["plain"]
+
+
+def test_ranking_does_not_change_who_is_eligible():
+    sheets = FakeSheets(
+        index([ranked_lead("plain"), ranked_lead("fb", social=True)]),
+        index([research_row("plain"), research_row("fb")]),
+    )
+    report = site_brief.run(config(), sheets, FakeWriter(), LovableAdapter())
+
+    written = {r["Lead ID"] for _tab, rows in sheets.upserts for r in rows}
+    assert written == {"plain", "fb"}
+    assert report.prompts_written == 2

@@ -22,7 +22,7 @@ from ..errors import ErrorLog
 from ..models import utc_now
 from ..providers.llm import BriefWriter, render_lovable_prompt
 from ..providers.lovable import LovableAdapter, LovableSkipped
-from ..selection import select_pending
+from ..selection import select_pending, social_rank
 from ..sheets import SheetsClient
 from ..stage import Stage, advance
 
@@ -89,6 +89,7 @@ def run(
     lovable: LovableAdapter,
     *,
     limit: int | None = None,
+    social_first: bool | None = None,
 ) -> SiteBriefReport:
     report = SiteBriefReport()
     errors = ErrorLog("site-brief")
@@ -99,12 +100,18 @@ def run(
     report.candidates = len(leads)
 
     batch_size = min(limit or config.batch_size, config.batch_size)
+    # Same preference as research. Ranking only the research queue would leave
+    # leads researched before that setting existed sitting at the front here.
+    prioritise = (
+        config.research.social_first if social_first is None else social_first
+    )
     selected, already, not_ready = select_pending(
         leads,
         set(existing),
         requires=Stage.RESEARCHED,
         target=Stage.SITE_BRIEFED,
         batch_size=batch_size,
+        prefer=social_rank if prioritise else None,
     )
     report.already_done = already
     report.not_ready = not_ready

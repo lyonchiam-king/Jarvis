@@ -17,6 +17,32 @@ from typing import Callable
 from .stage import Stage, parse, rank
 
 
+def social_rank(lead: dict[str, str]) -> tuple[int, int]:
+    """Sort key putting the leads worth working on first.
+
+    A business whose only web presence is a Facebook page is the better lead
+    twice over. There is more to research -- a bio, photos, posts in their own
+    voice -- so the brief and the demo come out richer. And they have already
+    decided they want to be findable online, which is most of the argument
+    already made.
+
+    Within each group, more reviews first: reviews are the raw material the
+    research brief is built from, and a business with three of them yields a
+    thin one.
+
+    Lives here rather than in one stage because the preference has to hold all
+    the way down the pipeline. Ranking only the research queue leaves an
+    earlier backlog of website-less leads sitting at the front of every later
+    stage, which is exactly what it looks like when the setting is ignored.
+    """
+    has_social = 0 if lead.get("Website Status") == "social_only" else 1
+    try:
+        reviews = int(lead.get("Review Count") or 0)
+    except (TypeError, ValueError):
+        reviews = 0
+    return (has_social, -reviews)
+
+
 def select_pending(
     leads: dict[str, tuple[int, dict[str, str]]],
     done_ids: set[str],

@@ -63,6 +63,10 @@ TAKES_LIMIT = {
     "preview-messages",
 }
 
+# Stages that choose which leads to work on, and so honour the socials-first
+# preference. `discovery` has no queue to rank -- it is finding them.
+RANKS_ITS_QUEUE = {"research", "site-brief", "outreach-draft", "preview-messages"}
+
 # A guard against a slipped digit, not a policy: the campaign's own batch_size
 # is the real cap and the CLI enforces it. This only stops a typo becoming a
 # very long run.
@@ -76,9 +80,10 @@ def stage_args(
     args = list(STAGE_COMMANDS[stage])
     if limit and stage in TAKES_LIMIT:
         args += ["--limit", str(limit)]
-    # Only research ranks its queue; the later stages work whatever research
-    # produced, in Sheet order.
-    if social_first is not None and stage == "research":
+    # Every stage that picks a queue honours it. Ranking research alone left
+    # leads researched before the setting existed sitting at the front of
+    # site-brief -- which looks exactly like the checkbox being ignored.
+    if social_first is not None and stage in RANKS_ITS_QUEUE:
         args.append("--social-first" if social_first else "--sheet-order")
     return args
 
@@ -229,6 +234,10 @@ def review_queue(
                 "prompt": brief.get("Lovable Prompt", ""),
             }
         )
+
+    from .selection import social_rank
+
+    queue.sort(key=lambda q: social_rank(leads.get(q["lead_id"], (0, {}))[1]))
     return queue
 
 
@@ -802,10 +811,12 @@ PAGE = """<!doctype html>
     </p>
     <label class="hint" style="display:flex;gap:8px;align-items:flex-start;margin-top:2px">
       <input type="checkbox" id="socialfirst" checked style="margin-top:3px;width:auto">
-      <span><b>Research the ones with a Facebook or Instagram page first.</b>
+      <span><b>Work through the ones with a Facebook or Instagram page first.</b>
       They have more for us to work with, so the brief and the demo come out
       better &mdash; and they have already decided they want to be found online.
-      With <b>How many</b> set, this is what your budget gets spent on.</span>
+      Applies to researching, briefing and drafting alike, so a lead does not
+      jump the queue later. With <b>How many</b> set, this is what your budget
+      gets spent on.</span>
     </label>
     <details style="margin-top:12px">
       <summary class="sub">Run one step on its own</summary>
