@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -1170,11 +1171,15 @@ class OpenAICompatibleWriter(_Writer):
 
         try:
             payload = response.json()
-            return payload["choices"][0]["message"]["content"] or ""
+            message = payload["choices"][0]["message"]
+            if not isinstance(message, dict):
+                raise TypeError("message is not an object")
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             raise LLMError(
                 f"{self.model} returned a response in an unexpected shape: {exc}"
             ) from exc
+
+        return _reply_text(message)
 
     def _call(self, system: str, prompt: str, schema: dict[str, Any]) -> dict:
         self.call_count += 1
@@ -1205,6 +1210,27 @@ class OpenAICompatibleWriter(_Writer):
         return _validated(self._post(messages, schema), schema)
 
 
+def _reply_text(message: dict) -> str:
+    """Prefer ``content``; fall back to a reasoning field when it is empty.
+
+    DeepSeek's reasoning variants (the r1 family and its descendants) can put
+    the whole answer in ``reasoning_content`` -- or plain ``reasoning`` on some
+    backends -- and return an empty ``content`` when the output budget runs
+    out before a separate answer gets written. Discarding that field turned a
+    real reply into "reply was not JSON (char 0)": the model had answered, just
+    not in the field the plain OpenAI wire shape expects. Any of these can be
+    absent, ``None``, or not a string, so each is checked before use.
+    """
+    content = message.get("content")
+    if isinstance(content, str) and content.strip():
+        return content
+    for key in ("reasoning_content", "reasoning"):
+        value = message.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return content if isinstance(content, str) else ""
+
+
 def _json_instruction(schema: dict[str, Any]) -> str:
     """Belt and braces for backends that ignore ``response_format``."""
     return (
@@ -1215,9 +1241,26 @@ def _json_instruction(schema: dict[str, Any]) -> str:
     )
 
 
+# Matches a *complete* <think>...</think> or <reasoning>...</reasoning>
+# block. The backreference keeps an open <think> from being closed by a
+# stray </reasoning> or vice versa. Deliberately does not match an
+# unterminated tag -- see the comment in _strip_fences for why that matters.
+_THINK_BLOCK = re.compile(r"<(think|reasoning)>.*?</\1>", re.IGNORECASE | re.DOTALL)
+
+
 def _strip_fences(text: str) -> str:
-    """Models love wrapping JSON in ```json fences. Unwrap it."""
+    """Models love wrapping JSON in ```json fences, or a <think> block. Unwrap both."""
     cleaned = (text or "").strip()
+    # Strip well-formed thinking blocks first, before hunting for braces.
+    # Reasoning text routinely contains a stray brace of its own -- models
+    # write things like `I'll return {"visitor": ...}` while thinking aloud --
+    # and the brace-hunting below would grab a span starting inside the
+    # reasoning instead of the real answer. If the tag is never closed, the
+    # regex simply doesn't match and nothing is stripped: an unterminated
+    # <think> must not be treated as "the rest of the reply is thinking" and
+    # eaten wholesale, because the real answer may still be sitting right
+    # after it.
+    cleaned = _THINK_BLOCK.sub("", cleaned).strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.split("\n", 1)[-1] if "\n" in cleaned else cleaned[3:]
         if cleaned.rstrip().endswith("```"):
@@ -1229,12 +1272,63 @@ def _strip_fences(text: str) -> str:
     return cleaned.strip()
 
 
+def _snippet(text: str, limit: int = 200) -> str:
+    """A short, safe-to-log slice of what the model actually said."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
 def _validated(text: str, schema: dict[str, Any]) -> dict:
-    """Parse and check required keys. Raises ``LLMError`` with what is wrong."""
+    """Parse and check required keys. Raises ``LLMError`` naming what is wrong.
+
+    Three distinct failures get three distinct messages, because "reply was
+    not JSON (char 0)" told Lyon nothing when the actual cause was an empty
+    reply -- a reasoning model can spend its whole output budget thinking and
+    return nothing at all, which is a config problem (model choice or output
+    limit), not a prompt problem, and needs a different fix than a model that
+    replied in prose or one that got the JSON almost right.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        required_n = len(schema.get("required", []))
+        # Both counts are read from the schemas. A number typed into a string
+        # here would keep being printed long after the schema moved, and this
+        # message exists to be trusted at 7am when a batch has half failed.
+        worst_n = len(SITE_SPEC_SCHEMA.get("required", []))
+        harder_call = (
+            ""
+            if required_n >= worst_n
+            else (
+                f" The site spec is the worst of it, at {worst_n} required "
+                "fields in one shot, so a model that survives this call can "
+                "still fail that one."
+            )
+        )
+        raise LLMError(
+            "the model returned nothing at all -- no content, and no "
+            f"reasoning text either. This call needs {required_n} fields "
+            "back, and an empty reply like this is usually a reasoning model "
+            "spending its whole output budget on chain-of-thought before it "
+            f"gets to an answer.{harder_call} Two fixes: switch to a "
+            "non-reasoning model, or raise the context/output limit. Use "
+            "`test-model` in the dashboard to check a model before running "
+            "a batch."
+        )
+
+    cleaned = _strip_fences(raw)
     try:
-        payload = json.loads(_strip_fences(text))
+        payload = json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        raise LLMError(f"reply was not JSON ({exc})") from exc
+        if "{" in cleaned or "}" in cleaned:
+            raise LLMError(
+                f"reply had JSON that failed to parse ({exc}): {_snippet(raw)}"
+            ) from exc
+        raise LLMError(
+            "the model replied in prose, with no JSON object anywhere in "
+            f"it: {_snippet(raw)}"
+        ) from exc
 
     if not isinstance(payload, dict):
         raise LLMError("reply was JSON but not an object")

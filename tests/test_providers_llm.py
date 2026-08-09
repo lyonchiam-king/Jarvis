@@ -159,7 +159,7 @@ def test_two_bad_replies_fail_the_lead_rather_than_writing_a_stub():
 
 def test_prose_instead_of_json_fails_clearly():
     w = writer("I'd be happy to help with that!", "still not json")
-    with pytest.raises(LLMError, match="not JSON"):
+    with pytest.raises(LLMError, match="replied in prose"):
         w.write("evidence")
 
 
@@ -175,6 +175,105 @@ def test_a_json_array_is_rejected():
     w = writer("[1, 2, 3]", "[1, 2, 3]")
     with pytest.raises(LLMError, match="not an object"):
         w.write("evidence")
+
+
+def test_prose_error_includes_a_snippet_of_what_it_said():
+    said = "Sorry, I can't produce JSON for this request right now."
+    w = writer(said, said)
+    with pytest.raises(LLMError, match="can't produce JSON for this request"):
+        w.write("evidence")
+
+
+# --------------------------------- reasoning models (DeepSeek-style replies)
+
+
+def reasoning_reply(content="", **extra_fields):
+    """A FakeResponse shaped like a reasoning backend's chat completion."""
+    message = {"content": content, **extra_fields}
+    return FakeResponse({"choices": [{"message": message}]})
+
+
+def test_empty_content_falls_back_to_reasoning_content():
+    reply = reasoning_reply(content="", reasoning_content=_json.dumps(GOOD))
+    brief = writer(reply).write("evidence")
+    assert brief.tone == "warm and local"
+
+
+def test_empty_content_falls_back_to_reasoning_when_no_reasoning_content():
+    reply = reasoning_reply(content="", reasoning=_json.dumps(GOOD))
+    brief = writer(reply).write("evidence")
+    assert brief.tone == "warm and local"
+
+
+def test_content_wins_over_reasoning_content_when_both_are_present():
+    """Unchanged behaviour when a model answers normally -- byte-identical."""
+    reply = reasoning_reply(
+        content=_json.dumps(GOOD), reasoning_content="stale draft, ignore me"
+    )
+    brief = writer(reply).write("evidence")
+    assert brief.tone == "warm and local"
+
+
+def test_reasoning_content_none_does_not_crash():
+    reply = reasoning_reply(content="", reasoning_content=None)
+    w = writer(reply, _json.dumps(GOOD))
+    assert w.write("evidence").tone == "warm and local"
+
+
+def test_reasoning_content_non_string_does_not_crash():
+    reply = reasoning_reply(content="", reasoning_content={"nested": True})
+    w = writer(reply, _json.dumps(GOOD))
+    assert w.write("evidence").tone == "warm and local"
+
+
+def test_a_fully_empty_reply_names_the_real_cause_not_reply_was_not_json():
+    empty = reasoning_reply(content="")
+    w = writer(empty, empty)
+
+    with pytest.raises(LLMError) as excinfo:
+        w.write("evidence")
+
+    message = str(excinfo.value)
+    assert "returned nothing" in message
+    assert "non-reasoning model" in message
+    assert "context/output limit" in message
+    assert "test-model" in message
+    assert "reply was not JSON" not in message
+
+
+def test_an_empty_reply_gets_the_same_one_retry_as_any_other_bad_reply():
+    """Decision: an empty reply consumes the retry rather than failing fast.
+
+    The retry prompt asks for JSON only, no prose, no fences -- exactly the
+    shorter target a budget-starved reasoning model has the best chance of
+    finishing within its limit on a second attempt. Failing fast would throw
+    away that chance for no benefit.
+    """
+    empty = reasoning_reply(content="")
+    w = writer(empty, _json.dumps(GOOD))
+
+    brief = w.write("evidence")
+
+    assert brief.tone == "warm and local"
+    assert len(w._session.posts) == 2
+
+
+def test_a_think_block_with_a_stray_brace_does_not_corrupt_extraction():
+    reply = (
+        '<think>Let me draft this. Maybe {"tone": "wrong draft"} -- no, keep '
+        "thinking.</think>\n" + _json.dumps(GOOD)
+    )
+    brief = writer(reply).write("evidence")
+    assert brief.tone == "warm and local"
+
+
+def test_an_unterminated_think_tag_does_not_swallow_the_reply():
+    reply = (
+        "<think>still deciding how to phrase this, never actually closes\n"
+        + _json.dumps(GOOD)
+    )
+    brief = writer(reply).write("evidence")
+    assert brief.tone == "warm and local"
 
 
 # ------------------------------------------------------------- transport errors
@@ -307,3 +406,54 @@ def test_the_key_read_from_env_follows_the_provider(tmp_path, monkeypatch):
     cfg = load(path, env_file=None)
     assert cfg.secrets.llm_api_key == "or-key"
     assert cfg.secrets.anthropic_api_key == "ant-key", "still read, still separate"
+
+
+def test_the_empty_reply_message_counts_fields_from_the_schema():
+    """A number typed into this string keeps printing after the schema moves.
+
+    The message exists to be trusted at 7am when half a batch has failed, so
+    both counts are read from the schemas. It also must not tell Lyon the site
+    spec is harder than the call that just failed when the call that just
+    failed IS the site spec.
+    """
+    from outreach.providers.llm import (
+        LLMError,
+        OUTREACH_COPY_SCHEMA,
+        SITE_SPEC_SCHEMA,
+        _validated,
+    )
+
+    worst = len(SITE_SPEC_SCHEMA["required"])
+    small = len(OUTREACH_COPY_SCHEMA["required"])
+
+    with pytest.raises(LLMError) as spec_err:
+        _validated("", SITE_SPEC_SCHEMA)
+    with pytest.raises(LLMError) as copy_err:
+        _validated("", OUTREACH_COPY_SCHEMA)
+
+    assert f"needs {worst} fields" in str(spec_err.value)
+    assert "worst of it" not in str(spec_err.value)
+
+    assert f"needs {small} fields" in str(copy_err.value)
+    assert f"at {worst} required fields" in str(copy_err.value)
+
+
+def test_the_empty_reply_message_follows_the_schema_when_it_moves(monkeypatch):
+    """Pinning the live count cannot tell a computed 19 from a typed one.
+
+    So move the schema and check the message moves with it. Without this the
+    first assertion above passes against a hardcoded number for exactly as
+    long as the real count happens to equal it.
+    """
+    from outreach.providers import llm
+
+    monkeypatch.setattr(
+        llm,
+        "SITE_SPEC_SCHEMA",
+        {**llm.SITE_SPEC_SCHEMA, "required": [f"f{i}" for i in range(25)]},
+    )
+    with pytest.raises(llm.LLMError) as err:
+        llm._validated("", llm.OUTREACH_COPY_SCHEMA)
+
+    assert "at 25 required fields" in str(err.value)
+    assert "19" not in str(err.value)
