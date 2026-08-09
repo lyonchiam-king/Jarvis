@@ -470,9 +470,13 @@ def test_the_campaign_ships_in_sheet_order():
 def test_an_unknown_order_is_refused_at_load_time(tmp_path):
     from outreach.config import ConfigError, load_config as load
 
-    src = open(PENANG).read().replace(
-        "  provider: anthropic", "  order: alphabetical\n  provider: anthropic", 1
-    )
+    # Replace the real key rather than adding a second one. YAML takes the last
+    # of a duplicated key, so injecting `order:` above the existing `order:
+    # sheet` line is silently undone -- which is exactly how this test first
+    # passed against a config that was never actually invalid.
+    src = open(PENANG).read()
+    assert "\n  order: sheet\n" in src, "campaign file no longer sets research.order"
+    src = src.replace("\n  order: sheet\n", "\n  order: alphabetical\n", 1)
     path = tmp_path / "c.yaml"
     path.write_text(src)
 
