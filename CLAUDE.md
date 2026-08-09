@@ -8,8 +8,9 @@ pitch: nothing is sent to a business until their site exists.
 programmer, and drives the tool through `Dashboard.bat` -- not the CLI. Anything
 that only works on Linux, or only works from a terminal, is not finished.
 
-**Stack:** Python 3.11+, stdlib-first. Flask-free single-file dashboard
-(`http.server`). No frontend build step. Google Sheets is the database.
+**Stack:** Python 3.11+, few dependencies. The dashboard is a single Flask file
+serving one page of hand-written HTML/JS -- no templates on disk, no frontend
+build step, no npm. Google Sheets is the database.
 
 ## Commands
 

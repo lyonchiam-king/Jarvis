@@ -1220,7 +1220,8 @@ function drawModel(editing) {
            placeholder="claude-opus-5">
     <p class="hint" style="margin:0 0 14px">e.g. <code>kimi-k2.6</code> on
       ollama-cloud, <code>moonshotai/kimi-k2-thinking</code> on openrouter,
-      <code>claude-opus-5</code> on anthropic.</p>
+      <code>gemini-2.5-flash</code> on gemini, <code>claude-opus-5</code> on
+      anthropic.</p>
     <label class="sub" for="m-key">API key <span id="m-keyenv"></span></label>
     <input id="m-key" type="password" autocomplete="off" style="width:100%;margin:5px 0 4px"
            placeholder="leave blank to keep the current one">

@@ -949,6 +949,7 @@ def test_the_model_endpoint_reports_the_provider_and_key_state(model_app):
     assert d["key_env"] == "ANTHROPIC_API_KEY"
     assert d["guaranteed"] is True
     assert "ollama-cloud" in d["providers"]
+    assert "gemini" in d["providers"], "Lyon can't pick a provider the card doesn't offer"
 
 
 def test_the_api_key_is_never_sent_to_the_browser(model_app):
@@ -961,6 +962,38 @@ def test_the_api_key_is_never_sent_to_the_browser(model_app):
 
     assert "super-secret" not in body
     assert client.get("/api/model").get_json()["key_set"] is True
+
+
+def test_switching_to_gemini_works_end_to_end_and_never_echoes_the_key(model_app):
+    """Gemini rides the same wiring as every other OpenAI-compatible provider.
+
+    Saving a Gemini key must behave exactly like saving an OpenRouter one --
+    written to .env, reported only as present, and never once echoed back in
+    any response body the browser can see.
+    """
+    from outreach.env_edit import is_set
+
+    client, campaign, env_file = model_app
+    d = client.post(
+        "/api/model",
+        json={"provider": "gemini", "model": "gemini-2.5-flash", "api_key": "gm-secret-value"},
+    ).get_json()
+
+    assert d["ok"] is True
+    assert is_set(env_file, "GEMINI_API_KEY")
+    assert "gm-secret-value" in env_file.read_text()
+
+    cfg = load_config(campaign, env_file=None)
+    assert cfg.research.provider == "gemini"
+    assert cfg.research.model == "gemini-2.5-flash"
+
+    info = client.get("/api/model").get_json()
+    assert info["provider"] == "gemini"
+    assert info["key_env"] == "GEMINI_API_KEY"
+    assert info["key_set"] is True
+    assert "gm-secret-value" not in client.get("/api/model").data.decode()
+    # The whole rendered dashboard page too, not just the JSON endpoint.
+    assert "gm-secret-value" not in client.get("/").data.decode()
 
 
 def test_switching_provider_and_model_rewrites_the_campaign(model_app):

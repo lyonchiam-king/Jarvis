@@ -359,10 +359,91 @@ def test_every_provider_has_a_default_endpoint_or_demands_one():
     from outreach.config import PROVIDER_DEFAULTS
 
     assert set(PROVIDER_DEFAULTS) == {
-        "anthropic", "ollama", "ollama-cloud", "openrouter", "openai-compatible",
+        "anthropic", "ollama", "ollama-cloud", "openrouter", "gemini",
+        "openai-compatible",
     }
     assert PROVIDER_DEFAULTS["ollama"].startswith("http://localhost")
     assert PROVIDER_DEFAULTS["ollama-cloud"] == "https://ollama.com/v1"
+    assert PROVIDER_DEFAULTS["gemini"] == (
+        "https://generativelanguage.googleapis.com/v1beta/openai/"
+    )
+
+
+# --------------------------------------------------------------------- gemini
+#
+# Google's OpenAI-compatible endpoint rides the exact same writer as Ollama
+# and OpenRouter -- it is just another bearer-token backend. The one thing
+# worth pinning is the URL join: Google's documented base_url has a trailing
+# slash where the other two don't, and a silent "//chat/completions" 404s
+# for Lyon without ever explaining why.
+
+
+def test_gemini_provider_loads_with_its_default_endpoint_and_key_env(monkeypatch):
+    from outreach.config import PROVIDER_KEY_ENV, load_config as load
+
+    monkeypatch.setenv("GEMINI_API_KEY", "g-key")
+    src = open(PENANG).read().replace(
+        "  provider: anthropic", "  provider: gemini", 1
+    )
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "c.yaml"
+        path.write_text(src)
+        cfg = load(path, env_file=None)
+
+    assert cfg.research.provider == "gemini"
+    assert cfg.research.base_url == "https://generativelanguage.googleapis.com/v1beta/openai"
+    assert PROVIDER_KEY_ENV["gemini"] == "GEMINI_API_KEY"
+    assert cfg.secrets.llm_api_key == "g-key"
+
+
+def test_gemini_base_url_joins_to_exactly_one_slash():
+    """The documented base_url has a trailing slash; the endpoint must not.
+
+    Goes straight at ``OpenAICompatibleWriter`` with Google's base_url exactly
+    as their docs give it -- trailing slash and all -- rather than through
+    config, because the join lives in the writer's constructor
+    (``base_url.rstrip("/")``) and that is the one place it needs to hold for
+    every caller, not just the ones that go through ``load_config``.
+    """
+    w = writer(
+        _json.dumps(GOOD),
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        model="gemini-2.5-flash",
+    )
+    w.write("evidence")
+
+    url = w._session.posts[0]["url"]
+    assert url == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    assert "//chat/completions" not in url
+
+
+def test_an_explicit_gemini_base_url_overrides_the_default(tmp_path):
+    from outreach.config import load_config as load
+
+    src = open(PENANG).read().replace(
+        "  provider: anthropic", "  provider: gemini", 1
+    ).replace(
+        '  # base_url: ""   # override the provider\'s endpoint (a LAN Ollama box, say)',
+        "  base_url: https://my-proxy.example.com/v1beta/openai/",
+    )
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
+
+    cfg = load(path, env_file=None)
+    assert cfg.research.base_url == "https://my-proxy.example.com/v1beta/openai"
+
+
+def test_gemini_missing_key_names_gemini_api_key():
+    cfg = config(provider="gemini",
+                 base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                 model="gemini-2.5-flash")
+    cfg = replace(cfg, secrets=replace(cfg.secrets, llm_api_key=""))
+
+    with pytest.raises(LLMError, match="GEMINI_API_KEY"):
+        make_writer(cfg)
 
 
 def test_an_unknown_provider_is_refused_at_load_time(tmp_path):

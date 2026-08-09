@@ -119,6 +119,18 @@ def test_is_set_on_a_missing_file_is_false(tmp_path):
     assert is_set(tmp_path / "nope", "A") is False
 
 
+def test_gemini_api_key_presence_is_reported_without_the_value(tmp_path):
+    """Nothing provider-specific in env_edit -- this just pins that GEMINI_API_KEY
+    gets the same write-only treatment as every other provider's key."""
+    path = env(tmp_path)
+    assert is_set(path, "GEMINI_API_KEY") is False
+
+    set_key(path, "GEMINI_API_KEY", "gm-super-secret")
+
+    assert is_set(path, "GEMINI_API_KEY") is True
+    assert "gm-super-secret" in path.read_text(), "set_key does write it -- just never echoes it"
+
+
 def test_a_value_written_is_read_back_by_dotenv(tmp_path):
     """The real contract: python-dotenv must agree with what we wrote."""
     from dotenv import dotenv_values

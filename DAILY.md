@@ -438,9 +438,9 @@ from the dashboard. The **Model** card near the top shows what's in use:
 Press **Change** and you get three fields:
 
 - **Where it runs** — `anthropic`, `ollama` (this machine), `ollama-cloud`,
-  `openrouter`, or `openai-compatible`
+  `openrouter`, `gemini`, or `openai-compatible`
 - **Model** — e.g. `kimi-k2.6` on ollama-cloud,
-  `moonshotai/kimi-k2-thinking` on openrouter
+  `moonshotai/kimi-k2-thinking` on openrouter, `gemini-2.5-flash` on gemini
 - **API key** — saved into your `.env`
 
 **The key is write-only.** It goes into `.env`, is never shown again, and is

@@ -68,6 +68,11 @@ PROVIDER_DEFAULTS: dict[str, str] = {
     "ollama": "http://localhost:11434/v1",            # the local daemon
     "ollama-cloud": "https://ollama.com/v1",          # ollama.com, needs a key
     "openrouter": "https://openrouter.ai/api/v1",
+    # AI Studio's OpenAI-compatible endpoint. Google's own docs give this with
+    # a trailing slash; the join in providers/llm.py normalises that, but the
+    # value is written the documented way here so a diff against their docs
+    # is obvious.
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
     "openai-compatible": "",                          # bring your own base_url
 }
 
@@ -77,6 +82,7 @@ PROVIDER_KEY_ENV: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "ollama-cloud": "OLLAMA_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
+    "gemini": "GEMINI_API_KEY",
     "openai-compatible": "LLM_API_KEY",
 }
 

@@ -1131,7 +1131,7 @@ class BriefWriter(_Writer):
 
 
 class OpenAICompatibleWriter(_Writer):
-    """Ollama (local or cloud), OpenRouter, or anything speaking that API.
+    """Ollama (local or cloud), OpenRouter, Gemini, or anything speaking that API.
 
     The important difference from Anthropic is not the transport, it is the
     guarantee. Anthropic's structured outputs are enforced -- the response
@@ -1380,7 +1380,8 @@ def _explain_http(status: int, body: str, url: str) -> str:
         return (
             f"{url} rejected the API key (HTTP {status}). Check the key in .env "
             "matches the provider in your campaign file -- OLLAMA_API_KEY for "
-            "ollama-cloud, OPENROUTER_API_KEY for openrouter.\n" + snippet
+            "ollama-cloud, OPENROUTER_API_KEY for openrouter, GEMINI_API_KEY "
+            "for gemini.\n" + snippet
         )
     if status == 404:
         return (
