@@ -158,3 +158,51 @@ def test_errors_tab_is_append_only(client):
     )
     assert n == 1
     assert c._fake._ss.values().appends[0][0] == "t"
+
+
+# ------------------------------- manual columns: protected from automation only
+
+
+def test_a_manual_column_is_refused_by_default():
+    from outreach.sheets import SheetsError, guard_manual_column
+
+    with pytest.raises(SheetsError, match="manual column"):
+        guard_manual_column(schema.SITE_BRIEFS, "Approval Status", user_edit=False)
+
+
+def test_a_user_action_may_set_a_manual_column():
+    """Pressing Approve in the dashboard is the reason the column exists."""
+    from outreach.sheets import guard_manual_column
+
+    guard_manual_column(schema.SITE_BRIEFS, "Approval Status", user_edit=True)
+
+
+def test_automated_columns_never_need_the_flag():
+    from outreach.sheets import guard_manual_column
+
+    guard_manual_column(schema.LEADS, "Stage", user_edit=False)
+    guard_manual_column(schema.SITE_BRIEFS, "Preview URL", user_edit=False)
+
+
+def test_no_stage_ever_claims_to_be_a_user_edit():
+    """`user_edit=True` is for a person pressing a button, never for a run.
+
+    A stage runs unattended -- "the user started the run" is not consent to
+    overwrite a specific cell they typed. Confining the flag to the dashboard
+    is what keeps manual columns meaningful.
+    """
+    import ast
+    from pathlib import Path
+
+    stages = Path(__file__).resolve().parent.parent / "src" / "outreach" / "stages"
+    offenders = []
+    for path in stages.rglob("*.py"):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.keyword) and node.arg == "user_edit":
+                offenders.append(f"{path.name}:{node.value.lineno}")
+
+    assert not offenders, (
+        "a stage passed user_edit -- stages run unattended and must never "
+        f"overwrite a manual column: {offenders}"
+    )

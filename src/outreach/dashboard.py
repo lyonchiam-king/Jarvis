@@ -478,6 +478,10 @@ def create_app(config: Config) -> Flask:
                 schema.SITE_BRIEFS,
                 "Approval Status",
                 {lead_id: "Approved" if decision == "approved" else "Skip"},
+                # Approval Status is a manual column so no *stage* can set it.
+                # This is not a stage: it is the user pressing Approve on one
+                # named row, which is the whole point of the column existing.
+                user_edit=True,
             )
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200

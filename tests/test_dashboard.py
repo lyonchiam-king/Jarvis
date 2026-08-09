@@ -416,7 +416,10 @@ def test_approving_writes_only_the_approval_cell(monkeypatch):
     class FakeSheets:
         url = "https://sheet"
 
-        def update_column(self, tab, column, values):
+        def update_column(self, tab, column, values, *, user_edit=False):
+            from outreach.sheets import guard_manual_column
+
+            guard_manual_column(tab, column, user_edit=user_edit)
             writes.append((tab.title, column, dict(values)))
             return len(values)
 
@@ -436,7 +439,10 @@ def test_skipping_writes_skip(monkeypatch):
     writes = []
 
     class FakeSheets:
-        def update_column(self, tab, column, values):
+        def update_column(self, tab, column, values, *, user_edit=False):
+            from outreach.sheets import guard_manual_column
+
+            guard_manual_column(tab, column, user_edit=user_edit)
             writes.append(dict(values))
             return len(values)
 
@@ -452,7 +458,10 @@ def test_skipping_writes_skip(monkeypatch):
 
 def test_deciding_on_a_missing_row_says_so_rather_than_claiming_success(monkeypatch):
     class FakeSheets:
-        def update_column(self, tab, column, values):
+        def update_column(self, tab, column, values, *, user_edit=False):
+            from outreach.sheets import guard_manual_column
+
+            guard_manual_column(tab, column, user_edit=user_edit)
             return 0
 
     from outreach import dashboard as dash

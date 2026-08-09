@@ -180,7 +180,10 @@ class FakeSheets:
 
         return UpsertResult(inserted=len(rows))
 
-    def update_column(self, tab, column, values_by_key):
+    def update_column(self, tab, column, values_by_key, *, user_edit=False):
+        from outreach.sheets import guard_manual_column
+
+        guard_manual_column(tab, column, user_edit=user_edit)
         self.column_writes.append((tab, column, dict(values_by_key)))
         return len(values_by_key)
 

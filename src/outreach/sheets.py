@@ -31,6 +31,30 @@ class SheetsError(Exception):
     """A Sheets operation failed in a way the run cannot work around."""
 
 
+def guard_manual_column(tab: Tab, column: str, *, user_edit: bool) -> None:
+    """Refuse to write a manual column unless a human just asked for it.
+
+    Manual columns exist so a pipeline re-run can never overwrite what you
+    typed. That protects you from *automation*, not from yourself: pressing
+    Approve in the dashboard is a person changing their own cell, and refusing
+    it would mean the only way to approve a build is to hand-edit the Sheet.
+
+    So ``user_edit=True`` is legitimate for exactly one shape of caller: a
+    dashboard action, on a named row, that the user triggered in that moment.
+    It is never legitimate inside a stage -- a stage runs unattended, and
+    "the user started the run" is not consent to overwrite a specific cell.
+
+    Lives at module level so test fakes can enforce the same rule the real
+    client does. A fake that skipped it would let this exact bug ship.
+    """
+    if not tab.columns[tab.index_of(column)].manual or user_edit:
+        return
+    raise SheetsError(
+        f"{tab.title}.{column} is a manual column; refusing to write. "
+        "Only a direct user action may set it, and it must pass user_edit=True."
+    )
+
+
 def _with_retry(fn: Callable[[], object], what: str) -> object:
     """Retry transient Sheets failures with exponential backoff and jitter.
 
@@ -396,7 +420,12 @@ class SheetsClient:
         return result
 
     def update_column(
-        self, tab: Tab, column: str, values_by_key: dict[str, object]
+        self,
+        tab: Tab,
+        column: str,
+        values_by_key: dict[str, object],
+        *,
+        user_edit: bool = False,
     ) -> int:
         """Write one column for specific rows, keyed by the tab's first column.
 
@@ -404,11 +433,13 @@ class SheetsClient:
         Leads tab, say. Writing the single cell instead of the whole automated
         run avoids round-tripping every other value through a string, which
         would quietly turn a rating of 4.5 into the text "4.5".
+
+        ``user_edit`` is the only way to write a manual column. See
+        ``guard_manual_column`` for when that is legitimate.
         """
         if not values_by_key:
             return 0
-        if tab.columns[tab.index_of(column)].manual:
-            raise SheetsError(f"{tab.title}.{column} is a manual column; refusing to write")
+        guard_manual_column(tab, column, user_edit=user_edit)
 
         existing = self.read_rows(tab)
         letter = column_letter(tab.index_of(column))
