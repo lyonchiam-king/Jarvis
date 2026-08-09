@@ -59,6 +59,9 @@ PLATFORMS: dict[str, str] = {
     "t.me": "Telegram",
     "shopee.com.my": "Shopee",
     "lazada.com.my": "Lazada",
+    "linktree.com": "Linktree",
+    "carrd.co": "Carrd",
+    "business.site": "Google Business Site",
 }
 
 # Path segments that are the platform's own furniture, not a business profile.
@@ -203,6 +206,30 @@ def handle_from_url(url: str) -> str:
     if link is None or link.platform not in ("Facebook", "Instagram"):
         return ""
     return link.handle
+
+
+def profiles_text(*urls: str) -> str:
+    """Format raw URLs as ``SocialProfile.links_text`` would, with no lookup.
+
+    Used where a real lookup never ran -- most often the Leads-tab fallback
+    for a Research row whose ``Social Profiles`` cell predates that column,
+    or was written before ``PLATFORMS`` learned a domain. A URL that is not a
+    social link (a genuine website, an empty cell) classifies to nothing
+    rather than being echoed as a competitor's link. Each argument may itself
+    be several lines -- a hand-edited Sheet cell -- so blank and
+    whitespace-only lines are dropped rather than raising.
+    """
+    found: dict[tuple[str, str], SocialLink] = {}
+    for block in urls:
+        for line in (block or "").splitlines():
+            candidate = line.strip()
+            if not candidate:
+                continue
+            link = classify_social_url(candidate)
+            if link is None:
+                continue
+            found.setdefault((link.platform, link.url.casefold()), link)
+    return "\n".join(link.display() for link in found.values())
 
 
 def extract_meta_description(html: str) -> str:

@@ -21,12 +21,16 @@ def config(**lovable_overrides):
     """Campaign config with the Lovable settings pinned, not inherited.
 
     ``auto_approve`` lives in a campaign file the user edits, so any test that
-    depends on it states its own value here.
+    depends on it states its own value here. ``research.social_lookup`` is
+    pinned too: the Leads-tab fallback in stage 4 now depends on the social
+    provider's own classification, and a campaign edit to that flag must not
+    silently change what these tests assert.
     """
     cfg = load_config(PENANG, env_file=None)
     return replace(
         cfg,
         lovable=replace(cfg.lovable, **{"auto_approve": False, **lovable_overrides}),
+        research=replace(cfg.research, social_lookup=True),
     )
 
 
@@ -933,3 +937,46 @@ def test_ranking_does_not_change_who_is_eligible():
     written = {r["Lead ID"] for _tab, rows in sheets.upserts for r in rows}
     assert written == {"plain", "fb"}
     assert report.prompts_written == 2
+
+
+# --------------------------- Leads-tab fallback when Social Profiles is blank
+
+
+def test_blank_social_profiles_falls_back_to_the_leads_tab_website_url():
+    """Rows written before the Social Profiles column existed read back "".
+
+    The lead's own Website URL is a Facebook link the discovery pass already
+    has on hand -- reading it costs nothing extra, and it beats sending
+    Lovable a prompt with no social section at all.
+    """
+    sheets = FakeSheets(
+        index([{**lead("a"), "Website URL": "https://facebook.com/sun"}]),
+        index([{**research_row("a"), "Social Profiles": ""}]),
+    )
+    site_brief.run(config(), sheets, FakeWriter(), LovableAdapter())
+
+    prompt = sheets.upserts[0][1][0]["Lovable Prompt"]
+    assert "Facebook @sun https://facebook.com/sun" in prompt
+    # Render-only: the derived value must never reach the Research tab, or a
+    # future real lookup would find the cell already (wrongly) non-blank.
+    assert [tab for tab, _rows in sheets.upserts] == [schema.SITE_BRIEFS]
+
+
+def test_a_real_research_lookup_is_not_overridden_by_the_leads_tab():
+    """The Research row's own value is strictly better and must win outright."""
+    sheets = FakeSheets(
+        index([{**lead("a"), "Website URL": "https://facebook.com/wrongsalon"}]),
+        index(
+            [
+                {
+                    **research_row("a"),
+                    "Social Profiles": "Instagram @sun https://instagram.com/sun",
+                }
+            ]
+        ),
+    )
+    site_brief.run(config(), sheets, FakeWriter(), LovableAdapter())
+
+    prompt = sheets.upserts[0][1][0]["Lovable Prompt"]
+    assert "Instagram @sun https://instagram.com/sun" in prompt
+    assert "wrongsalon" not in prompt

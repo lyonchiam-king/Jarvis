@@ -242,7 +242,11 @@ def run(
             profile = social_provider.SocialProfile(status="skipped")
             if config.research.social_lookup:
                 website = lead.get("Website URL", "") or details.website_uri
-                if lead.get("Website Status") == "social_only" and website:
+                # Gated on the URL itself, not on Website Status: a lead
+                # discovered as "none" can still have Place Details return a
+                # Facebook page by the time research runs, and a stale status
+                # column must never hide a link that is sitting right there.
+                if website and social_provider.platform_for(website):
                     profile = social_provider.lookup(
                         website,
                         session=session,

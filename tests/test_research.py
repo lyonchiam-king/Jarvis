@@ -286,7 +286,7 @@ def test_limit_flag_cannot_exceed_the_configured_batch_size():
     assert report.selected == cfg.batch_size
 
 
-def test_social_lookup_runs_only_for_social_only_leads(monkeypatch):
+def test_a_lead_with_no_social_url_anywhere_is_not_looked_up(monkeypatch):
     called = []
 
     def fake_lookup(url, **kwargs):
@@ -311,6 +311,35 @@ def test_social_lookup_runs_only_for_social_only_leads(monkeypatch):
     rows = {r["Lead ID"]: r for _tab, batch in sheets.upserts for r in batch}
     assert rows["fb"]["Social Handle"] == "@sun"
     assert rows["plain"]["Social Lookup Status"] == "no social profile on record"
+
+
+def test_a_social_url_found_only_in_place_details_is_still_looked_up(monkeypatch):
+    """A lead discovered as 'none' can gain a social URL by research time --
+    Place Details is re-fetched and may now return a Facebook page that
+    discovery never saw. Website Status is a snapshot from discovery, not a
+    live gate, so it must not hide a link that is sitting right there."""
+    called = []
+
+    def fake_lookup(url, **kwargs):
+        called.append(url)
+        return SocialProfile(handle="@sun", bio="Salon in GT", status="ok")
+
+    monkeypatch.setattr(research.social_provider, "lookup", fake_lookup)
+
+    leads = leads_index([lead_row("fb", website_status="none")])
+    sheets = FakeSheets(leads)
+    details = {
+        "fb": PlaceDetails(
+            place_id="fb", name="fb", website_uri="https://facebook.com/sun"
+        )
+    }
+
+    report = research.run(config(), FakePlaces(details), sheets, FakeWriter())
+
+    assert called == ["https://facebook.com/sun"]
+    assert report.social_found == 1
+    rows = {r["Lead ID"]: r for _tab, batch in sheets.upserts for r in batch}
+    assert rows["fb"]["Social Handle"] == "@sun"
 
 
 def test_email_from_social_page_is_recorded_with_its_source(monkeypatch):

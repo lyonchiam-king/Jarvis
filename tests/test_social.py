@@ -161,3 +161,72 @@ def test_handle_from_url_still_works_for_the_columns_that_use_it():
     assert handle_from_url("https://facebook.com/sunsalon") == "@sunsalon"
     assert handle_from_url("https://instagram.com/sunsalon/") == "@sunsalon"
     assert handle_from_url("https://sunsalon.com.my") == ""
+
+
+# --------------------------------------------------- profiles_text (no lookup)
+
+
+def test_profiles_text_formats_like_links_text():
+    from outreach.providers.social import profiles_text
+
+    assert profiles_text("https://facebook.com/sun", "https://instagram.com/sunpg") == (
+        "Facebook @sun https://facebook.com/sun\n"
+        "Instagram @sunpg https://instagram.com/sunpg"
+    )
+
+
+def test_profiles_text_drops_unclassifiable_urls():
+    """A genuine website must not be echoed as if it were a social link."""
+    from outreach.providers.social import profiles_text
+
+    assert profiles_text("https://sunsalon.com.my") == ""
+    assert profiles_text("") == ""
+
+
+def test_profiles_text_drops_duplicates():
+    from outreach.providers.social import profiles_text
+
+    assert profiles_text(
+        "https://instagram.com/sunpg", "https://instagram.com/sunpg/"
+    ) == "Instagram @sunpg https://instagram.com/sunpg"
+
+
+def test_profiles_text_drops_blank_and_whitespace_only_lines():
+    """Hand-edited Sheet cells accumulate stray newlines."""
+    from outreach.providers.social import profiles_text
+
+    assert profiles_text("\n  \nhttps://facebook.com/sun\n\n   \n") == (
+        "Facebook @sun https://facebook.com/sun"
+    )
+
+
+def test_profiles_text_classifies_urls_with_no_scheme():
+    from outreach.providers.social import profiles_text
+
+    assert profiles_text("facebook.com/sun") == "Facebook @sun https://facebook.com/sun"
+
+
+def test_google_business_site_is_recognised_without_a_synthesised_handle():
+    from outreach.providers.social import profiles_text
+
+    assert profiles_text("https://espario.business.site") == (
+        "Google Business Site https://espario.business.site"
+    )
+
+
+def test_every_configured_social_domain_is_recognised_by_platform_for():
+    """The campaign's list and the provider's list must never diverge again.
+
+    This asserts the relationship, not a fixed list of domains -- pinning the
+    campaign file's contents here is exactly the trap that let the two lists
+    drift apart in the first place.
+    """
+    from outreach.config import load_config
+    from outreach.providers.social import platform_for
+
+    cfg = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    for domain in cfg.discovery.social_domains:
+        assert platform_for(f"https://x.{domain}"), (
+            f"{domain!r} is in discovery.social_domains but "
+            "outreach.providers.social.PLATFORMS does not recognise it"
+        )

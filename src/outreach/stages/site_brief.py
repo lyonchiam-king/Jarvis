@@ -20,6 +20,7 @@ from .. import schema
 from ..config import Config
 from ..errors import ErrorLog
 from ..models import utc_now
+from ..providers import social
 from ..providers.llm import BriefWriter, render_lovable_prompt
 from ..providers.lovable import LovableAdapter, LovableSkipped
 from ..selection import ORDERS, select_pending
@@ -139,8 +140,19 @@ def run(
                 )
             _row_number, research_row = brief
 
+            # The Research row's own lookup wins outright when it has one --
+            # it may carry profiles the lead's current Website URL doesn't
+            # (a page found by crawling, not just the one column). This is
+            # strictly a rendering fallback: nothing here is written back to
+            # the Research tab, so a blank cell stays visible and eligible
+            # for a real backfill later instead of being permanently masked.
+            social_profiles = (
+                research_row.get("Social Profiles", "").strip()
+                or social.profiles_text(lead.get("Website URL", ""))
+            )
+
             spec = writer.write_site_spec(
-                _spec_prompt(lead, research_row, config)
+                _spec_prompt(lead, research_row, config, social_profiles)
             )
             prompt = render_lovable_prompt(
                 business_name=name,
@@ -153,7 +165,7 @@ def run(
                 phone=lead.get("Phone", ""),
                 address=lead.get("Address", ""),
                 social_handle=research_row.get("Social Handle", ""),
-                social_profiles=research_row.get("Social Profiles", ""),
+                social_profiles=social_profiles,
                 # The builder is told to open these and work from what the
                 # business actually looks like, rather than from adjectives.
                 maps_url=lead.get("Maps URL", ""),
@@ -309,7 +321,10 @@ def build_approved(
 
 
 def _spec_prompt(
-    lead: dict[str, str], research_row: dict[str, str], config: Config
+    lead: dict[str, str],
+    research_row: dict[str, str],
+    config: Config,
+    social_profiles: str,
 ) -> str:
     from ..providers.llm import build_site_spec_prompt
 
@@ -328,5 +343,5 @@ def _spec_prompt(
         social_handle=research_row.get("Social Handle", ""),
         social_bio=research_row.get("Social Bio", ""),
         social_post=research_row.get("Social Recent Post", ""),
-        social_profiles=research_row.get("Social Profiles", ""),
+        social_profiles=social_profiles,
     )
