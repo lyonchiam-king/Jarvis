@@ -18,3 +18,8 @@ venv/
 *.log
 logs/
 scripts/morning-run.ps1
+
+# Your live campaign settings. The dashboard writes here so a `git pull`
+# never collides with what you have configured; the tracked *.yaml beside it
+# stays the starting template.
+config/campaigns/*.local.yaml

@@ -402,6 +402,25 @@ def create_app(config: Config) -> Flask:
             }
         )
 
+    def _writable_campaign() -> Path:
+        """The file to edit: a gitignored local copy, forked on first write.
+
+        The shipped campaign file is tracked by git, so writing to it means
+        every `git pull` after a settings change stops with "your local
+        changes would be overwritten". Forking once and pointing CAMPAIGN_CONFIG
+        at the copy ends that for good -- the tracked file stays the template.
+        """
+        from .campaign_edit import fork_to_local
+        from .env_edit import set_key
+
+        current_path = current().source_path
+        local = fork_to_local(current_path)
+        if local != current_path:
+            set_key(Path(".env"), "CAMPAIGN_CONFIG", str(local))
+            os.environ["CAMPAIGN_CONFIG"] = str(local)
+            log.info("Settings now live in %s, so git pull stays clean.", local)
+        return local
+
     @app.route("/api/model")
     def api_model():
         """The model in use, and whether its key is present. Never the key."""
@@ -430,7 +449,7 @@ def create_app(config: Config) -> Flask:
         The key is write-only. It goes into .env and is never read back to the
         page -- the browser only ever learns whether one is set.
         """
-        from .campaign_edit import CampaignEditError, rewrite_research
+        from .campaign_edit import CampaignEditError, rewrite_research  # noqa: F401
         from .config import PROVIDER_DEFAULTS, PROVIDER_KEY_ENV, ConfigError, load_config
         from .env_edit import EnvEditError, set_key
 
@@ -461,7 +480,10 @@ def create_app(config: Config) -> Flask:
             except EnvEditError as exc:
                 return jsonify({"error": str(exc)}), 200
 
-        path = current().source_path
+        try:
+            path = _writable_campaign()
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
         try:
             original = path.read_text()
             updated = rewrite_research(
@@ -489,7 +511,7 @@ def create_app(config: Config) -> Flask:
         reloads. Nothing already on the Sheet is touched -- changing category
         starts a new hunt alongside the old one, it does not reset anything.
         """
-        from .campaign_edit import CampaignEditError, rewrite_campaign
+        from .campaign_edit import CampaignEditError, rewrite_campaign  # noqa: F401
         from .config import ConfigError, load_config
 
         payload = request.json or {}
@@ -507,7 +529,10 @@ def create_app(config: Config) -> Flask:
             except (TypeError, ValueError):
                 return jsonify({"error": "Batch size must be a whole number"}), 400
 
-        path = current().source_path
+        try:
+            path = _writable_campaign()
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
         try:
             original = path.read_text()
             updated = rewrite_campaign(

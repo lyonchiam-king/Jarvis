@@ -30,6 +30,13 @@ pip install -e .
 python -m outreach preflight
 ```
 
+> **If `git pull` says "your local changes would be overwritten":** you had
+> changed settings in the dashboard, which used to write into a file git also
+> tracks. Run `git stash`, then `git pull`, then `git stash pop` to keep your
+> settings. From this version on it cannot happen again — the dashboard writes
+> to `penang-my.local.yaml`, which git ignores, and leaves the tracked file as
+> the starting template.
+
 `preflight` is the one that matters: it checks Google, Sheets, Gmail and
 Anthropic and prints exactly what's wrong if anything is. Get it to
 **Preflight passed** and you're done — nothing else to install.

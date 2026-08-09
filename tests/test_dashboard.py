@@ -26,6 +26,16 @@ def index(rows):
     return {r["Lead ID"]: (i + 2, r) for i, r in enumerate(rows)}
 
 
+def live(local: Path) -> Path:
+    """Whichever campaign file is in force: the local fork, else the template.
+
+    A rejected edit never forks, so the template is still the live one.
+    """
+    return local if local.exists() else local.with_name(
+        local.name.replace(".local.yaml", ".yaml")
+    )
+
+
 # ------------------------------------------------------------- the numbers
 
 
@@ -478,15 +488,22 @@ def test_deciding_on_a_missing_row_says_so_rather_than_claiming_success(monkeypa
 
 
 @pytest.fixture
-def campaign_app(tmp_path):
-    """An app pointed at a throwaway copy of the real campaign file."""
+def campaign_app(tmp_path, monkeypatch):
+    """An app pointed at a throwaway copy of the real campaign file.
+
+    Returns the *live* path -- edits fork to a gitignored `.local.yaml` so a
+    `git pull` never collides with your settings, so that is where to look.
+    """
     from pathlib import Path
+
+    from outreach.campaign_edit import local_path_for
 
     src = Path("config/campaigns/penang-my.yaml")
     path = tmp_path / "campaign.yaml"
     path.write_text(src.read_text())
+    monkeypatch.chdir(tmp_path)
     config = load_config(path, env_file=None)
-    return create_app(config).test_client(), path
+    return create_app(config).test_client(), local_path_for(path)
 
 
 def test_the_page_shows_what_you_are_hunting(client):
@@ -534,7 +551,7 @@ def test_areas_can_be_replaced_from_the_page(campaign_app):
 
 def test_saving_keeps_the_files_comments(campaign_app):
     client, path = campaign_app
-    before = path.read_text().count("#")
+    before = live(path).read_text().count("#")
     client.post("/api/campaign", json={"category": "cafe", "areas": ["Ipoh"]})
 
     assert path.read_text().count("#") == before
@@ -542,6 +559,7 @@ def test_saving_keeps_the_files_comments(campaign_app):
 
 def test_an_empty_category_is_refused_and_nothing_is_written(campaign_app):
     client, path = campaign_app
+    client.post("/api/campaign", json={"category": "cafe"})  # force the fork
     before = path.read_text()
 
     d = client.post("/api/campaign", json={"category": "  "}).get_json()
@@ -568,7 +586,7 @@ def test_a_rejected_edit_leaves_a_loadable_campaign(campaign_app):
     client.post("/api/campaign", json={"category": ""})
     client.post("/api/campaign", json={"location": ""})
 
-    cfg = load_config(path, env_file=None)
+    cfg = load_config(live(path), env_file=None)
     assert cfg.campaign.category == "hair salon"
     assert cfg.campaign.areas
 
@@ -760,6 +778,7 @@ def test_the_batch_cap_can_be_raised_from_the_page(campaign_app):
 
 def test_a_nonsense_batch_cap_is_refused(campaign_app):
     client, path = campaign_app
+    client.post("/api/campaign", json={"batch_size": "30"})  # force the fork
     before = path.read_text()
 
     assert client.post("/api/campaign", json={"batch_size": "lots"}).status_code == 400
@@ -911,8 +930,14 @@ def model_app(tmp_path, monkeypatch):
     (tmp_path / ".env").write_text("PLACES_API_KEY=abc\n")
     monkeypatch.chdir(tmp_path)
 
+    from outreach.campaign_edit import local_path_for
+
     config = load_config(campaign, env_file=None)
-    return create_app(config).test_client(), campaign, tmp_path / ".env"
+    return (
+        create_app(config).test_client(),
+        local_path_for(campaign),
+        tmp_path / ".env",
+    )
 
 
 def test_the_model_endpoint_reports_the_provider_and_key_state(model_app):
@@ -952,7 +977,7 @@ def test_switching_provider_and_model_rewrites_the_campaign(model_app):
 
 def test_the_campaign_comments_survive_a_model_switch(model_app):
     client, campaign, _env = model_app
-    before = campaign.read_text().count("#")
+    before = campaign.with_name("campaign.yaml").read_text().count("#")
 
     client.post("/api/model", json={"provider": "ollama", "model": "llama3"})
 
@@ -990,6 +1015,7 @@ def test_local_ollama_takes_no_key(model_app):
 
 def test_an_unknown_provider_is_refused(model_app):
     client, campaign, _env = model_app
+    client.post("/api/model", json={"model": "claude-opus-5"})  # force the fork
     before = campaign.read_text()
 
     assert client.post("/api/model", json={"provider": "gpt5000"}).status_code == 400
@@ -998,6 +1024,7 @@ def test_an_unknown_provider_is_refused(model_app):
 
 def test_an_empty_model_name_is_refused_and_nothing_is_written(model_app):
     client, campaign, _env = model_app
+    client.post("/api/model", json={"model": "claude-opus-5"})  # force the fork
     before = campaign.read_text()
 
     d = client.post("/api/model", json={"model": "   "}).get_json()
@@ -1011,7 +1038,7 @@ def test_a_rejected_switch_leaves_a_loadable_campaign(model_app):
     client.post("/api/model", json={"model": ""})
     client.post("/api/model", json={"provider": "nonsense"})
 
-    assert load_config(campaign, env_file=None).research.model == "claude-opus-5"
+    assert load_config(live(campaign), env_file=None).research.model == "claude-opus-5"
 
 
 def test_test_model_is_a_button_the_dashboard_can_press():
@@ -1026,3 +1053,47 @@ def test_the_page_has_a_model_section(client):
     body = client.get("/").data
     assert b'id="model"' in body
     assert b'data-run="test-model"' in body
+
+
+def test_the_first_save_forks_and_leaves_the_tracked_file_alone(campaign_app):
+    """The bug this fixes: `git pull` refusing because the dashboard wrote here."""
+    client, local = campaign_app
+    template = local.with_name("campaign.yaml")
+    before = template.read_text()
+
+    client.post("/api/campaign", json={"category": "barber shop"})
+
+    assert local.exists(), "settings should land in the local copy"
+    assert "barber shop" in local.read_text()
+    assert template.read_text() == before, "the tracked file is untouched"
+
+
+def test_the_fork_is_recorded_in_env_so_every_command_follows_it(campaign_app):
+    from outreach.env_edit import is_set
+
+    client, local = campaign_app
+    client.post("/api/campaign", json={"category": "cafe"})
+
+    assert is_set(Path(".env"), "CAMPAIGN_CONFIG")
+    assert str(local) in Path(".env").read_text()
+
+
+def test_a_second_save_edits_the_same_local_file(campaign_app):
+    client, local = campaign_app
+    client.post("/api/campaign", json={"category": "cafe"})
+    client.post("/api/campaign", json={"batch_size": "25"})
+
+    text = local.read_text()
+    assert 'category: "cafe"' in text
+    assert "batch_size: 25" in text, "the second save must not reset the first"
+
+
+def test_a_model_switch_forks_too(model_app):
+    client, local, _env = model_app
+    template = local.with_name("campaign.yaml")
+    before = template.read_text()
+
+    client.post("/api/model", json={"provider": "ollama", "model": "llama3"})
+
+    assert local.exists()
+    assert template.read_text() == before

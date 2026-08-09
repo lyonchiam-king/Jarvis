@@ -250,3 +250,67 @@ def test_batch_size_and_target_can_change_together():
     assert loaded["campaign"]["category"] == "cafe"
     assert loaded["campaign"]["areas"] == ["Ipoh"]
     assert loaded["limits"]["batch_size"] == 30
+
+
+# ------------------- settings live beside the template, not inside it
+
+
+def test_a_shipped_file_forks_to_a_local_twin(tmp_path):
+    from outreach.campaign_edit import fork_to_local
+
+    path = tmp_path / "penang-my.yaml"
+    path.write_text(SIMPLE)
+
+    local = fork_to_local(path)
+
+    assert local.name == "penang-my.local.yaml"
+    assert local.read_text() == SIMPLE
+    assert path.read_text() == SIMPLE, "the template is left alone"
+
+
+def test_forking_twice_never_clobbers_your_settings(tmp_path):
+    """The second Save must edit your file, not reset it to the template."""
+    from outreach.campaign_edit import fork_to_local
+
+    path = tmp_path / "penang-my.yaml"
+    path.write_text(SIMPLE)
+    local = fork_to_local(path)
+    local.write_text(SIMPLE.replace("hair salon", "barber shop"))
+
+    again = fork_to_local(path)
+
+    assert again == local
+    assert "barber shop" in again.read_text()
+
+
+def test_an_already_local_file_is_returned_as_is(tmp_path):
+    from outreach.campaign_edit import fork_to_local
+
+    path = tmp_path / "penang-my.local.yaml"
+    path.write_text(SIMPLE)
+    assert fork_to_local(path) == path
+
+
+def test_the_local_name_is_derived_predictably():
+    from outreach.campaign_edit import local_path_for
+
+    assert local_path_for(Path("a/b/kl-cafes.yaml")).name == "kl-cafes.local.yaml"
+    assert local_path_for(Path("a/b/kl.local.yaml")).name == "kl.local.yaml"
+
+
+def test_local_campaign_files_are_gitignored():
+    """Otherwise the next `git pull` collides with the user's own settings."""
+    ignored = Path(".gitignore").read_text()
+    assert "config/campaigns/*.local.yaml" in ignored
+
+
+def test_the_shipped_templates_are_still_tracked():
+    """They are the starting point, and they are worth versioning."""
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "config/campaigns/"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert "penang-my.yaml" in tracked
+    assert ".local.yaml" not in tracked

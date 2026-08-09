@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import yaml
 
@@ -289,3 +290,39 @@ def _validate(text: str) -> None:
     for required in ("name", "category", "location"):
         if not str(campaign.get(required) or "").strip():
             raise CampaignEditError(f"The edit would leave `campaign.{required}` empty.")
+
+
+LOCAL_SUFFIX = ".local.yaml"
+
+
+def local_path_for(path: Path) -> Path:
+    """Where this campaign's edits belong: a sibling ``*.local.yaml``.
+
+    Already-local files are returned unchanged, so forking happens once.
+    """
+    if path.name.endswith(LOCAL_SUFFIX):
+        return path
+    return path.with_name(path.name.removesuffix(".yaml") + LOCAL_SUFFIX)
+
+
+def fork_to_local(path: Path) -> Path:
+    """Copy a shipped campaign file to its local twin, once.
+
+    The dashboard writes to the campaign file, and git tracks it. That is a
+    collision waiting for the next `git pull`: the user's category and areas
+    versus whatever shipped, on every update, forever. The fix is to stop
+    editing the tracked file at all -- it becomes the starting template, and
+    every edit lands in a gitignored copy beside it.
+
+    Returns the path to write. Never overwrites an existing local file.
+    """
+    local = local_path_for(path)
+    if local == path or local.exists():
+        return local
+    try:
+        local.write_text(path.read_text())
+    except OSError as exc:
+        raise CampaignEditError(
+            f"Could not create {local.name}: {exc}"
+        ) from exc
+    return local
