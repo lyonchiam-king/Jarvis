@@ -378,20 +378,17 @@ def test_every_provider_has_a_default_endpoint_or_demands_one():
 # for Lyon without ever explaining why.
 
 
-def test_gemini_provider_loads_with_its_default_endpoint_and_key_env(monkeypatch):
+def test_gemini_provider_loads_with_its_default_endpoint_and_key_env(tmp_path, monkeypatch):
     from outreach.config import PROVIDER_KEY_ENV, load_config as load
 
     monkeypatch.setenv("GEMINI_API_KEY", "g-key")
     src = open(PENANG).read().replace(
         "  provider: anthropic", "  provider: gemini", 1
     )
-    import tempfile
-    from pathlib import Path
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
 
-    with tempfile.TemporaryDirectory() as d:
-        path = Path(d) / "c.yaml"
-        path.write_text(src)
-        cfg = load(path, env_file=None)
+    cfg = load(path, env_file=None)
 
     assert cfg.research.provider == "gemini"
     assert cfg.research.base_url == "https://generativelanguage.googleapis.com/v1beta/openai"

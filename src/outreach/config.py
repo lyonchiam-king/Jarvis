@@ -94,7 +94,7 @@ class ResearchSettings:
     # the briefs read thin.
     model: str = "claude-opus-5"
     effort: str = "medium"
-    # anthropic | ollama | ollama-cloud | openrouter | openai-compatible.
+    # anthropic | ollama | ollama-cloud | openrouter | gemini | openai-compatible.
     # Only Anthropic *guarantees* the response matches the schema; the others
     # are validated and retried once, then the lead is skipped. See llm.py.
     provider: str = "anthropic"
