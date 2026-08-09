@@ -926,7 +926,59 @@ def _to_brief(payload: dict) -> ResearchBrief:
     )
 
 
-class BriefWriter:
+class _Writer:
+    """Everything the stages use, independent of which model answers.
+
+    Subclasses implement ``_call`` only. Keeping the parsing here means a
+    switch of provider cannot quietly change the shape of a brief.
+    """
+
+    model = ""
+    call_count = 0
+
+    def _call(self, system: str, prompt: str, schema: dict[str, Any]) -> dict:
+        raise NotImplementedError
+
+    def write(self, prompt: str) -> ResearchBrief:
+        """Stage 2 -- the research brief."""
+        return _to_brief(self._call(SYSTEM_PROMPT, prompt, BRIEF_SCHEMA))
+
+    def write_site_spec(self, prompt: str) -> SiteSpec:
+        """Stage 4 -- the structured site spec behind the Lovable prompt."""
+        payload = self._call(SITE_SPEC_SYSTEM, prompt, SITE_SPEC_SCHEMA)
+        return SiteSpec(
+            site_goal=str(payload.get("site_goal", "")).strip(),
+            pages=_as_tuple(payload.get("pages")),
+            hero_headline=str(payload.get("hero_headline", "")).strip(),
+            hero_subcopy=str(payload.get("hero_subcopy", "")).strip(),
+            key_sections=_as_tuple(payload.get("key_sections")),
+            primary_cta=str(payload.get("primary_cta", "")).strip(),
+            visual_direction=str(payload.get("visual_direction", "")).strip(),
+            visitor=str(payload.get("visitor", "")).strip(),
+            proof_points=_as_tuple(payload.get("proof_points")),
+            palette=str(payload.get("palette", "")).strip(),
+            typography=str(payload.get("typography", "")).strip(),
+            avoid=_as_tuple(payload.get("avoid")),
+            highlights=_as_tuple(payload.get("highlights")),
+            showcase_items=_as_tuple(payload.get("showcase_items")),
+            interactive_feature=str(payload.get("interactive_feature", "")).strip(),
+            mobile_bar=_as_tuple(payload.get("mobile_bar")),
+            signature_moment=str(payload.get("signature_moment", "")).strip(),
+            motion_language=str(payload.get("motion_language", "")).strip(),
+            micro_interactions=_as_tuple(payload.get("micro_interactions")),
+        )
+
+    def write_outreach_copy(self, prompt: str) -> OutreachCopy:
+        """Stage 5 -- the email and the WhatsApp opener."""
+        payload = self._call(OUTREACH_COPY_SYSTEM, prompt, OUTREACH_COPY_SCHEMA)
+        return OutreachCopy(
+            subject=str(payload.get("subject", "")).strip(),
+            email_body=str(payload.get("email_body", "")).strip(),
+            whatsapp_message=str(payload.get("whatsapp_message", "")).strip(),
+        )
+
+
+class BriefWriter(_Writer):
     """Wraps the Anthropic client so stages don't import the SDK directly."""
 
     def __init__(
@@ -989,43 +1041,201 @@ class BriefWriter:
 
         return _extract_json(response)
 
-    def write(self, prompt: str) -> ResearchBrief:
-        """Stage 2 -- the research brief."""
-        return _to_brief(self._call(SYSTEM_PROMPT, prompt, BRIEF_SCHEMA))
 
-    def write_site_spec(self, prompt: str) -> SiteSpec:
-        """Stage 4 -- the structured site spec behind the Lovable prompt."""
-        payload = self._call(SITE_SPEC_SYSTEM, prompt, SITE_SPEC_SCHEMA)
-        return SiteSpec(
-            site_goal=str(payload.get("site_goal", "")).strip(),
-            pages=_as_tuple(payload.get("pages")),
-            hero_headline=str(payload.get("hero_headline", "")).strip(),
-            hero_subcopy=str(payload.get("hero_subcopy", "")).strip(),
-            key_sections=_as_tuple(payload.get("key_sections")),
-            primary_cta=str(payload.get("primary_cta", "")).strip(),
-            visual_direction=str(payload.get("visual_direction", "")).strip(),
-            visitor=str(payload.get("visitor", "")).strip(),
-            proof_points=_as_tuple(payload.get("proof_points")),
-            palette=str(payload.get("palette", "")).strip(),
-            typography=str(payload.get("typography", "")).strip(),
-            avoid=_as_tuple(payload.get("avoid")),
-            highlights=_as_tuple(payload.get("highlights")),
-            showcase_items=_as_tuple(payload.get("showcase_items")),
-            interactive_feature=str(payload.get("interactive_feature", "")).strip(),
-            mobile_bar=_as_tuple(payload.get("mobile_bar")),
-            signature_moment=str(payload.get("signature_moment", "")).strip(),
-            motion_language=str(payload.get("motion_language", "")).strip(),
-            micro_interactions=_as_tuple(payload.get("micro_interactions")),
+class OpenAICompatibleWriter(_Writer):
+    """Ollama (local or cloud), OpenRouter, or anything speaking that API.
+
+    The important difference from Anthropic is not the transport, it is the
+    guarantee. Anthropic's structured outputs are enforced -- the response
+    matches the schema or the call fails. Here, ``response_format`` is honoured
+    natively by some backends and treated as a strong hint by others, and a
+    local model may simply ignore it and reply in prose.
+
+    So the schema is checked here rather than trusted: a reply missing required
+    fields gets one corrective retry naming exactly what was absent, and after
+    that the lead fails cleanly. Writing a half-filled brief to the Sheet would
+    be worse than not researching that business at all -- it becomes a demo
+    site with holes in it and an email built on nothing.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str,
+        model: str,
+        max_tokens: int = 6000,
+        timeout: float = 180.0,
+        session: Any | None = None,
+    ) -> None:
+        if not base_url:
+            raise LLMError("No base_url for this provider -- set research.base_url.")
+
+        import requests
+
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.max_tokens = max_tokens
+        self.timeout = timeout
+        self.call_count = 0
+        self._session = session or requests.Session()
+
+    @property
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    def _post(self, messages: list[dict[str, str]], schema: dict[str, Any]) -> str:
+        body = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": self.max_tokens,
+            # Ask for schema conformance where the backend can enforce it.
+            # Backends that cannot will ignore this, which is what the
+            # validation below is for.
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "brief", "strict": True, "schema": schema},
+            },
+        }
+        url = f"{self.base_url}/chat/completions"
+        try:
+            response = self._session.post(
+                url, json=body, headers=self._headers, timeout=self.timeout
+            )
+        except Exception as exc:  # noqa: BLE001 -- per-lead error, not a crash
+            raise LLMError(f"Could not reach {url}: {type(exc).__name__}: {exc}") from exc
+
+        if response.status_code != 200:
+            raise LLMError(_explain_http(response.status_code, response.text, url))
+
+        try:
+            payload = response.json()
+            return payload["choices"][0]["message"]["content"] or ""
+        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            raise LLMError(
+                f"{self.model} returned a response in an unexpected shape: {exc}"
+            ) from exc
+
+    def _call(self, system: str, prompt: str, schema: dict[str, Any]) -> dict:
+        self.call_count += 1
+        messages = [
+            {"role": "system", "content": system + "\n\n" + _json_instruction(schema)},
+            {"role": "user", "content": prompt},
+        ]
+
+        text = self._post(messages, schema)
+        try:
+            return _validated(text, schema)
+        except LLMError as first:
+            log.info("  %s: %s -- asking it to correct itself once.", self.model, first)
+
+        # One repair attempt. Models that ignored the schema usually comply
+        # when told precisely what was wrong; a second failure is a real one.
+        messages += [
+            {"role": "assistant", "content": text[:2000]},
+            {
+                "role": "user",
+                "content": (
+                    "That was not valid. Reply with JSON only -- no prose, no "
+                    "markdown fences -- containing exactly these keys: "
+                    + ", ".join(schema.get("required", []))
+                ),
+            },
+        ]
+        return _validated(self._post(messages, schema), schema)
+
+
+def _json_instruction(schema: dict[str, Any]) -> str:
+    """Belt and braces for backends that ignore ``response_format``."""
+    return (
+        "Reply with a single JSON object and nothing else -- no prose, no "
+        "explanation, no markdown code fences. It must contain exactly these "
+        "keys: " + ", ".join(schema.get("required", [])) + ".\n\n"
+        "Schema:\n" + json.dumps(schema.get("properties", {}), indent=2)
+    )
+
+
+def _strip_fences(text: str) -> str:
+    """Models love wrapping JSON in ```json fences. Unwrap it."""
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[-1] if "\n" in cleaned else cleaned[3:]
+        if cleaned.rstrip().endswith("```"):
+            cleaned = cleaned.rstrip()[:-3]
+    # Some models still prepend a sentence. Take the outermost JSON object.
+    start, end = cleaned.find("{"), cleaned.rfind("}")
+    if start != -1 and end > start:
+        cleaned = cleaned[start : end + 1]
+    return cleaned.strip()
+
+
+def _validated(text: str, schema: dict[str, Any]) -> dict:
+    """Parse and check required keys. Raises ``LLMError`` with what is wrong."""
+    try:
+        payload = json.loads(_strip_fences(text))
+    except json.JSONDecodeError as exc:
+        raise LLMError(f"reply was not JSON ({exc})") from exc
+
+    if not isinstance(payload, dict):
+        raise LLMError("reply was JSON but not an object")
+
+    missing = [
+        key
+        for key in schema.get("required", [])
+        if key not in payload or payload[key] in (None, "")
+    ]
+    if missing:
+        raise LLMError(f"reply was missing required field(s): {', '.join(missing)}")
+    return payload
+
+
+def _explain_http(status: int, body: str, url: str) -> str:
+    snippet = (body or "")[:300]
+    if status in (401, 403):
+        return (
+            f"{url} rejected the API key (HTTP {status}). Check the key in .env "
+            "matches the provider in your campaign file -- OLLAMA_API_KEY for "
+            "ollama-cloud, OPENROUTER_API_KEY for openrouter.\n" + snippet
+        )
+    if status == 404:
+        return (
+            f"{url} returned 404. Usually the model name is wrong or not pulled "
+            f"yet. For local Ollama try `ollama pull <model>` first.\n{snippet}"
+        )
+    if status == 429:
+        return f"Rate limited by {url} (HTTP 429).\n{snippet}"
+    return f"{url} returned HTTP {status}.\n{snippet}"
+
+
+def make_writer(config: Any) -> _Writer:
+    """Build the writer this campaign asks for.
+
+    One place decides, so every stage gets the same model without each of them
+    knowing which provider is in play.
+    """
+    provider = config.research.provider
+    if provider == "anthropic":
+        return BriefWriter(
+            config.secrets.anthropic_api_key,
+            model=config.research.model,
+            effort=config.research.effort,
         )
 
-    def write_outreach_copy(self, prompt: str) -> OutreachCopy:
-        """Stage 5 -- the email and the WhatsApp opener."""
-        payload = self._call(OUTREACH_COPY_SYSTEM, prompt, OUTREACH_COPY_SCHEMA)
-        return OutreachCopy(
-            subject=str(payload.get("subject", "")).strip(),
-            email_body=str(payload.get("email_body", "")).strip(),
-            whatsapp_message=str(payload.get("whatsapp_message", "")).strip(),
+    from ..config import PROVIDER_KEY_ENV
+
+    key = config.secrets.llm_api_key
+    if provider != "ollama" and not key:
+        raise LLMError(
+            f"research.provider is {provider!r} but "
+            f"{PROVIDER_KEY_ENV.get(provider, 'the API key')} is not set in .env."
         )
+    return OpenAICompatibleWriter(
+        key, base_url=config.research.base_url, model=config.research.model
+    )
 
 
 def _as_tuple(value: Any) -> tuple[str, ...]:

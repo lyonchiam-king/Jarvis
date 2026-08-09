@@ -21,7 +21,7 @@ from . import compliance, schema
 from .auth import AuthError, get_credentials
 from .config import Config, ConfigError, load_config
 from .providers.gmail import GmailClient
-from .providers.llm import BriefWriter, LLMError
+from .providers.llm import LLMError, make_writer
 from .providers.lovable import LovableAdapter, LovableUnavailable
 from .providers.places import PlacesClient, PlacesError
 from .sheets import SheetsClient, SheetsError
@@ -58,13 +58,10 @@ def _credentials(config: Config):
         raise click.ClickException(str(exc)) from exc
 
 
-def _writer(config: Config) -> BriefWriter:
+def _writer(config: Config):
+    """The model this campaign uses -- Anthropic, Ollama, OpenRouter, whatever."""
     try:
-        return BriefWriter(
-            config.secrets.anthropic_api_key,
-            model=config.research.model,
-            effort=config.research.effort,
-        )
+        return make_writer(config)
     except LLMError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -103,6 +100,30 @@ def preflight(ctx: click.Context) -> None:
     click.echo(f"  campaign        {config.campaign.name}")
     click.echo(f"  query           {config.campaign.search_query!r}")
     click.echo(f"  country         {config.compliance.country_code}")
+    click.echo(
+        f"  model           {config.research.model} "
+        f"via {config.research.provider}"
+        + (f" ({config.research.base_url})" if config.research.base_url else "")
+    )
+    click.echo("")
+
+    # --- the model ---------------------------------------------------------
+    from .config import PROVIDER_KEY_ENV
+
+    if config.research.provider == "ollama":
+        click.echo("[ OK ] Local Ollama needs no API key")
+    elif not config.secrets.llm_api_key:
+        env_name = PROVIDER_KEY_ENV.get(config.research.provider, "the API key")
+        click.echo(f"[FAIL] {env_name} is not set in .env")
+        ok = False
+    else:
+        click.echo(f"[ OK ] {PROVIDER_KEY_ENV[config.research.provider]} is set")
+    if config.research.provider != "anthropic":
+        click.echo(
+            "[WARN] Only Anthropic guarantees the reply matches the schema. "
+            "Other providers are validated and retried once, then the lead is "
+            "skipped -- watch the Errors tab on your first run."
+        )
     click.echo("")
 
     # --- Places -----------------------------------------------------------

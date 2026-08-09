@@ -85,9 +85,24 @@ discovery:
     - lazada.com.my
 
 research:
-  # Claude Opus 5. Effort is the cost/latency dial: `medium` is strong for
-  # summarising reviews into a brief; raise to `high` if briefs read thin.
+  # Which model writes the briefs, and where it runs.
+  #   anthropic          Anthropic's API (the default)
+  #   ollama             Ollama on this machine -- no API key needed
+  #   ollama-cloud       ollama.com -- needs OLLAMA_API_KEY in .env
+  #   openrouter         openrouter.ai -- needs OPENROUTER_API_KEY
+  #   openai-compatible  anything else speaking that API; set base_url
+  #
+  # Only Anthropic *guarantees* the reply matches the required shape. On the
+  # others the reply is checked, retried once, and the lead is skipped if it
+  # still doesn't fit -- see the Errors tab. Try a new model on 5 leads first.
+  provider: anthropic
+  # e.g. kimi-k2.6 on ollama-cloud, moonshotai/kimi-k2-thinking on openrouter.
   model: claude-opus-5
+  # base_url: ""   # override the provider's endpoint (a LAN Ollama box, say)
+  #
+  # Effort is the cost/latency dial and is Anthropic-only -- it is not sent to
+  # other providers. `medium` is strong for summarising reviews into a brief;
+  # raise to `high` if briefs read thin.
   effort: medium
   # How many Google reviews to feed the model per business. Raw review text is
   # summarised and then discarded -- never written to the Sheet.

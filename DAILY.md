@@ -253,13 +253,15 @@ jump the queue at a later step just because it was researched earlier.
 
 Untick it to work in plain Sheet order.
 
-> **A note if you researched leads before this existed.** Those are already
-> sitting at `Researched` in whatever order they were done. Pressing
-> **Write briefs** now takes the social ones from that backlog first, but the
-> backlog itself was gathered without the preference — so if it contains no
-> social leads at all, the first brief you get will be a website-less business.
-> That is the backlog, not the setting. It sorts itself out from the next
-> **Find leads** onward.
+**You never need to delete anything.** The ranking looks at your *whole* Sheet
+every time, old leads and new together. Add 10 fresh leads of which 5 have a
+Facebook page, press **Write briefs**, and those 5 go first — the older
+website-less ones simply wait their turn. There is nothing to clear and nothing
+to select.
+
+Under the step buttons you'll see **what the next run would take**, by name,
+with a ★ against any lead that has a social page. That's the ranking made
+visible: check it before you press anything.
 
 #### Doing fewer than a full batch
 
@@ -382,6 +384,52 @@ When someone writes back, open the **Leads** tab and change their **Stage**:
 **`Disqualified` is permanent.** Nothing will ever contact them again. Use it
 the moment anyone asks to be left alone — that's not just courtesy, it's the
 opt-out obligation from the compliance rules.
+
+---
+
+## Using a different model
+
+The pipeline ships on Claude Opus 5, but the model is a setting. Open
+**What you're hunting** → the campaign file, or edit
+`config\campaigns\penang-my.yaml` directly:
+
+```yaml
+research:
+  provider: ollama-cloud          # anthropic | ollama | ollama-cloud | openrouter
+  model: kimi-k2.6
+```
+
+Then add the matching key to `.env`:
+
+| Provider | Where it runs | Key in `.env` |
+|---|---|---|
+| `anthropic` | Anthropic (the default) | `ANTHROPIC_API_KEY` |
+| `ollama` | Ollama on **this machine** | none needed |
+| `ollama-cloud` | ollama.com | `OLLAMA_API_KEY` |
+| `openrouter` | openrouter.ai | `OPENROUTER_API_KEY` |
+
+Press **Check setup** afterwards — it names the model and provider it's about
+to use and tells you if the key is missing.
+
+### The one thing to know before you switch
+
+**Anthropic guarantees the reply matches the required shape. The others don't.**
+
+Every stage here needs strict JSON back — a brief with named fields, a site
+spec with a palette and a motion language. Anthropic enforces that at the API
+level. Ollama and OpenRouter are *asked* to, and most good models comply, but
+some treat it as a suggestion and a smaller local model may just reply in prose.
+
+So on any other provider the reply is checked, and if fields are missing it is
+sent back once with exactly what was wrong. If it fails twice, **that lead is
+skipped and logged to the Errors tab** rather than a half-filled brief being
+written. Watch that tab on your first run with a new model: a handful of errors
+is normal, a lot means the model isn't up to the schema and you should switch
+back or try a bigger one.
+
+**Try it on 5 leads first.** Set **How many** to 5, run Research, and read the
+briefs. If the angles are as sharp as Opus gave you, scale up. If they're
+vague, you've spent 5 leads finding out instead of 60.
 
 ---
 

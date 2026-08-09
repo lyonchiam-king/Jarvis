@@ -61,6 +61,26 @@ class LimitsSettings:
     batch_size: int = 100
 
 
+# Where the model runs. Everything except `anthropic` speaks the OpenAI
+# chat-completions API, so one client covers all of them.
+PROVIDER_DEFAULTS: dict[str, str] = {
+    "anthropic": "",                                  # its own SDK
+    "ollama": "http://localhost:11434/v1",            # the local daemon
+    "ollama-cloud": "https://ollama.com/v1",          # ollama.com, needs a key
+    "openrouter": "https://openrouter.ai/api/v1",
+    "openai-compatible": "",                          # bring your own base_url
+}
+
+# Which environment variable holds the key for each provider. Local Ollama
+# needs none, which is why it is absent here rather than empty.
+PROVIDER_KEY_ENV: dict[str, str] = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "ollama-cloud": "OLLAMA_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "openai-compatible": "LLM_API_KEY",
+}
+
+
 @dataclass(frozen=True)
 class ResearchSettings:
     # Claude Opus 5 is the default. Effort is the cost/latency dial -- on this
@@ -68,6 +88,13 @@ class ResearchSettings:
     # the briefs read thin.
     model: str = "claude-opus-5"
     effort: str = "medium"
+    # anthropic | ollama | ollama-cloud | openrouter | openai-compatible.
+    # Only Anthropic *guarantees* the response matches the schema; the others
+    # are validated and retried once, then the lead is skipped. See llm.py.
+    provider: str = "anthropic"
+    # Overrides the provider's default endpoint. Required for
+    # `openai-compatible`, optional elsewhere (a LAN Ollama box, say).
+    base_url: str = ""
     max_reviews: int = 8
     social_lookup: bool = True
     email_discovery: bool = True
@@ -138,6 +165,10 @@ class Secrets:
     oauth_client_file: Path = Path("credentials/oauth_client.json")
     token_file: Path = Path("credentials/token.json")
     anthropic_api_key: str = ""
+    # The key for whichever provider research.provider names. Equals
+    # anthropic_api_key on the default provider; empty for local Ollama,
+    # which needs none.
+    llm_api_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -236,9 +267,24 @@ def load_config(
         raise ConfigError(
             f"research.effort must be one of {sorted(valid_effort)}, got {effort!r}"
         )
+    provider = str(r.get("provider", "anthropic")).strip().lower()
+    if provider not in PROVIDER_DEFAULTS:
+        raise ConfigError(
+            f"research.provider must be one of {sorted(PROVIDER_DEFAULTS)}, "
+            f"got {provider!r}"
+        )
+    base_url = str(r.get("base_url", "") or PROVIDER_DEFAULTS[provider]).rstrip("/")
+    if provider == "openai-compatible" and not base_url:
+        raise ConfigError(
+            "research.provider is 'openai-compatible', so research.base_url "
+            "must name the endpoint, e.g. http://192.168.1.10:11434/v1"
+        )
+
     research = ResearchSettings(
         model=str(r.get("model", "claude-opus-5")),
         effort=effort,
+        provider=provider,
+        base_url=base_url,
         max_reviews=int(r.get("max_reviews", 8)),
         social_lookup=bool(r.get("social_lookup", True)),
         email_discovery=bool(r.get("email_discovery", True)),
@@ -288,6 +334,9 @@ def load_config(
         ),
         token_file=Path(os.getenv("GOOGLE_TOKEN_FILE", "credentials/token.json")),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+        llm_api_key=os.getenv(
+            PROVIDER_KEY_ENV.get(provider, "ANTHROPIC_API_KEY"), ""
+        ),
     )
 
     return Config(

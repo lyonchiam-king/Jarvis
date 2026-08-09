@@ -241,6 +241,45 @@ def review_queue(
     return queue
 
 
+def queue_preview(
+    leads: dict[str, tuple[int, dict[str, str]]],
+    research_ids: set[str],
+    brief_ids: set[str],
+    *,
+    social_first: bool = True,
+    limit: int = 6,
+) -> dict[str, list[dict[str, object]]]:
+    """Exactly who the next run would pick, per stage.
+
+    Answers the question the counts cannot: *which* businesses, and are they
+    the good ones? Without this the ranking is invisible -- you press a button
+    and hope -- and the honest reaction to that is to wonder whether you need
+    to clear the Sheet first. You do not; this shows why.
+    """
+    from .selection import select_pending, social_rank
+
+    prefer = social_rank if social_first else None
+    queues = {
+        "research": (research_ids, Stage.DISCOVERED, Stage.RESEARCHED),
+        "site-brief": (brief_ids, Stage.RESEARCHED, Stage.SITE_BRIEFED),
+    }
+
+    preview: dict[str, list[dict[str, object]]] = {}
+    for name, (done, requires, target) in queues.items():
+        selected, _already, _not_ready = select_pending(
+            leads, done, requires=requires, target=target,
+            batch_size=limit, prefer=prefer,
+        )
+        preview[name] = [
+            {
+                "name": row.get("Business Name", "") or row.get("Lead ID", ""),
+                "social": row.get("Website Status") == "social_only",
+            }
+            for row in selected
+        ]
+    return preview
+
+
 class Runner:
     """Runs one stage at a time in a subprocess, streaming output to the page."""
 
@@ -466,6 +505,24 @@ def create_app(config: Config) -> Flask:
                 "has_work": summary.has_work,
             }
         )
+
+    @app.route("/api/next-up")
+    def api_next_up():
+        """Who the next run would work on, so the ranking is visible."""
+        c = current()
+        if not c.secrets.sheet_id:
+            return jsonify({"queues": {}})
+        try:
+            sheets = _sheets_client(c)
+            preview = queue_preview(
+                sheets.read_rows(schema.LEADS),
+                set(sheets.read_rows(schema.RESEARCH)),
+                set(sheets.read_rows(schema.SITE_BRIEFS)),
+                social_first=c.research.social_first,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+        return jsonify({"queues": preview})
 
     @app.route("/api/review-queue")
     def api_review_queue():
@@ -829,6 +886,7 @@ PAGE = """<!doctype html>
       </div>
       <p class="hint"><b>How many</b> above applies to these too &mdash; set it to
         5, press <b>Research</b>, and only five leads are researched.</p>
+      <div class="hint" id="nextup"></div>
       <div class="row" style="margin-top:10px">
         <button data-run="preview-leads">Preview leads</button>
         <button data-run="preview-messages">Preview messages</button>
@@ -947,7 +1005,7 @@ async function poll() {
   const busy = !!d.running;
   $('#running').textContent = busy ? `Running ${d.running}\\u2026` : '';
   document.querySelectorAll('button[data-run]').forEach(b => b.disabled = busy);
-  if (!busy && poll.wasBusy) refresh();
+  if (!busy && poll.wasBusy) { refresh(); loadNextUp(); }
   poll.wasBusy = busy;
 }
 
@@ -969,6 +1027,31 @@ document.querySelectorAll('button[data-run]').forEach(b =>
     }
     poll();
   }));
+
+// --------------------------------------------------- who is next in the queue
+
+async function loadNextUp() {
+  let d;
+  try { d = await (await fetch('/api/next-up')).json(); } catch { return; }
+  const el = $('#nextup');
+  if (!el || d.error || !d.queues) { if (el) el.innerHTML = ''; return; }
+
+  const label = {research: 'Research', 'site-brief': 'Write briefs'};
+  const parts = [];
+  for (const stage of ['research', 'site-brief']) {
+    const rows = d.queues[stage] || [];
+    if (!rows.length) continue;
+    const names = rows.map(r =>
+      esc(r.name) + (r.social ? ' <b title="has a Facebook or Instagram page">&#9733;</b>' : '')
+    ).join(', ');
+    parts.push(`<div style="margin-top:6px"><b>${label[stage]} would take:</b> ${names}</div>`);
+  }
+  el.innerHTML = parts.length
+    ? parts.join('') +
+      '<div style="margin-top:4px">&#9733; has a social page, so it goes first. ' +
+      'Older leads without one wait their turn &mdash; nothing needs deleting.</div>'
+    : '';
+}
 
 // -------------------------------------------------------- what you're hunting
 
@@ -1205,6 +1288,7 @@ async function saveBuilt(leadId, i) {
 
 refresh();
 loadTarget();
+loadNextUp();
 loadReview();
 loadQueue();
 poll();

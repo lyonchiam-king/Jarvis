@@ -825,3 +825,73 @@ def test_the_review_queue_shows_the_social_leads_first():
 
     queue = review_queue(leads, {}, briefs)
     assert [q["lead_id"] for q in queue] == ["fb", "plain"]
+
+
+# ------------------------------------------ seeing the queue before spending
+
+
+def queued_lead(lead_id, stage, *, social=False, reviews=20):
+    return {
+        "Lead ID": lead_id,
+        "Stage": stage,
+        "Business Name": f"Biz {lead_id}",
+        "Website Status": "social_only" if social else "none",
+        "Review Count": str(reviews),
+    }
+
+
+def test_the_preview_shows_who_the_next_run_would_take():
+    from outreach.dashboard import queue_preview
+
+    leads = index(
+        [
+            queued_lead("old", "Researched"),
+            queued_lead("new_fb", "Researched", social=True),
+            queued_lead("fresh", "Discovered", social=True),
+        ]
+    )
+    preview = queue_preview(leads, set(), set())
+
+    assert [q["name"] for q in preview["site-brief"]] == ["Biz new_fb", "Biz old"]
+    assert preview["site-brief"][0]["social"] is True
+    assert [q["name"] for q in preview["research"]] == ["Biz fresh"]
+
+
+def test_an_old_backlog_does_not_block_a_new_social_lead():
+    """The question that prompted this: do I have to clear the Sheet first?"""
+    from outreach.dashboard import queue_preview
+
+    old = [queued_lead(f"old{i}", "Researched") for i in range(12)]
+    new = [queued_lead(f"new{i}", "Researched", social=True) for i in range(5)]
+    preview = queue_preview(index(old + new), set(), set(), limit=5)
+
+    assert all(q["social"] for q in preview["site-brief"])
+
+
+def test_the_preview_respects_sheet_order_when_ranking_is_off():
+    from outreach.dashboard import queue_preview
+
+    leads = index(
+        [
+            queued_lead("plain", "Researched"),
+            queued_lead("fb", "Researched", social=True),
+        ]
+    )
+    preview = queue_preview(leads, set(), set(), social_first=False)
+    assert preview["site-brief"][0]["name"] == "Biz plain"
+
+
+def test_already_done_leads_are_not_previewed():
+    from outreach.dashboard import queue_preview
+
+    leads = index([queued_lead("done", "Researched", social=True)])
+    preview = queue_preview(leads, set(), {"done"})
+    assert preview["site-brief"] == []
+
+
+def test_the_page_has_somewhere_to_show_the_queue(client):
+    assert b'id="nextup"' in client.get("/").data
+
+
+def test_next_up_is_empty_without_a_sheet(client):
+    assert client.get("/api/next-up").get_json() == {"queues": {}}
