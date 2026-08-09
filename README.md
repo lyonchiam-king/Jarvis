@@ -405,6 +405,18 @@ The seed is written once on insert and never rewritten, so turning
 `auto_approve` on later cannot retroactively approve a lead you already
 declined.
 
+### Regenerating existing briefs with `--rewrite`
+
+```bash
+outreach run site-brief --rewrite
+```
+
+A normal `site-brief` run skips any lead that already has a row in the **Site Briefs** tab. When the prompt template itself improves, `--rewrite` regenerates those briefs from the new template. **The model is non-deterministic** — it writes a fresh brief from scratch rather than editing the old one, so a prompt you already read and approved will come back different and needs re-review.
+
+The command skips any row with a `Lovable Project ID` (a site already built), so it cannot orphan a live site. It costs the same as a normal brief — one model call per lead — and preserves `Approval Status`, the Preview URL, and the Created At timestamp.
+
+If interrupted midway through a batch, a re-run may regenerate a handful of leads twice, since there's no marker on the row for "already rewritten today". Use `--limit` the same way: test small first.
+
 ### Stage 4b — actually building
 
 ```bash

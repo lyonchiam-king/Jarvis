@@ -300,6 +300,32 @@ can't turn `6` into `60`. To change the cap itself, press **Change** in
 > **Expect `0 need messages drafted` on your first run.** Nothing has a demo
 > yet, so there is nothing to write about. That corrects itself from tomorrow.
 
+#### Rewriting a brief you already have
+
+**Write briefs** only ever writes a *new* prompt — a lead that already has a
+row in the **Site Briefs** tab is skipped, forever, so re-running the button
+never costs you twice. That's normally exactly right, but it means an
+improvement to how the prompt itself is written (richer imagery instructions,
+better motion, whatever) never reaches a brief that already exists. That's
+what **Rewrite existing briefs**, under *Run one step on its own*, is for.
+
+**Same cost as Write briefs — about 2 cents and one model call per lead —
+and the result is a different prompt, not an edited one.** The model is not
+deterministic: it does not touch up the old copy, it writes a fresh brief
+from scratch against the current template. If you already read and
+approved a brief, rewriting it makes that approval stale — **go back and
+read it again** before you build from it.
+
+It skips anything already built (a **Lovable Project ID** on the row), so it
+can never orphan a site you already have live. Everything else about that
+row — **Approval Status**, the built link, when it was first created — is
+left exactly as it was; only the prompt and the business name change.
+
+If it's interrupted partway through a big batch, a re-run may rewrite a
+handful of leads twice — there's no marker on the row for "already rewritten
+today", so use **How many** the same way you would for any other expensive
+step: small first, then the rest.
+
 ### 2. Review the briefs — one at a time
 
 The card shows one business: its rating, what customers praise, the problem a
@@ -530,6 +556,7 @@ plausibly search online first. Skip anything where the buyer never Googles.
 | Find leads | A few cents in Google searches |
 | Research | ~6 cents per lead |
 | Write briefs | ~2 cents per lead |
+| Rewrite existing briefs | ~2 cents per lead, same as Write briefs |
 | Draft messages | ~2 cents per lead |
 | **Review (step 2)** | **Free — and Skip here saves the expensive part** |
 | **Build (step 3)** | **Lovable credits — by far the largest line** |

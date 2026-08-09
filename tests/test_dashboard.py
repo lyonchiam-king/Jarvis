@@ -1097,3 +1097,72 @@ def test_a_model_switch_forks_too(model_app):
 
     assert local.exists()
     assert template.read_text() == before
+
+
+# --------------------------------------------------- rewriting existing briefs
+
+
+def test_rewrite_button_is_wired_to_the_real_cli_flag():
+    from outreach.cli import main
+    from outreach.dashboard import stage_args
+
+    assert STAGE_COMMANDS["site-brief-rewrite"] == ["run", "site-brief", "--rewrite"]
+
+    run_group = main.commands["run"]
+    site_brief_cmd = run_group.commands["site-brief"]
+    options = {opt for param in site_brief_cmd.params for opt in param.opts}
+    assert "--rewrite" in options
+
+    assert stage_args("site-brief-rewrite", 5) == [
+        "run", "site-brief", "--rewrite", "--limit", "5",
+    ]
+
+
+def test_rewrite_takes_a_limit_like_its_non_rewrite_sibling():
+    """The trap this guards: adding a new STAGE_COMMANDS entry whose args[1]
+    happens to be an existing, --limit-taking stage (here, ``site-brief``)
+    passes `test_no_stage_outside_the_set_is_given_a_limit` even if you
+    forget to add the new key to TAKES_LIMIT -- because that test resolves
+    the underlying `run` subcommand, not the dashboard key. So the omission
+    has to be caught here, on the dashboard's own behaviour.
+    """
+    from outreach.dashboard import TAKES_LIMIT, stage_args
+
+    assert "site-brief-rewrite" in TAKES_LIMIT
+    assert "--limit" not in stage_args("site-brief-rewrite")
+    assert "--limit" in stage_args("site-brief-rewrite", 3)
+
+
+def test_the_page_offers_a_rewrite_button_with_its_cost_and_risk_named(client):
+    """Lyon reads the page, not the handbook, before he presses a button that
+    spends money and can silently invalidate a brief he already approved --
+    so both have to be said right next to the button."""
+    body = client.get("/").data.decode()
+
+    assert 'data-run="site-brief-rewrite"' in body
+    rewrite_pos = body.index('data-run="site-brief-rewrite"')
+    nearby = body[rewrite_pos : rewrite_pos + 700]
+
+    assert "model call" in nearby or "cost" in nearby.lower()
+    assert "already read and approved" in nearby or "different" in nearby
+
+
+def test_full_run_never_includes_the_rewrite():
+    """Rewriting is a deliberate, occasional action -- never part of the
+    everyday batch, or a template tweak would silently re-spend on every
+    lead ever briefed."""
+    assert "site-brief-rewrite" not in FULL_RUN
+
+
+def test_the_rewrite_button_obeys_the_socials_first_tick():
+    """A button that ignores the box beside it is the reported bug, again.
+
+    Rewriting picks a queue exactly as writing does, and `_run_rewrite`
+    already threads `social_first` through to `select_rewrite`. Only the
+    dashboard wiring was missing, so the tick silently did nothing here.
+    """
+    from outreach.dashboard import RANKS_ITS_QUEUE, stage_args
+
+    assert "site-brief-rewrite" in RANKS_ITS_QUEUE
+    assert "--social-first" in stage_args("site-brief-rewrite", social_first=True)
+    assert "--sheet-order" in stage_args("site-brief-rewrite", social_first=False)

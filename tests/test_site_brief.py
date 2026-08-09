@@ -178,10 +178,50 @@ class FakeSheets:
         return self._tabs.get(tab.title, {})
 
     def upsert(self, tab, rows, *, on_conflict=None):
+        """Mirrors SheetsClient.upsert: on_conflict actually merges against
+        what's stored, and only automated columns are overwritten -- a manual
+        column (or one an on_conflict declined to touch) keeps what was
+        already there. A fake that skipped this once let a manual-column bug
+        ship past a green suite (see CLAUDE.md); the same risk applies to any
+        AUTOMATED column an on_conflict is relied on to preserve, which is
+        exactly what the rewrite tests below are checking.
+        """
         self.upserts.append((tab, list(rows)))
         from outreach.sheets import UpsertResult
 
-        return UpsertResult(inserted=len(rows))
+        store = self._tabs.setdefault(tab.title, {})
+        automated = {
+            tab.columns[i].name for start, end in tab.automated_runs() for i in range(start, end)
+        }
+        result = UpsertResult()
+
+        for incoming in rows:
+            key = str(incoming.get(tab.columns[0].name, "")).strip()
+            if not key:
+                result.skipped += 1
+                continue
+
+            match = store.get(key)
+            if match is None:
+                row_number = len(store) + 2
+                full_row = {c.name: incoming.get(c.name, "") for c in tab.columns}
+                store[key] = (row_number, full_row)
+                result.inserted += 1
+                continue
+
+            row_number, existing_row = match
+            merged = on_conflict(existing_row, incoming) if on_conflict else incoming
+            if merged is None:
+                result.skipped += 1
+                continue
+
+            updated_row = dict(existing_row)
+            for name in automated:
+                updated_row[name] = merged.get(name, "")
+            store[key] = (row_number, updated_row)
+            result.updated += 1
+
+        return result
 
     def update_column(self, tab, column, values_by_key, *, user_edit=False):
         from outreach.sheets import guard_manual_column
@@ -1187,3 +1227,233 @@ def test_a_real_research_lookup_is_not_overridden_by_the_leads_tab():
     prompt = sheets.upserts[0][1][0]["Lovable Prompt"]
     assert "Instagram @sun https://instagram.com/sun" in prompt
     assert "wrongsalon" not in prompt
+
+
+# ------------------------------------------------------------- rewrite
+
+
+def existing_brief(
+    lead_id,
+    *,
+    prompt="old prompt, written before the template changed",
+    approval="Approved",
+    project_id="",
+    preview_url="",
+    created_at="2024-01-01T00:00:00Z",
+):
+    return {
+        "Lead ID": lead_id,
+        "Business Name": f"Salon {lead_id}",
+        "Lovable Prompt": prompt,
+        "Approval Status": approval,
+        "Lovable Project ID": project_id,
+        "Preview URL": preview_url,
+        "Created At": created_at,
+    }
+
+
+def test_preserve_rewrite_fields_keeps_the_built_link_and_swaps_only_the_prompt():
+    """Unit-level: the on_conflict function itself, isolated from the Sheet.
+
+    Broken by commenting out any one of the three preserved keys in
+    ``_preserve_rewrite_fields`` -- verified by hand while writing this test,
+    each removal turns the corresponding assertion into a KeyError/blank
+    mismatch.
+    """
+    from outreach.stages.site_brief import _preserve_rewrite_fields
+
+    existing = existing_brief(
+        "a", project_id="proj_1", preview_url="https://preview.test/a"
+    )
+    incoming = {"Lead ID": "a", "Business Name": "Salon a", "Lovable Prompt": "new"}
+
+    merged = _preserve_rewrite_fields(existing, incoming)
+
+    assert merged["Lovable Prompt"] == "new"
+    assert merged["Lovable Project ID"] == "proj_1"
+    assert merged["Preview URL"] == "https://preview.test/a"
+    assert merged["Created At"] == "2024-01-01T00:00:00Z"
+
+
+def test_rewrite_replaces_the_prompt_on_an_existing_row():
+    sheets = FakeSheets(
+        index([lead("a", stage="Site Briefed")]),
+        index([research_row("a")]),
+        briefs=index([existing_brief("a")]),
+    )
+    report = site_brief.run(
+        config(), sheets, FakeWriter(), LovableAdapter(), rewrite=True
+    )
+
+    assert report.rewritten == 1
+    stored = sheets.read_rows(schema.SITE_BRIEFS)["a"][1]
+    assert stored["Lovable Prompt"] != "old prompt, written before the template changed"
+    assert "Sun Salon" not in stored["Lovable Prompt"]  # uses the lead's own name
+
+
+def test_rewrite_preserves_project_id_preview_url_and_created_at():
+    """The data-loss guard. A plain upsert with no on_conflict blanks every
+    AUTOMATED column it doesn't mention -- Lovable Project ID and Preview URL
+    are two of exactly those columns. Proven non-vacuous by deleting
+    ``on_conflict=_preserve_rewrite_fields`` from the ``_flush`` call inside
+    ``_run_rewrite``: with it gone this test fails, because FakeSheets.upsert
+    (now mirroring the real client) blanks Preview URL and Created At since
+    the incoming row never carries them.
+    """
+    sheets = FakeSheets(
+        index([lead("a", stage="Site Briefed")]),
+        index([research_row("a")]),
+        briefs=index(
+            [
+                existing_brief(
+                    "a",
+                    preview_url="https://preview.test/a",
+                    created_at="2024-03-01T00:00:00Z",
+                )
+            ]
+        ),
+    )
+    site_brief.run(config(), sheets, FakeWriter(), LovableAdapter(), rewrite=True)
+
+    stored = sheets.read_rows(schema.SITE_BRIEFS)["a"][1]
+    assert stored["Lovable Project ID"] == ""
+    assert stored["Preview URL"] == "https://preview.test/a"
+    assert stored["Created At"] == "2024-03-01T00:00:00Z"
+
+
+def test_rewrite_never_emits_approval_status_in_an_upsert_row_or_column_write():
+    sheets = FakeSheets(
+        index([lead("a", stage="Site Briefed")]),
+        index([research_row("a")]),
+        briefs=index([existing_brief("a", approval="Approved")]),
+    )
+    site_brief.run(config(), sheets, FakeWriter(), LovableAdapter(), rewrite=True)
+
+    incoming_row = sheets.upserts[0][1][0]
+    assert "Approval Status" not in incoming_row
+    assert all(write[1] != "Approval Status" for write in sheets.column_writes)
+    # It's still there, untouched -- just never written by this stage.
+    stored = sheets.read_rows(schema.SITE_BRIEFS)["a"][1]
+    assert stored["Approval Status"] == "Approved"
+
+
+def test_rewrite_skips_a_row_whose_lovable_project_id_is_set():
+    sheets = FakeSheets(
+        index([lead("a", stage="Site Built")]),
+        index([research_row("a")]),
+        briefs=index([existing_brief("a", project_id="proj_1")]),
+    )
+    writer = FakeWriter()
+    report = site_brief.run(config(), sheets, writer, LovableAdapter(), rewrite=True)
+
+    assert report.selected == 0
+    assert report.rewritten == 0
+    assert writer.call_count == 0
+    assert sheets.upserts == []
+
+
+def test_rewrite_honours_limit():
+    sheets = FakeSheets(
+        index(
+            [
+                lead("a", stage="Site Briefed"),
+                lead("b", stage="Site Briefed"),
+            ]
+        ),
+        index([research_row("a"), research_row("b")]),
+        briefs=index([existing_brief("a"), existing_brief("b")]),
+    )
+    report = site_brief.run(
+        config(), sheets, FakeWriter(), LovableAdapter(), rewrite=True, limit=1
+    )
+
+    assert report.selected == 1
+    assert report.rewritten == 1
+    written = {r["Lead ID"] for _tab, rows in sheets.upserts for r in rows}
+    assert len(written) == 1
+
+
+def test_a_second_rewrite_over_the_same_rows_is_safe():
+    sheets = FakeSheets(
+        index([lead("a", stage="Site Briefed")]),
+        index([research_row("a")]),
+        briefs=index(
+            [existing_brief("a", preview_url="", created_at="2024-01-01T00:00:00Z")]
+        ),
+    )
+    first = site_brief.run(
+        config(), sheets, FakeWriter(), LovableAdapter(), rewrite=True
+    )
+    second = site_brief.run(
+        config(), sheets, FakeWriter(), LovableAdapter(), rewrite=True
+    )
+
+    assert (first.rewritten, first.errors) == (1, 0)
+    assert (second.rewritten, second.errors) == (1, 0)
+    stored = sheets.read_rows(schema.SITE_BRIEFS)["a"][1]
+    assert stored["Created At"] == "2024-01-01T00:00:00Z"
+    assert stored["Lovable Project ID"] == ""
+
+
+def test_rewrite_off_is_byte_identical_to_the_default_run():
+    """Guards the ``_flush``/``_Pending`` refactor: passing ``rewrite=False``
+    (or leaving it out) must reach the exact same code path as before this
+    task, producing the exact row this suite already pinned in
+    ``test_writes_a_prompt_and_seeds_approval_as_pending``.
+    """
+    sheets = FakeSheets(index([lead("a")]), index([research_row("a")]))
+    report = site_brief.run(
+        config(), sheets, FakeWriter(), LovableAdapter(), rewrite=False
+    )
+
+    assert isinstance(report, site_brief.SiteBriefReport)
+    assert report.prompts_written == 1
+    row = sheets.upserts[0][1][0]
+    assert row["Approval Status"] == "Pending"
+    assert row["Lovable Project ID"] == ""
+    assert row["Preview URL"] == ""
+    assert "Created At" in row
+    assert sheets.column_writes == [(schema.LEADS, "Stage", {"a": "Site Briefed"})]
+
+
+def test_rewrite_writes_no_stage_column_update():
+    sheets = FakeSheets(
+        index([lead("a", stage="Site Briefed")]),
+        index([research_row("a")]),
+        briefs=index([existing_brief("a")]),
+    )
+    site_brief.run(config(), sheets, FakeWriter(), LovableAdapter(), rewrite=True)
+
+    assert sheets.column_writes == []
+
+
+def test_rewrite_excludes_a_disqualified_lead_with_an_existing_brief():
+    sheets = FakeSheets(
+        index([lead("a", stage="Disqualified")]),
+        index([research_row("a")]),
+        briefs=index([existing_brief("a")]),
+    )
+    report = site_brief.run(
+        config(), sheets, FakeWriter(), LovableAdapter(), rewrite=True
+    )
+
+    assert report.selected == 0
+    assert report.rewritten == 0
+
+
+def test_rewrite_over_an_empty_sheet_logs_nothing_to_rewrite_and_returns_cleanly(
+    caplog,
+):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="outreach")
+    sheets = FakeSheets({}, {}, briefs={})
+
+    report = site_brief.run(
+        config(), sheets, FakeWriter(), LovableAdapter(), rewrite=True
+    )
+
+    assert report.selected == 0
+    assert report.rewritten == 0
+    assert sheets.upserts == []
+    assert "nothing to rewrite" in caplog.text.lower()

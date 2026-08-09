@@ -9,12 +9,22 @@ That column is manual, so automation cannot approve its own spending.
 
 Resumable like every other stage -- a lead that already has a Site Briefs row
 costs nothing on a re-run.
+
+Run: ``outreach run site-brief --rewrite`` for the exception to that: when the
+prompt template itself changes, every existing brief was written against the
+old one and a normal run will never touch it again (that's the resumability
+above, working as designed). ``--rewrite`` targets exactly that backlog --
+briefs Lovable hasn't built from yet -- and spends a model call per lead
+because the whole point is a new prompt, non-deterministic like any other
+model output, so a prompt you already read and approved will come back
+different.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Callable
 
 from .. import schema
 from ..config import Config
@@ -23,7 +33,7 @@ from ..models import utc_now
 from ..providers import social
 from ..providers.llm import BriefWriter, render_lovable_prompt
 from ..providers.lovable import LovableAdapter, LovableSkipped
-from ..selection import ORDERS, select_pending
+from ..selection import ORDERS, select_pending, select_rewrite
 from ..sheets import SheetsClient
 from ..stage import Stage, advance
 
@@ -61,6 +71,33 @@ class SiteBriefReport:
 
 
 @dataclass
+class RewriteReport:
+    """Report for `run(..., rewrite=True)` -- a different queue, so a
+    different shape than SiteBriefReport rather than a poor fit reused."""
+
+    candidates: int = 0
+    already_built: int = 0
+    selected: int = 0
+    rewritten: int = 0
+    errors: int = 0
+    llm_calls: int = 0
+    checkpoints: int = 0
+
+    def summary_lines(self) -> list[str]:
+        return [
+            f"Existing briefs           {self.candidates}",
+            f"  already built           {self.already_built}  (skipped)",
+            f"  selected this run       {self.selected}",
+            "",
+            f"Prompts rewritten         {self.rewritten}",
+            f"Errors logged             {self.errors}",
+            "",
+            f"Claude calls              {self.llm_calls}",
+            f"Sheet checkpoints         {self.checkpoints}",
+        ]
+
+
+@dataclass
 class _Pending:
     rows: list[dict[str, object]] = field(default_factory=list)
     stage_updates: dict[str, object] = field(default_factory=dict)
@@ -73,14 +110,47 @@ class _Pending:
         self.stage_updates.clear()
 
 
-def _flush(sheets: SheetsClient, pending: _Pending, report: SiteBriefReport) -> None:
+def _flush(
+    sheets: SheetsClient,
+    pending: _Pending,
+    report: SiteBriefReport | RewriteReport,
+    *,
+    on_conflict: Callable[[dict[str, str], dict[str, object]], dict[str, object] | None]
+    | None = None,
+    write_stage: bool = True,
+) -> None:
     if not pending.rows:
         return
-    sheets.upsert(schema.SITE_BRIEFS, pending.rows)
-    sheets.update_column(schema.LEADS, "Stage", pending.stage_updates)
+    sheets.upsert(schema.SITE_BRIEFS, pending.rows, on_conflict=on_conflict)
+    # Rewrite mode never advances Stage: every row it touches is already at or
+    # past Site Briefed, so `advance` would be a no-op that still cost a round
+    # trip to the Sheet.
+    if write_stage:
+        sheets.update_column(schema.LEADS, "Stage", pending.stage_updates)
     report.checkpoints += 1
     log.info("Checkpoint: saved %d site brief(s).", len(pending.rows))
     pending.clear()
+
+
+def _preserve_rewrite_fields(
+    existing_row: dict[str, str], incoming: dict[str, object]
+) -> dict[str, object]:
+    """`upsert`'s on_conflict for a rewrite: only the prompt and name are new.
+
+    `Lovable Project ID` and `Preview URL` are AUTOMATED columns, so a plain
+    upsert over an existing row would blank them and sever the link to a site
+    Lovable already built -- the exact bug this exists to prevent.
+    `Created At` is preserved too: it marks when the row was first written,
+    not when it was last rewritten, and there is no "rewritten at" column to
+    record the difference (the schema is append-only; adding one is a
+    decision for later, not a side effect of this change).
+    """
+    return {
+        **incoming,
+        "Lovable Project ID": existing_row.get("Lovable Project ID", ""),
+        "Preview URL": existing_row.get("Preview URL", ""),
+        "Created At": existing_row.get("Created At", ""),
+    }
 
 
 def run(
@@ -91,7 +161,11 @@ def run(
     *,
     limit: int | None = None,
     social_first: bool | None = None,
-) -> SiteBriefReport:
+    rewrite: bool = False,
+) -> SiteBriefReport | RewriteReport:
+    if rewrite:
+        return _run_rewrite(config, sheets, writer, limit=limit, social_first=social_first)
+
     report = SiteBriefReport()
     errors = ErrorLog("site-brief")
 
@@ -208,6 +282,133 @@ def run(
 
     try:
         _flush(sheets, pending, report)
+    except Exception as exc:  # noqa: BLE001
+        log.error("Final write failed: %s", exc)
+        errors.record(exc)
+
+    report.llm_calls = writer.call_count
+
+    if len(errors):
+        try:
+            sheets.append(schema.ERRORS, errors.rows())
+        except Exception as exc:  # noqa: BLE001
+            log.error("Could not write Errors tab: %s", exc)
+    report.errors = len(errors)
+
+    return report
+
+
+def _run_rewrite(
+    config: Config,
+    sheets: SheetsClient,
+    writer: BriefWriter,
+    *,
+    limit: int | None,
+    social_first: bool | None,
+) -> RewriteReport:
+    """Push a prompt-template improvement out to leads select_pending would
+    now treat as done -- see the module for why a normal run cannot do this.
+    """
+    report = RewriteReport()
+    errors = ErrorLog("site-brief-rewrite")
+
+    leads = sheets.read_rows(schema.LEADS)
+    research = sheets.read_rows(schema.RESEARCH)
+    briefs = sheets.read_rows(schema.SITE_BRIEFS)
+    report.candidates = len(briefs)
+
+    batch_size = min(limit or config.batch_size, config.batch_size)
+    prioritise = (
+        config.research.social_first if social_first is None else social_first
+    )
+    selected, already_built = select_rewrite(
+        leads,
+        briefs,
+        batch_size=batch_size,
+        prefer=ORDERS[config.research.order] if prioritise else None,
+    )
+    report.already_built = already_built
+    report.selected = len(selected)
+
+    if not selected:
+        log.info("Nothing to rewrite -- no existing brief is both unbuilt and eligible.")
+        return report
+
+    # Selection cannot tell a lead this run already rewrote from one it
+    # hasn't reached yet -- there is no "rewritten at" marker, and inventing
+    # one would need a schema column (columns are append-only, so that's a
+    # real decision, not a side effect of this change). So an interrupted
+    # rewrite that's re-run repeats any lead it already got to in this batch,
+    # bounded by --limit same as everything else.
+    log.info(
+        "Rewriting %d Lovable prompt(s). Re-running repeats any lead already "
+        "rewritten in this batch -- bound it with --limit if that matters.",
+        len(selected),
+    )
+    pending = _Pending()
+
+    for index, lead in enumerate(selected, start=1):
+        lead_id = lead.get("Lead ID", "")
+        name = lead.get("Business Name", "") or lead_id
+
+        with errors.guard(lead_id=lead_id, business_name=name):
+            log.info("[%d/%d] %s", index, len(selected), name)
+
+            brief = research.get(lead_id)
+            if brief is None:
+                raise ValueError(
+                    "Lead is marked Researched but has no Research row -- "
+                    "re-run `outreach run research` for it."
+                )
+            _row_number, research_row = brief
+
+            social_profiles = research_row.get("Social Profiles", "").strip()
+            if not social_profiles and config.research.social_lookup:
+                social_profiles = social.profiles_text(lead.get("Website URL", ""))
+
+            spec = writer.write_site_spec(
+                _spec_prompt(lead, research_row, config, social_profiles)
+            )
+            prompt = render_lovable_prompt(
+                business_name=name,
+                category=lead.get("Category", ""),
+                location=config.campaign.location,
+                spec=spec,
+                phone=lead.get("Phone", ""),
+                address=lead.get("Address", ""),
+                social_handle=research_row.get("Social Handle", ""),
+                social_profiles=social_profiles,
+                maps_url=lead.get("Maps URL", ""),
+            )
+
+            # Only the two fields that are actually new. Everything else --
+            # Approval Status (manual; never a stage's to write), Lovable
+            # Project ID, Preview URL, Created At -- is left for on_conflict
+            # to carry over from the row already in the Sheet.
+            pending.rows.append(
+                {
+                    "Lead ID": lead_id,
+                    "Business Name": name,
+                    "Lovable Prompt": prompt,
+                }
+            )
+            report.rewritten += 1
+
+        if len(pending) >= config.research.checkpoint_every:
+            try:
+                _flush(
+                    sheets, pending, report,
+                    on_conflict=_preserve_rewrite_fields, write_stage=False,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.error("Checkpoint write failed: %s", exc)
+                errors.record(exc)
+
+    try:
+        _flush(
+            sheets, pending, report,
+            on_conflict=_preserve_rewrite_fields, write_stage=False,
+        )
     except Exception as exc:  # noqa: BLE001
         log.error("Final write failed: %s", exc)
         errors.record(exc)

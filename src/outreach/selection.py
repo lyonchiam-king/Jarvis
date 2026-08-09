@@ -121,3 +121,47 @@ def select_pending(
         eligible.sort(key=prefer)
 
     return eligible[:batch_size], already, not_ready
+
+
+def select_rewrite(
+    leads: dict[str, tuple[int, dict[str, str]]],
+    briefs: dict[str, tuple[int, dict[str, str]]],
+    *,
+    batch_size: int,
+    prefer: Callable[[dict[str, str]], object] | None = None,
+) -> tuple[list[dict[str, str]], int]:
+    """Return ``(selected, already_built)`` for a prompt rewrite.
+
+    The mirror image of ``select_pending``: a normal run skips any lead that
+    already has a Site Briefs row, but a rewrite specifically wants those --
+    it exists to push an improved prompt template out to leads select_pending
+    would now consider "done". The one thing it must still refuse is a row
+    Lovable has already built from: overwriting that prompt teaches nothing
+    and the built site's link (Lovable Project ID, Preview URL) would have to
+    survive the rewrite untouched regardless, so there's no reason to spend
+    the model call on it.
+
+    A Disqualified lead is excluded the same as it would be from any other
+    stage, even if it still has a Site Briefs row from before it was marked.
+    """
+    eligible: list[dict[str, str]] = []
+    already_built = 0
+
+    for lead_id, (_row_number, brief_row) in briefs.items():
+        if (brief_row.get("Lovable Project ID") or "").strip():
+            already_built += 1
+            continue
+
+        lead_match = leads.get(lead_id)
+        if lead_match is None:
+            continue
+        _lead_row_number, lead = lead_match
+        if parse(lead.get("Stage")) is Stage.DISQUALIFIED:
+            continue
+
+        eligible.append(lead)
+
+    if prefer is not None:
+        eligible.sort(key=prefer)
+
+    return eligible[:batch_size], already_built

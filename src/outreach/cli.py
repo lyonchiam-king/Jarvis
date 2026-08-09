@@ -437,8 +437,21 @@ def run_research(ctx: click.Context, limit: int | None, social_first: bool | Non
         "before those with no web presence. Defaults to research.social_first."
     ),
 )
+@click.option(
+    "--rewrite",
+    is_flag=True,
+    help=(
+        "Regenerate the prompt for leads that already have a Site Briefs row "
+        "(a normal run skips them). Skips any row Lovable has already built "
+        "from. Costs one model call per lead, and because the model is "
+        "non-deterministic, a prompt you already read and approved will come "
+        "back different -- review it again before approving."
+    ),
+)
 @click.pass_context
-def run_site_brief(ctx: click.Context, limit: int | None, social_first: bool | None) -> None:
+def run_site_brief(
+    ctx: click.Context, limit: int | None, social_first: bool | None, rewrite: bool
+) -> None:
     """Stage 4 -- write a ready-to-paste Lovable prompt per researched lead."""
     config = _load(ctx.obj["config_path"])
     sheets = _sheets_client(config)
@@ -449,18 +462,25 @@ def run_site_brief(ctx: click.Context, limit: int | None, social_first: bool | N
     )
     report = site_brief_stage.run(
         config, sheets, _writer(config), lovable,
-        limit=limit, social_first=social_first,
+        limit=limit, social_first=social_first, rewrite=rewrite,
     )
 
     click.echo("")
     for line in report.summary_lines():
         click.echo(line)
     click.echo("")
-    click.echo(
-        "Prompts are in the Site Briefs tab. Set Approval Status to 'Approved' "
-        "on the ones you want built, then run `outreach run site-build` "
-        "(or just paste the prompt into Lovable yourself)."
-    )
+    if rewrite:
+        click.echo(
+            "Rewritten prompts are back in the Site Briefs tab. Approval "
+            "Status, Lovable Project ID, Preview URL and Created At are "
+            "untouched -- a site you already built keeps its link."
+        )
+    else:
+        click.echo(
+            "Prompts are in the Site Briefs tab. Set Approval Status to 'Approved' "
+            "on the ones you want built, then run `outreach run site-build` "
+            "(or just paste the prompt into Lovable yourself)."
+        )
     _echo_sheet_link(config)
 
 

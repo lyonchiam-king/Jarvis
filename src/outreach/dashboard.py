@@ -44,6 +44,7 @@ STAGE_COMMANDS = {
     "discovery": ["run", "discovery"],
     "research": ["run", "research"],
     "site-brief": ["run", "site-brief"],
+    "site-brief-rewrite": ["run", "site-brief", "--rewrite"],
     "site-build": ["run", "site-build"],
     "outreach-draft": ["run", "outreach-draft"],
     "preflight": ["preflight"],
@@ -60,6 +61,7 @@ TAKES_LIMIT = {
     "discovery",
     "research",
     "site-brief",
+    "site-brief-rewrite",
     "site-build",
     "outreach-draft",
     "preview-leads",
@@ -68,7 +70,16 @@ TAKES_LIMIT = {
 
 # Stages that choose which leads to work on, and so honour the socials-first
 # preference. `discovery` has no queue to rank -- it is finding them.
-RANKS_ITS_QUEUE = {"research", "site-brief", "outreach-draft", "preview-messages"}
+RANKS_ITS_QUEUE = {
+    "research",
+    "site-brief",
+    # Rewriting picks a queue too, so the socials-first tick has to reach it.
+    # A button that quietly ignores the box next to it is the exact bug that
+    # was reported against "Write briefs" -- once is enough.
+    "site-brief-rewrite",
+    "outreach-draft",
+    "preview-messages",
+}
 
 # A guard against a slipped digit, not a policy: the campaign's own batch_size
 # is the real cap and the CLI enforces it. This only stops a typo becoming a
@@ -1003,6 +1014,16 @@ PAGE = """<!doctype html>
         <button data-run="preflight">Check setup</button>
         <button data-run="test-model">Test the model</button>
       </div>
+      <div class="row" style="margin-top:10px">
+        <button data-run="site-brief-rewrite">Rewrite existing briefs</button>
+      </div>
+      <p class="hint">For briefs you already have &mdash; not new ones.
+        Regenerates the Lovable prompt from the current template, skipping
+        anything already built. Costs a model call per lead, same as
+        <b>Write briefs</b>, and the result is not the same brief with
+        improvements &mdash; it is a freshly written one, so a prompt you
+        already read and approved will read differently. Re-review it before
+        approving again.</p>
     </details>
   </div>
 
