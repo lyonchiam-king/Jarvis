@@ -147,6 +147,9 @@ def run(
                 address=lead.get("Address", ""),
                 social_handle=research_row.get("Social Handle", ""),
                 social_profiles=research_row.get("Social Profiles", ""),
+                # The builder is told to open these and work from what the
+                # business actually looks like, rather than from adjectives.
+                maps_url=lead.get("Maps URL", ""),
             )
 
             # No build happens here, ever. A brand-new row is seeded "Pending",

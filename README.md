@@ -372,9 +372,25 @@ or `max_reviews` before spending on a full batch.
 outreach run site-brief
 ```
 
-Claude turns each research brief into a **structured site spec** (goal, pages,
-hero copy, sections, CTA, visual direction), and a deterministic function
-renders that spec into the prompt you paste into Lovable. Same spec in, same
+Claude turns each research brief into a **structured site spec** — visitor,
+one job, pages, real hero copy, sections in scroll order, proof points, palette
+with hex values, named typefaces, a per-business *avoid* list, and the
+interaction design: one signature moment, a motion language in milliseconds and
+easing curves, and named micro-interactions. A deterministic function renders
+that spec into the prompt you paste into Lovable.
+
+The rendered brief opens by pointing the builder at the business's **Google
+Business Profile and every social profile** and telling it to study them before
+designing — real photos, real colours, the words customers actually use — and
+to say so rather than invent if it cannot open one.
+
+Motion is specified in what Lovable can actually execute: Framer Motion ships
+with its stack. Transform and opacity only, IntersectionObserver reveals that
+leave content readable if they never fire, `prefers-reduced-motion` honoured,
+and an explicit refusal of scroll-jacking, load gates, cursor effects and
+WebGL. Those win galleries; they lose bookings from someone on 4G. The
+performance budget (LCP under 2.5s, no layout shift) is stated as outranking
+every visual idea in the brief. Same spec in, same
 prompt out — so the prompt is reviewable and testable rather than a one-off
 generation.
 

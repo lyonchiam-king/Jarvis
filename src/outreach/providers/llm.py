@@ -185,6 +185,34 @@ SITE_SPEC_SCHEMA: dict[str, Any] = {
                 "together. What should someone sense in the first second?"
             ),
         },
+        "signature_moment": {
+            "type": "string",
+            "description": (
+                "The one interaction someone would describe to a friend. It "
+                "must belong to THIS business -- a barber's before/after that "
+                "wipes as you drag, a cafe's menu that fills as you scroll. "
+                "One idea, achievable in CSS or Framer Motion, and it must not "
+                "sit between the visitor and the primary action."
+            ),
+        },
+        "motion_language": {
+            "type": "string",
+            "description": (
+                "How this site moves, specifically: entrance behaviour, "
+                "duration in ms, easing curve, stagger between siblings. "
+                "Motion should match the business -- a spa eases slowly, a "
+                "barber snaps. 'Smooth animations' is not an answer."
+            ),
+        },
+        "micro_interactions": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Named feedback moments, each as 'trigger -> response'. Cover "
+                "at minimum the primary CTA, the form, and one delight. Every "
+                "one must work by touch -- hover does not exist on a phone."
+            ),
+        },
     },
     "required": [
         "visitor",
@@ -199,6 +227,9 @@ SITE_SPEC_SCHEMA: dict[str, Any] = {
         "typography",
         "avoid",
         "visual_direction",
+        "signature_moment",
+        "motion_language",
+        "micro_interactions",
     ],
     "additionalProperties": False,
 }
@@ -236,6 +267,34 @@ the same palette, and if yours do, you have designed neither.
 **Design for the phone first and the thumb specifically.** Assume a mid-range \
 Android on a patchy connection. Tap targets big, phone number tappable, no \
 hover-dependent anything, nothing important below three scrolls.
+
+**Make it move like someone decided how it moves.** The difference between a \
+template and a site that feels expensive is almost entirely motion and \
+feedback: things enter with intent, buttons answer the finger, the page has \
+rhythm. So specify motion the way a designer briefs it -- duration in \
+milliseconds, an easing curve, what staggers against what -- not as "smooth \
+animations", which tells the builder nothing and produces the default fade \
+every template already has.
+
+Match the motion to the business. A spa eases in slowly and settles; a barber \
+snaps; a tuition centre is crisp and unfussy. If your motion brief would suit \
+any of the three equally, you have not designed it.
+
+**Give it one signature moment.** One interaction someone would mention to a \
+friend, and it must be about this business -- a before/after that wipes as you \
+drag your thumb, a price list that assembles as it enters, a gallery that \
+settles like laid photographs. One. A site with five signature moments has \
+none, and every one of them delays the booking.
+
+**Then defend the visitor from all of it.** This is where award-site thinking \
+goes wrong for a local business. The techniques that win galleries -- WebGL \
+scenes, scroll-jacking, cursor effects, loading screens, animation that must \
+finish before content is readable -- exist for portfolios whose job is to be \
+impressive. This site's job is to get a booking from someone on 4G who is \
+mildly annoyed already. Motion here earns its place by making the page feel \
+considered and responsive, never by making anyone wait. Nothing you specify \
+may delay the primary action, hide content until an animation completes, or \
+depend on a mouse.
 
 **Never invent a fact.** No prices you weren't given, no awards, no staff names, \
 no testimonials, no "established 1998" unless the evidence says so. A fabricated \
@@ -348,6 +407,9 @@ class SiteSpec:
     palette: str = ""
     typography: str = ""
     avoid: tuple[str, ...] = ()
+    signature_moment: str = ""
+    motion_language: str = ""
+    micro_interactions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -367,6 +429,7 @@ def render_lovable_prompt(
     address: str = "",
     social_handle: str = "",
     social_profiles: str = "",
+    maps_url: str = "",
 ) -> str:
     """Turn the structured spec into the text you paste into Lovable.
 
@@ -390,6 +453,32 @@ def render_lovable_prompt(
         "impression anyone gets of them online, and the owner will see it "
         "before their customers do.",
     ]
+
+    sources = []
+    if maps_url:
+        sources.append(
+            f"- Google Business Profile: {maps_url}\n"
+            "  Read the recent reviews and look at the customer photos. Take "
+            "the words customers actually use for this place and put them in "
+            "the copy -- they write better than either of us. Match the real "
+            "interior: if the photos show a bright corner shoplot, do not "
+            "design a dark luxury salon."
+        )
+    for line in (social_profiles or "").splitlines():
+        if line.strip():
+            sources.append(f"- {line.strip()}")
+    if sources:
+        out += [
+            "",
+            "STUDY THESE FIRST, BEFORE YOU DESIGN ANYTHING",
+            *sources,
+            "",
+            "These are the business's own public pages. Use them for their real "
+            "colours, their real photographs, their actual tone of voice, and "
+            "what they genuinely offer. If you cannot open one, say so plainly "
+            "and work from the brief below -- do not invent what you would have "
+            "found there.",
+        ]
 
     if spec.visitor:
         out += ["", "WHO IT IS FOR", spec.visitor]
@@ -428,6 +517,38 @@ def render_lovable_prompt(
         out.append(f"Type:    {spec.typography}")
     if spec.visual_direction:
         out.append(f"Feel:    {spec.visual_direction}")
+
+    motion = []
+    if spec.signature_moment:
+        motion += [f"Signature moment: {spec.signature_moment}"]
+    if spec.motion_language:
+        motion += [f"Motion language:   {spec.motion_language}"]
+    if spec.micro_interactions:
+        motion += ["Micro-interactions:", *(f"  - {m}" for m in spec.micro_interactions)]
+    if motion:
+        out += [
+            "",
+            "MOTION AND INTERACTION",
+            *motion,
+            "",
+            "This is the difference between a template and a site that feels",
+            "expensive. Build it properly, and build it so it never costs the",
+            "visitor anything:",
+            "- Framer Motion is already available. Use it, or plain CSS",
+            "  transitions -- whichever is simpler for the effect.",
+            "- Animate transform and opacity only. Animating width, height, top",
+            "  or left forces layout on every frame and stutters on a mid-range",
+            "  phone.",
+            "- Reveal on scroll with IntersectionObserver, once per element,",
+            "  never re-triggering. Content must be in the DOM and readable",
+            "  even if the animation never runs.",
+            "- Honour prefers-reduced-motion: fall back to a plain fade or to",
+            "  nothing. Some people get motion sickness from parallax.",
+            "- No scroll-jacking, no page-load animation gate, no cursor",
+            "  effects, no WebGL or Three.js. Those belong on a designer's",
+            "  portfolio, not on a shop that needs the booking. On a phone the",
+            "  cursor ones do not exist at all.",
+        ]
 
     if spec.avoid:
         out += [
@@ -480,6 +601,13 @@ def render_lovable_prompt(
         "  [TO CONFIRM] rather than guessing. That is the correct outcome.",
         "- Accessible by default: real contrast, real heading order, alt text,",
         "  and a form every keyboard can complete.",
+        "- Performance budget, and it outranks every visual idea above:",
+        "  largest contentful paint under 2.5s on a mid-range Android on 4G,",
+        "  no layout shift as things load, and the primary action tappable",
+        "  within one second of the page appearing. If an effect cannot fit",
+        "  inside that, drop the effect -- not the budget.",
+        "- Real images beat illustrations, but they must be sized and lazy",
+        "  loaded below the fold, with width and height set so nothing jumps.",
         "- Send every booking or enquiry to a spreadsheet via the",
         "  Google Sheets connector, one row per enquiry with a timestamp.",
         "  This owner has never had a website and will not log into an",
@@ -769,6 +897,9 @@ class BriefWriter:
             palette=str(payload.get("palette", "")).strip(),
             typography=str(payload.get("typography", "")).strip(),
             avoid=_as_tuple(payload.get("avoid")),
+            signature_moment=str(payload.get("signature_moment", "")).strip(),
+            motion_language=str(payload.get("motion_language", "")).strip(),
+            micro_interactions=_as_tuple(payload.get("micro_interactions")),
         )
 
     def write_outreach_copy(self, prompt: str) -> OutreachCopy:

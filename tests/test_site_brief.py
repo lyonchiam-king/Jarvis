@@ -618,3 +618,143 @@ def test_the_spec_model_is_given_the_platforms_too():
     )
     assert "TikTok @salonpg" in prompt
     assert "https://tiktok.com/@salonpg" in prompt
+
+
+# ------------------------------------------- motion, interaction, and sources
+
+
+MOTION_SPEC = replace(
+    FULL_SPEC,
+    signature_moment=(
+        "Drag the before/after slider on a real customer's cut -- it follows "
+        "the thumb, and snaps to whichever side you release nearest."
+    ),
+    motion_language=(
+        "Sections rise 16px and fade in over 420ms on a cubic-bezier(.16,1,.3,1) "
+        "ease-out, siblings staggered 60ms. Nothing bounces; this is a salon, "
+        "not a toy."
+    ),
+    micro_interactions=(
+        "Tap the WhatsApp button -> it depresses 2px and the icon nudges right",
+        "Focus a form field -> the label rises and the underline draws in 180ms",
+        "Gallery image enters -> settles from 1.02 scale like a laid photograph",
+    ),
+)
+
+
+def motion_prompt(**kwargs):
+    return render_lovable_prompt(
+        business_name="Chulia Hair House",
+        category="hair salon",
+        location="Georgetown",
+        spec=MOTION_SPEC,
+        **kwargs,
+    )
+
+
+def test_the_signature_moment_reaches_the_builder():
+    prompt = motion_prompt()
+    assert "MOTION AND INTERACTION" in prompt
+    assert "before/after slider" in prompt
+
+
+def test_motion_is_specified_in_numbers_not_adjectives():
+    prompt = motion_prompt()
+    assert "420ms" in prompt
+    assert "cubic-bezier" in prompt
+    assert "staggered 60ms" in prompt
+
+
+def test_micro_interactions_are_listed_as_trigger_and_response():
+    prompt = motion_prompt()
+    assert "Tap the WhatsApp button -> it depresses 2px" in prompt
+
+
+def test_motion_is_named_in_the_stack_lovable_actually_has():
+    """Framer Motion ships with Lovable; Three.js would be fought or faked."""
+    prompt = motion_prompt()
+    assert "Framer Motion is already available" in prompt
+    assert "transform and opacity only" in prompt
+
+
+def test_the_techniques_that_break_a_phone_are_ruled_out():
+    """Award-gallery moves that cost a booking on 4G."""
+    prompt = motion_prompt()
+    for banned in ("scroll-jacking", "cursor", "WebGL", "Three.js"):
+        assert banned in prompt, f"{banned} is not ruled out"
+    assert "prefers-reduced-motion" in prompt
+
+
+def test_content_must_survive_the_animation_never_running():
+    prompt = motion_prompt()
+    assert "readable" in prompt and "even if the animation never runs" in prompt
+
+
+def test_the_performance_budget_outranks_the_visual_ideas():
+    prompt = motion_prompt()
+    assert "2.5s" in prompt
+    assert "drop the effect -- not the budget" in prompt
+
+
+def test_a_spec_with_no_motion_renders_no_motion_section():
+    prompt = render_lovable_prompt(
+        business_name="X", category="salon", location="Penang", spec=FULL_SPEC
+    )
+    assert "MOTION AND INTERACTION" not in prompt
+
+
+# ------------------------------------------------ sources the builder studies
+
+
+def test_the_google_business_profile_is_given_as_a_source():
+    prompt = motion_prompt(maps_url="https://maps.google.com/?cid=123")
+
+    assert "STUDY THESE FIRST" in prompt
+    assert "https://maps.google.com/?cid=123" in prompt
+    assert "Read the recent reviews" in prompt
+
+
+def test_socials_are_sources_as_well_as_links_to_place():
+    prompt = motion_prompt(
+        maps_url="https://maps.google.com/?cid=123",
+        social_profiles="Instagram @chuliahair https://instagram.com/chuliahair",
+    )
+    sources = prompt[prompt.index("STUDY THESE FIRST"):prompt.index("WHO IT IS FOR")]
+
+    assert "instagram.com/chuliahair" in sources, "studied for tone and photos"
+    assert "https://instagram.com/chuliahair" in prompt[prompt.index("SOCIAL PROFILES"):]
+
+
+def test_the_builder_is_told_to_say_so_rather_than_invent_what_it_could_not_open():
+    prompt = motion_prompt(maps_url="https://maps.google.com/?cid=123")
+    assert "do not invent what you would have found there" in prompt
+
+
+def test_sources_come_before_the_design_brief():
+    """Study first, then design -- the order is the instruction."""
+    prompt = motion_prompt(maps_url="https://maps.google.com/?cid=1")
+    assert prompt.index("STUDY THESE FIRST") < prompt.index("THE ONE JOB")
+
+
+def test_no_sources_means_no_study_section():
+    assert "STUDY THESE FIRST" not in motion_prompt()
+
+
+def test_stage_4_passes_the_maps_url_through():
+    sheets = FakeSheets(
+        index([{**lead("a"), "Maps URL": "https://maps.google.com/?cid=99"}]),
+        index([research_row("a")]),
+    )
+    site_brief.run(config(), sheets, FakeWriter(), LovableAdapter())
+
+    assert "https://maps.google.com/?cid=99" in sheets.upserts[0][1][0]["Lovable Prompt"]
+
+
+def test_the_model_is_told_to_design_motion_for_this_business():
+    from outreach.providers.llm import SITE_SPEC_SCHEMA, SITE_SPEC_SYSTEM
+
+    for field in ("signature_moment", "motion_language", "micro_interactions"):
+        assert field in SITE_SPEC_SCHEMA["required"]
+    assert "milliseconds" in SITE_SPEC_SYSTEM
+    assert "signature moment" in SITE_SPEC_SYSTEM
+    assert "portfolios whose job is to be" in SITE_SPEC_SYSTEM
