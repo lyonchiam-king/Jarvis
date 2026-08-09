@@ -17,8 +17,13 @@ from typing import Callable
 from .stage import Stage, parse, rank
 
 
+def has_social(lead: dict[str, str]) -> bool:
+    """Whether this lead's only web presence is a social page."""
+    return lead.get("Website Status") == "social_only"
+
+
 def social_rank(lead: dict[str, str]) -> tuple[int, int]:
-    """Sort key putting the leads worth working on first.
+    """Socials first, then the order they already sit in.
 
     A business whose only web presence is a Facebook page is the better lead
     twice over. There is more to research -- a bio, photos, posts in their own
@@ -26,21 +31,39 @@ def social_rank(lead: dict[str, str]) -> tuple[int, int]:
     decided they want to be findable online, which is most of the argument
     already made.
 
-    Within each group, more reviews first: reviews are the raw material the
-    research brief is built from, and a business with three of them yields a
-    thin one.
+    Beyond that one distinction it does not reorder anything. Sheet order is
+    Google's own relevance order, it is the order you can see, and a queue you
+    can predict is worth more than a marginally better-sorted one. Sorting is
+    stable, so returning a constant second element preserves it.
 
     Lives here rather than in one stage because the preference has to hold all
     the way down the pipeline. Ranking only the research queue leaves an
     earlier backlog of website-less leads sitting at the front of every later
     stage, which is exactly what it looks like when the setting is ignored.
     """
-    has_social = 0 if lead.get("Website Status") == "social_only" else 1
+    return (0 if has_social(lead) else 1, 0)
+
+
+def social_then_reviews_rank(lead: dict[str, str]) -> tuple[int, int]:
+    """Socials first, then most-reviewed first.
+
+    Reviews are the raw material a brief is built from, so a business with two
+    hundred of them yields a richer one than a business with four. The cost is
+    predictability: the queue no longer follows the Sheet, which reads as
+    random unless you happen to be looking at the review column.
+    """
     try:
         reviews = int(lead.get("Review Count") or 0)
     except (TypeError, ValueError):
         reviews = 0
-    return (has_social, -reviews)
+    return (0 if has_social(lead) else 1, -reviews)
+
+
+# The orders a campaign may ask for, by the name used in `research.order`.
+ORDERS = {
+    "sheet": social_rank,
+    "reviews": social_then_reviews_rank,
+}
 
 
 def select_pending(

@@ -113,6 +113,13 @@ research:
   # Write partial results to the Sheet every N leads, so an interrupted run
   # never redoes completed work.
   checkpoint_every: 10
+  # Within the socials-first split, what order to work in.
+  #   sheet    the order they already sit in -- which is Google's own
+  #            relevance ranking, and the order you can see. Predictable.
+  #   reviews  most-reviewed first. Reviews are what a brief is built from,
+  #            so briefs come out richer -- but the queue stops following
+  #            the Sheet and looks random unless you are watching that column.
+  order: sheet
 
 outreach:
   sender_name: "Lyon Chiam"

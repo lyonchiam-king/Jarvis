@@ -416,8 +416,12 @@ def test_leads_with_a_social_page_are_researched_first():
     assert [r["Lead ID"] for r in selected] == ["fb1", "fb2"]
 
 
-def test_within_a_group_the_better_reviewed_go_first():
-    """Reviews are the raw material; three of them make a thin brief."""
+def test_within_a_group_sheet_order_is_kept():
+    """The default. A queue you can predict beats a cleverer one you cannot.
+
+    Sorting is stable, so the socials-first split is the only reordering --
+    everything else stays in the order you can see on the Sheet.
+    """
     leads = leads_index(
         [
             social_lead("thin", social=True, reviews=3),
@@ -427,7 +431,55 @@ def test_within_a_group_the_better_reviewed_go_first():
     )
     selected, _, _ = research.select_leads(leads, set(), batch_size=3)
 
+    assert [r["Lead ID"] for r in selected] == ["thin", "rich", "mid"]
+
+
+def test_socials_still_jump_the_queue_in_sheet_order():
+    leads = leads_index(
+        [
+            social_lead("plain1", reviews=500),
+            social_lead("fb", social=True, reviews=2),
+            social_lead("plain2", reviews=400),
+        ]
+    )
+    selected, _, _ = research.select_leads(leads, set(), batch_size=3)
+
+    assert [r["Lead ID"] for r in selected] == ["fb", "plain1", "plain2"]
+
+
+def test_reviews_order_can_be_asked_for_instead():
+    """Richer briefs, at the cost of a queue that no longer follows the Sheet."""
+    leads = leads_index(
+        [
+            social_lead("thin", social=True, reviews=3),
+            social_lead("rich", social=True, reviews=180),
+            social_lead("mid", social=True, reviews=40),
+        ]
+    )
+    selected, _, _ = research.select_leads(
+        leads, set(), batch_size=3, order="reviews"
+    )
+
     assert [r["Lead ID"] for r in selected] == ["rich", "mid", "thin"]
+
+
+def test_the_campaign_ships_in_sheet_order():
+    assert config().research.order == "sheet"
+
+
+def test_an_unknown_order_is_refused_at_load_time(tmp_path):
+    from outreach.config import ConfigError, load_config as load
+
+    src = open(PENANG).read().replace(
+        "  provider: anthropic", "  order: alphabetical\n  provider: anthropic", 1
+    )
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
+
+    import pytest
+
+    with pytest.raises(ConfigError, match="research.order must be one of"):
+        load(path, env_file=None)
 
 
 def test_leads_without_socials_are_not_dropped_only_deferred():

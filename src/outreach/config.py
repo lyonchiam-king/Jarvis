@@ -107,6 +107,12 @@ class ResearchSettings:
     # and they have already decided they want to be findable online. With a
     # batch cap in play this is what your budget gets spent on.
     social_first: bool = True
+    # How to order the queue *within* the socials-first split.
+    #   sheet    the order they already sit in -- Google's own relevance
+    #            ranking, and the order you can see. Predictable.
+    #   reviews  most-reviewed first. Richer briefs, but the queue stops
+    #            following the Sheet and reads as random.
+    order: str = "sheet"
 
 
 @dataclass(frozen=True)
@@ -267,6 +273,14 @@ def load_config(
         raise ConfigError(
             f"research.effort must be one of {sorted(valid_effort)}, got {effort!r}"
         )
+    from .selection import ORDERS
+
+    order = str(r.get("order", "sheet")).strip().lower()
+    if order not in ORDERS:
+        raise ConfigError(
+            f"research.order must be one of {sorted(ORDERS)}, got {order!r}"
+        )
+
     provider = str(r.get("provider", "anthropic")).strip().lower()
     if provider not in PROVIDER_DEFAULTS:
         raise ConfigError(
@@ -291,6 +305,7 @@ def load_config(
         request_timeout=float(r.get("request_timeout", 15.0)),
         checkpoint_every=max(1, int(r.get("checkpoint_every", 10))),
         social_first=bool(r.get("social_first", True)),
+        order=order,
     )
 
     o = raw.get("outreach") or {}

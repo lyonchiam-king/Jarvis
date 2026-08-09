@@ -22,7 +22,7 @@ from ..errors import ErrorLog
 from ..models import utc_now
 from ..providers import gmail as gmail_provider
 from ..providers.llm import BriefWriter, build_outreach_prompt
-from ..selection import select_pending, social_rank
+from ..selection import ORDERS, select_pending
 from ..sheets import SheetsClient
 from ..stage import Stage, advance
 
@@ -145,7 +145,7 @@ def run(
         requires=requires,
         target=Stage.EMAIL_DRAFTED,
         batch_size=batch_size,
-        prefer=social_rank if prioritise else None,
+        prefer=ORDERS[config.research.order] if prioritise else None,
     )
     report.already_done = already
     report.not_ready = not_ready

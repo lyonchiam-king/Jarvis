@@ -251,9 +251,16 @@ online, which is most of the argument made for you.
 
 Leads with no web presence at all aren't dropped, just queued behind. So with
 **How many** set to 20, your money goes on the best 20 available rather than
-whichever happen to sit highest in the Sheet. Within each group, better-reviewed
-businesses come first — reviews are what the brief is built from, and three of
-them make a thin one.
+whichever happen to sit highest in the Sheet.
+
+**That's the only reordering.** Beyond the socials-first split, the queue walks
+your Sheet top to bottom — which is Google's own relevance order, and the order
+you can actually see. So the next-up list should never look random.
+
+> If you'd rather work the best-reviewed first — richer briefs, since reviews
+> are what they're built from — set `order: reviews` under `research:` in your
+> campaign file. The trade is predictability: the queue stops following the
+> Sheet.
 
 It applies to **researching, briefing and drafting alike** — so a lead can't
 jump the queue at a later step just because it was researched earlier.

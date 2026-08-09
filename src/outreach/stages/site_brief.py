@@ -22,7 +22,7 @@ from ..errors import ErrorLog
 from ..models import utc_now
 from ..providers.llm import BriefWriter, render_lovable_prompt
 from ..providers.lovable import LovableAdapter, LovableSkipped
-from ..selection import select_pending, social_rank
+from ..selection import ORDERS, select_pending
 from ..sheets import SheetsClient
 from ..stage import Stage, advance
 
@@ -111,7 +111,7 @@ def run(
         requires=Stage.RESEARCHED,
         target=Stage.SITE_BRIEFED,
         batch_size=batch_size,
-        prefer=social_rank if prioritise else None,
+        prefer=ORDERS[config.research.order] if prioritise else None,
     )
     report.already_done = already
     report.not_ready = not_ready

@@ -28,7 +28,7 @@ from ..providers import social as social_provider
 from ..providers import web
 from ..providers.llm import BriefWriter, ResearchBrief, build_prompt
 from ..providers.places import PlaceDetails, PlacesClient
-from ..selection import select_pending, social_rank
+from ..selection import ORDERS, select_pending
 from ..sheets import SheetsClient
 from ..stage import Stage, advance
 
@@ -92,6 +92,7 @@ def select_leads(
     *,
     batch_size: int,
     social_first: bool = True,
+    order: str = "sheet",
 ) -> tuple[list[dict[str, str]], int, int]:
     """Leads still needing research. See ``outreach.selection``."""
     return select_pending(
@@ -100,7 +101,7 @@ def select_leads(
         requires=Stage.DISCOVERED,
         target=Stage.RESEARCHED,
         batch_size=batch_size,
-        prefer=social_rank if social_first else None,
+        prefer=ORDERS[order] if social_first else None,
     )
 
 
@@ -199,7 +200,11 @@ def run(
         config.research.social_first if social_first is None else social_first
     )
     selected, already, not_ready = select_leads(
-        leads, researched, batch_size=batch_size, social_first=prioritise
+        leads,
+        researched,
+        batch_size=batch_size,
+        social_first=prioritise,
+        order=config.research.order,
     )
     report.social_first = prioritise
     report.selected_with_social = sum(
