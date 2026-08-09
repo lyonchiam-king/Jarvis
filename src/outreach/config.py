@@ -170,6 +170,41 @@ class ComplianceSettings:
     acknowledged: bool = False
 
 
+# Which build targets exist. Kept here, next to research.provider's equivalent
+# set, so the two "which backend writes this" choices are validated the same
+# way.
+BUILD_TARGETS: frozenset[str] = frozenset({"lovable", "firebase"})
+
+
+@dataclass(frozen=True)
+class BuildSettings:
+    """The automated Gemini-to-Firebase demo-site path.
+
+    Lovable is not being replaced -- ``target`` defaults to "lovable" and
+    ``enabled`` defaults to False, so an existing campaign file that has never
+    heard of this block keeps building sites exactly as it does today.
+    """
+
+    target: str = "lovable"          # "lovable" | "firebase"
+    enabled: bool = False            # separate from lovable.enabled -- never default true
+    provider: str = "gemini"
+    model: str = "gemini-3-flash"
+    base_url: str = ""
+    # The JSON writers (briefs, specs, outreach copy) cap output at 6000
+    # tokens because their replies are a handful of short fields. A full HTML
+    # page is not: reusing that cap is the direct cause of a half-written
+    # <body> with a truncated final tag, which is worse than no page at all
+    # because it can still pass a naive "did it produce output" check.
+    max_output_tokens: int = 32000
+    min_interval_seconds: float = 6.5
+    output_dir: str = "sites"
+    url_context: bool = False
+    public_base_url: str = ""
+    max_versions: int = 5
+    min_bytes: int = 4000
+    max_bytes: int = 400000
+
+
 @dataclass(frozen=True)
 class Secrets:
     places_api_key: str = ""
@@ -181,6 +216,10 @@ class Secrets:
     # anthropic_api_key on the default provider; empty for local Ollama,
     # which needs none.
     llm_api_key: str = ""
+    gemini_api_key: str = ""
+    firebase_site_id: str = ""
+    firebase_project_id: str = ""
+    firebase_service_account_file: str = ""
 
 
 @dataclass(frozen=True)
@@ -193,6 +232,7 @@ class Config:
     secrets: Secrets
     limits: LimitsSettings = field(default_factory=LimitsSettings)
     research: ResearchSettings = field(default_factory=ResearchSettings)
+    build: BuildSettings = field(default_factory=BuildSettings)
     source_path: Path = field(default=Path("."))
 
     @property
@@ -362,6 +402,39 @@ def load_config(
         auto_approve=bool(lv.get("auto_approve", False)),
     )
 
+    b = raw.get("build") or {}
+    build_target = str(b.get("target", "lovable")).strip().lower()
+    if build_target not in BUILD_TARGETS:
+        raise ConfigError(
+            f"build.target must be one of {sorted(BUILD_TARGETS)}, got "
+            f"{build_target!r}"
+        )
+    if build_target == "firebase" and not os.getenv("FIREBASE_SITE_ID"):
+        raise ConfigError(
+            "build.target is 'firebase', so FIREBASE_SITE_ID must be set in "
+            ".env. Find it in the Firebase console under Hosting -- it's the "
+            "site name your demo URLs will be published under."
+        )
+    build = BuildSettings(
+        target=build_target,
+        enabled=bool(b.get("enabled", False)),
+        provider=str(b.get("provider", "gemini")),
+        model=str(b.get("model", "gemini-3-flash")),
+        base_url=str(b.get("base_url", "")),
+        max_output_tokens=int(b.get("max_output_tokens", 32000)),
+        min_interval_seconds=float(b.get("min_interval_seconds", 6.5)),
+        # Resolved relative to CWD, not to this file. Both Dashboard.bat and
+        # run.bat do `cd /d "%~dp0"` before invoking Python, so CWD is the
+        # repo root by construction on Windows -- the same assumption
+        # credentials/oauth_client.json above already relies on.
+        output_dir=str(b.get("output_dir", "sites")),
+        url_context=bool(b.get("url_context", False)),
+        public_base_url=str(b.get("public_base_url", "")),
+        max_versions=int(b.get("max_versions", 5)),
+        min_bytes=int(b.get("min_bytes", 4000)),
+        max_bytes=int(b.get("max_bytes", 400000)),
+    )
+
     c = raw.get("compliance") or {}
     country_code = str(c.get("country_code", "")).upper()
     if not country_code:
@@ -385,6 +458,12 @@ def load_config(
         llm_api_key=os.getenv(
             PROVIDER_KEY_ENV.get(provider, "ANTHROPIC_API_KEY"), ""
         ),
+        gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+        firebase_site_id=os.getenv("FIREBASE_SITE_ID", ""),
+        firebase_project_id=os.getenv("FIREBASE_PROJECT_ID", ""),
+        firebase_service_account_file=os.getenv(
+            "FIREBASE_SERVICE_ACCOUNT_FILE", ""
+        ),
     )
 
     return Config(
@@ -396,5 +475,6 @@ def load_config(
         secrets=secrets,
         limits=limits,
         research=research,
+        build=build,
         source_path=path,
     )

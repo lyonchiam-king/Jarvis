@@ -65,6 +65,13 @@ lovable:
   enabled: false
   require_confirmation: true
 
+build:
+  # See penang-my.yaml for what this block does. Left at the Lovable default
+  # here too -- this file exists to prove a region swap needs no code change,
+  # not to demonstrate the Firebase path.
+  target: lovable
+  enabled: false
+
 compliance:
   country_code: GB
   acknowledged: false

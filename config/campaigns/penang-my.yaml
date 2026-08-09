@@ -154,6 +154,20 @@ lovable:
   # ten seconds per lead.
   auto_approve: false
 
+build:
+  # Which pipeline builds the demo site.
+  #   lovable   the OAuth/MCP path above -- the one running today.
+  #   firebase  fully automated: Gemini writes one self-contained HTML file
+  #             per lead, Firebase Hosting serves it. No human in the loop.
+  target: lovable
+  # Separate from lovable.enabled on purpose -- flipping build.target to
+  # firebase must not silently start spending Gemini credits on its own.
+  enabled: false
+  # provider: gemini
+  # model: gemini-3-flash
+  # output_dir: sites
+  # public_base_url: ""   # e.g. https://your-site.web.app, for the outreach draft
+
 compliance:
   # ISO 3166-1 alpha-2. Drives the outreach-law gate in compliance.py.
   country_code: MY

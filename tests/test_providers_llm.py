@@ -14,7 +14,9 @@ from outreach.providers.llm import (
     BRIEF_SCHEMA,
     LLMError,
     OpenAICompatibleWriter,
+    SiteSpec,
     make_writer,
+    render_lovable_prompt,
 )
 
 PENANG = "config/campaigns/penang-my.yaml"
@@ -514,6 +516,181 @@ def test_the_empty_reply_message_counts_fields_from_the_schema():
 
     assert f"needs {small} fields" in str(copy_err.value)
     assert f"at {worst} required fields" in str(copy_err.value)
+
+
+# ---------------------------------------------------- build.target: html vs lovable
+#
+# Lovable is being kept, not replaced -- render_lovable_prompt must produce
+# byte-identical output for target="lovable" after this change, and a
+# genuinely different prompt for target="html" that never asks for a
+# React/Framer Motion/shadcn stack, and never asks for a photograph it can
+# neither legally cache nor physically fetch in a one-shot call.
+
+_TARGET_SPEC = SiteSpec(
+    site_goal="Get a booking",
+    pages=("Home",),
+    hero_headline="Fresh cuts, fast",
+    hero_subcopy="Walk in or book ahead",
+    key_sections=(
+        "Hero -- overlay -- headline and CTA",
+        "Services -- card grid -- our cuts",
+    ),
+    primary_cta="Book Now",
+    visual_direction="Warm and modern, a neighbourhood spot",
+    visitor="A commuter on their phone deciding where to get a haircut tonight",
+    proof_points=("4.8 stars from 120 reviews",),
+    highlights=("Walk-ins Welcome", "Open Late", "Cash or Card"),
+    showcase_items=("Classic Cut -- sharp, fast", "Beard Trim -- precise, quick"),
+    interactive_feature="A three-step style picker that ends at Book Now",
+    mobile_bar=("Call -> tel: link", "WhatsApp -> wa.me link"),
+    palette="#1a1a1a background, #f5f5f5 text, #d4a373 accent",
+    typography="Playfair Display for headings, Inter for body",
+    avoid=("No stock photos of models",),
+    signature_moment="A before/after that wipes as you drag",
+    motion_language="Snappy, 200ms, ease-out",
+    micro_interactions=("CTA -> scale down on press",),
+)
+
+
+def _rendered(**kwargs):
+    return render_lovable_prompt(
+        business_name="Sun Salon",
+        category="hair salon",
+        location="Georgetown, Penang, Malaysia",
+        spec=_TARGET_SPEC,
+        phone="+60123456789",
+        address="123 Jalan Example, Georgetown",
+        social_handle="@sunsalon",
+        social_profiles="Instagram: @sunsalon -- https://instagram.com/sunsalon",
+        maps_url="https://maps.google.com/?cid=12345",
+        **kwargs,
+    )
+
+
+def test_lovable_is_the_default_target():
+    assert _rendered() == _rendered(target="lovable")
+
+
+def test_lovable_target_is_byte_identical_to_before_build_target_existed():
+    """The one test that stops a harmless-looking reword breaking the path
+    Lyon is keeping.
+
+    A real snapshot, not a handful of substring checks. The earlier version of
+    this test asserted nine specific phrases and passed happily when a stray
+    space was added to the Lovable output -- which is precisely the class of
+    change it was named to catch. If this fails and the change was deliberate,
+    regenerate the fixture and read the diff before you commit it.
+    """
+    import pathlib
+
+    fixture = pathlib.Path(__file__).parent / "fixtures" / "lovable_prompt.txt"
+    assert _rendered(target="lovable") == fixture.read_text(), (
+        "the lovable prompt changed -- diff tests/fixtures/lovable_prompt.txt"
+    )
+
+
+def test_the_lovable_snapshot_still_contains_its_load_bearing_parts():
+    """Guards the fixture itself: a regenerated-by-accident snapshot would
+    make the test above pass against whatever it was regenerated from."""
+    prompt = _rendered(target="lovable")
+    assert "Stack: React + Tailwind + shadcn/ui." in prompt
+    assert "whileInView, viewport={{ once: true }}" in prompt
+    assert "useReducedMotion()" in prompt
+    assert "IMAGERY" in prompt
+    assert "Google Sheets connector" in prompt
+    assert "NO PHOTOGRAPHY" not in prompt
+    assert "OUTPUT FORMAT" not in prompt
+    assert "Unofficial concept by COAI" not in prompt
+
+
+def test_html_target_names_none_of_the_lovable_specific_vocabulary():
+    prompt = _rendered(target="html")
+    forbidden = (
+        "Framer Motion", "whileInView", "AnimatePresence", "layoutId",
+        "useReducedMotion", "shadcn", "motion.", "Google Sheets connector",
+        "IMAGERY",
+    )
+    for word in forbidden:
+        assert word not in prompt, f"{word!r} leaked into the html-target prompt"
+
+
+def test_html_target_uses_css_and_intersection_observer_instead():
+    prompt = _rendered(target="html")
+    assert "@keyframes" in prompt
+    assert "IntersectionObserver" in prompt
+    assert "<dialog>" in prompt
+    assert "prefers-reduced-motion" in prompt
+
+
+def test_html_target_forbids_a_backend_and_a_fake_form():
+    prompt = _rendered(target="html")
+    assert "No backend exists for this site" in prompt
+    assert "tel:" in prompt and "mailto:" in prompt
+    assert "appears to submit" in prompt
+
+
+def test_html_target_forbids_photography_and_offers_a_maps_embed_instead():
+    prompt = _rendered(target="html")
+    assert "NO PHOTOGRAPHY" in prompt
+    assert "No third-party photograph" in prompt
+    after = prompt.split("NO PHOTOGRAPHY", 1)[1][:1200]
+    assert "palette" in after
+    assert "maps/embed/v1/place" in after
+
+
+def test_html_target_never_says_imagery_even_with_a_maps_source():
+    """The showcase-card note used to point at an IMAGERY section that no
+    longer exists on this target -- it must fall back to the tinted-block
+    wording instead, the same wording used when there is no source at all."""
+    prompt = _rendered(target="html")
+    assert "IMAGERY" not in prompt
+    assert "solid tinted block from the palette" in prompt
+
+
+def test_html_target_restricts_image_and_script_domains_and_form_actions():
+    prompt = _rendered(target="html")
+    assert "fonts.googleapis.com" in prompt
+    assert "fonts.gstatic.com" in prompt
+    assert "No <form> with an action attribute" in prompt
+
+
+def test_html_target_footer_is_fixed_text_naming_the_business():
+    """Rendered by the renderer, not the model -- what turns a complaint
+    into a reply-and-done email."""
+    prompt = _rendered(target="html")
+    assert (
+        "Unofficial concept by COAI -- not affiliated with Sun Salon. "
+        "Reply to have it removed." in prompt
+    )
+
+
+def test_html_target_requires_noindex():
+    prompt = _rendered(target="html")
+    assert '<meta name="robots" content="noindex">' in prompt
+
+
+def test_html_target_states_the_output_format():
+    prompt = _rendered(target="html")
+    assert "<!doctype html>" in prompt
+    assert "</html>" in prompt
+    assert "no markdown" in prompt.lower()
+
+
+def test_an_unknown_target_is_refused():
+    with pytest.raises(ValueError, match="Unknown build target"):
+        _rendered(target="wix")
+
+
+def test_signature_moment_schema_no_longer_names_framer_motion():
+    """Framer Motion is a Lovable implementation detail; it does not belong
+    in a design brief the model writes before either target is chosen. The
+    required-field count must not move -- this is a wording-only change."""
+    from outreach.providers.llm import SITE_SPEC_SCHEMA
+
+    description = SITE_SPEC_SCHEMA["properties"]["signature_moment"]["description"]
+    assert "Framer Motion" not in description
+    assert "achievable in CSS" in description
+    assert len(SITE_SPEC_SCHEMA["required"]) == 19
 
 
 def test_the_empty_reply_message_follows_the_schema_when_it_moves(monkeypatch):

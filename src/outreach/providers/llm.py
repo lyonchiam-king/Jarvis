@@ -240,7 +240,7 @@ SITE_SPEC_SCHEMA: dict[str, Any] = {
                 "The one interaction someone would describe to a friend. It "
                 "must belong to THIS business -- a barber's before/after that "
                 "wipes as you drag, a cafe's menu that fills as you scroll. "
-                "One idea, achievable in CSS or Framer Motion, and it must not "
+                "One idea, achievable in CSS, and it must not "
                 "sit between the visitor and the primary action."
             ),
         },
@@ -503,6 +503,174 @@ class OutreachCopy:
     whatsapp_message: str
 
 
+@dataclass(frozen=True)
+class TargetProfile:
+    """What differs between a Lovable prompt and a Gemini-HTML prompt.
+
+    Everything else in ``render_lovable_prompt`` -- the visitor, the copy,
+    the section order, the motion *intent* -- is identical between targets;
+    only the implementation vocabulary and a handful of platform-forced
+    constraints change. Keeping those differences as data here, rather than
+    ``if target == ...`` scattered through the function, is what makes a
+    third target later a new dict entry instead of a re-edit of the whole
+    prompt.
+    """
+
+    stack: str
+    scroll_reveal: str
+    reduced_motion: str
+    enquiry_lines: tuple[str, ...]
+    # Rendered inside STUDY THESE FIRST, only when there is a source to pull
+    # from. Empty for html: a one-shot generation call cannot browse or
+    # download a photo even where doing so were allowed, so there is nothing
+    # useful to tell it to go look at.
+    imagery_lines: tuple[str, ...]
+    # Rendered unconditionally, sources or not -- html may never embed a
+    # third-party photograph, regardless of what was found to look at. Empty
+    # for lovable, whose IMAGERY block already covers this case.
+    no_photography_lines: tuple[str, ...]
+    # Platform-enforced DO NOT items, independent of anything the spec's
+    # `avoid` field said about this specific business.
+    fixed_do_not_lines: tuple[str, ...] = ()
+    # Rendered verbatim by this function, not authored by the model -- a
+    # fixed disclaimer is what turns a legal complaint into a reply-and-done
+    # email rather than a "your AI put my name on a website" one. Empty for
+    # lovable, which ships under the owner's own domain once approved.
+    footer_line: str = ""
+    output_format_lines: tuple[str, ...] = ()
+
+
+TARGETS: dict[str, TargetProfile] = {
+    "lovable": TargetProfile(
+        stack=(
+            "Stack: React + Tailwind + shadcn/ui. Framer Motion is already available"
+            " -- use motion.* directly. whileInView with viewport={{ once: true }}"
+            " for on-scroll reveals, AnimatePresence for the showcase modal,"
+            " layoutId for the card-to-modal shared-element move,"
+            " useReducedMotion() as the a11y fallback. Spring for a snappy"
+            " motion_language, tween for a slow one. Reach for shadcn's Dialog,"
+            " Sheet, Tabs and Accordion over hand-rolled equivalents -- they"
+            " already handle focus and escape."
+        ),
+        scroll_reveal=(
+            "- Reveal on scroll with whileInView, viewport={{ once: true }};"
+            " never re-trigger. Content is in the DOM and readable even if the animation never runs."
+        ),
+        reduced_motion=(
+            "- Honour prefers-reduced-motion via useReducedMotion(): plain fade,"
+            " or nothing. Some people get motion sickness from parallax."
+        ),
+        enquiry_lines=(
+            "- Send every booking or enquiry to a spreadsheet via the",
+            "  Google Sheets connector, one row per enquiry with a timestamp.",
+            "  This owner has never had a website and will not log into an",
+            "  admin panel to check messages. A spreadsheet is a tool they already know.",
+            "- Put a WhatsApp click-to-chat link next to any form. In this market that is",
+            "  how people actually get in touch, and a form alone will lose enquiries.",
+        ),
+        imagery_lines=(
+            "IMAGERY",
+            "Pull every photo you can from the sources above before you design "
+            "anything: Google Business Profile photos (the owner's own, and the "
+            "ones customers attached to their reviews -- this one almost always "
+            "opens), then Instagram, then Facebook. Instagram and Facebook are "
+            "login-walled and often will not let a fetch through; if one will "
+            "not open, say which one plainly and work from whichever sources "
+            "did -- never invent a photo you could not see.",
+            "",
+            "Then select. Sharp, well-lit, and it shows the actual place or the "
+            "actual work -- use it as-is; a real customer photo of this Penang "
+            "shoplot outranks any stock image, however polished. The actual "
+            "place or work but blurry or a dated phone snapshot -- recreate the "
+            "same subject and framing to a higher standard; a dim 2019 "
+            "snapshot does not outrank a stock image, the shot it should have "
+            "been does. Never substitute stock photography for either, and "
+            "never fill a gap with an invented photo -- an honest tinted "
+            "placeholder beats a fabricated one. The hero image must come from "
+            "the real premises or the real work; nothing generic sits above "
+            "the fold.",
+        ),
+        no_photography_lines=(),
+    ),
+    "html": TargetProfile(
+        stack=(
+            "Stack: one self-contained HTML file -- inline <style> and <script>,"
+            " no build step, no framework, no external JS beyond the Google"
+            " Fonts <link> tags. CSS @keyframes and transitions for motion,"
+            " IntersectionObserver for on-scroll reveals, the native <dialog>"
+            " element for the showcase modal (open it with .showModal(); it"
+            " already handles focus and Escape for you), and a"
+            " prefers-reduced-motion media query as the a11y fallback -- there"
+            " is no framework hook to call for it here."
+        ),
+        scroll_reveal=(
+            "- Reveal on scroll with IntersectionObserver, and unobserve each"
+            " element after its first intersection so it never re-triggers."
+            " Content is in the DOM and readable even if the observer callback never runs."
+        ),
+        reduced_motion=(
+            "- Honour prefers-reduced-motion via a @media (prefers-reduced-motion:"
+            " reduce) block: plain fade, or nothing. Some people get motion"
+            " sickness from parallax."
+        ),
+        enquiry_lines=(
+            "- No backend exists for this site. Every enquiry must go through a",
+            "  WhatsApp click-to-chat link, a tel: link, or a mailto: link --",
+            "  nothing is there to receive a POST.",
+            "- Never build a <form> that appears to submit. A form with nowhere",
+            "  to send its data silently drops every enquiry the owner would",
+            "  otherwise have received, which is worse than no form at all.",
+            "- Put a WhatsApp click-to-chat link next to every contact point. In",
+            "  this market that is how people actually get in touch.",
+        ),
+        imagery_lines=(),
+        no_photography_lines=(
+            "NO PHOTOGRAPHY",
+            "No third-party photograph may appear anywhere on this site. "
+            "Google's Places terms forbid caching a photo URI or file, and a "
+            "single one-shot generation call cannot browse or download one "
+            "even where that were allowed -- so any <img src> written here "
+            "would be guessed, look plausible the moment it is generated, and "
+            "404 the moment a real prospect clicks it.",
+            "",
+            "Design type-and-colour led instead, from the palette, typography, "
+            "visual_direction and signature_moment above -- those are real "
+            "design decisions, not a placeholder for missing photography. "
+            "Every image slot becomes a solid tinted block from the palette "
+            "with the item's name shown on it, the same honest fallback used "
+            "wherever no photo source exists at all; never fill a gap with an "
+            "invented photo.",
+            "",
+            "The one exception: a live Google Maps Embed of the actual "
+            "premises (https://www.google.com/maps/embed/v1/place?"
+            "q=place_id:THE_PLACE_ID -- fill in the real place ID from the "
+            "Google Business Profile link above) is free-tier, permitted by "
+            "Google's terms, and the one real visual allowed on the page.",
+        ),
+        fixed_do_not_lines=(
+            "- No <img> or <script> whose src points at any domain other than",
+            "  fonts.googleapis.com, fonts.gstatic.com, or www.google.com.",
+            "- No <form> with an action attribute -- there is nowhere for it to",
+            "  submit. Use a mailto:, tel:, or WhatsApp link instead.",
+        ),
+        footer_line=(
+            "Unofficial concept by COAI -- not affiliated with {business_name}. "
+            "Reply to have it removed."
+        ),
+        output_format_lines=(
+            "",
+            "OUTPUT FORMAT",
+            "Return only the HTML document itself: <!doctype html> must be the "
+            "first character of your reply and </html> the last character. No "
+            "markdown code fences, no explanation before or after, nothing else "
+            "in the response.",
+            "Include <meta name=\"robots\" content=\"noindex\"> in <head> -- this "
+            "is an unofficial concept site, not the business's own indexed page.",
+        ),
+    ),
+}
+
+
 def render_lovable_prompt(
     *,
     business_name: str,
@@ -514,6 +682,7 @@ def render_lovable_prompt(
     social_handle: str = "",
     social_profiles: str = "",
     maps_url: str = "",
+    target: str = "lovable",
 ) -> str:
     """Turn the structured spec into the text you paste into Lovable.
 
@@ -524,7 +693,21 @@ def render_lovable_prompt(
 
     Structured the way a designer hands work over: who it's for, the one job,
     the copy, the art direction, what to leave out, then the build rules.
+
+    ``target`` selects which builder this prompt is written for -- "lovable"
+    (the default, and today's only behaviour) or "html", the self-contained
+    single-file page a Gemini call renders straight to Firebase. The name
+    stays ``render_lovable_prompt`` regardless: it is imported by
+    ``site_brief.py`` and asserted by name across the tests, and the "html"
+    target still IS a Lovable-shaped brief -- who it's for, the one job, the
+    art direction -- just aimed at a different builder.
     """
+    if target not in TARGETS:
+        raise ValueError(
+            f"Unknown build target {target!r}; expected one of {sorted(TARGETS)}"
+        )
+    profile = TARGETS[target]
+
     where = f" in {location}" if location else ""
     pages = "\n".join(f"- {p}" for p in spec.pages) or "- Home (single page)"
     sections = "\n".join(f"{i}. {s}" for i, s in enumerate(spec.key_sections, start=1))
@@ -562,28 +745,9 @@ def render_lovable_prompt(
             "what they genuinely offer. If you cannot open one, say so plainly "
             "and work from the brief below -- do not invent what you would have "
             "found there.",
-            "",
-            "IMAGERY",
-            "Pull every photo you can from the sources above before you design "
-            "anything: Google Business Profile photos (the owner's own, and the "
-            "ones customers attached to their reviews -- this one almost always "
-            "opens), then Instagram, then Facebook. Instagram and Facebook are "
-            "login-walled and often will not let a fetch through; if one will "
-            "not open, say which one plainly and work from whichever sources "
-            "did -- never invent a photo you could not see.",
-            "",
-            "Then select. Sharp, well-lit, and it shows the actual place or the "
-            "actual work -- use it as-is; a real customer photo of this Penang "
-            "shoplot outranks any stock image, however polished. The actual "
-            "place or work but blurry or a dated phone snapshot -- recreate the "
-            "same subject and framing to a higher standard; a dim 2019 "
-            "snapshot does not outrank a stock image, the shot it should have "
-            "been does. Never substitute stock photography for either, and "
-            "never fill a gap with an invented photo -- an honest tinted "
-            "placeholder beats a fabricated one. The hero image must come from "
-            "the real premises or the real work; nothing generic sits above "
-            "the fold.",
         ]
+        if profile.imagery_lines:
+            out += ["", *profile.imagery_lines]
 
     if spec.visitor:
         out += ["", "WHO IT IS FOR", spec.visitor]
@@ -626,8 +790,10 @@ def render_lovable_prompt(
         # pointing at it here when there is none would send the builder to a
         # section that does not exist. No sources is exactly the case a
         # tinted block exists for: an honest placeholder beats a fabricated
-        # photo.
-        if sources:
+        # photo. On the html target IMAGERY never renders at all (see
+        # NO PHOTOGRAPHY above), so the tinted-block wording is what every
+        # card gets regardless of whether a source was found.
+        if sources and profile.imagery_lines:
             out.append(
                 "Each card: image area, name, its tags as small badges, and a tap "
                 "target opening a modal with a little more detail. Follow IMAGERY "
@@ -708,14 +874,7 @@ def render_lovable_prompt(
         out += motion
     out += [
         "",
-        "Stack: React + Tailwind + shadcn/ui. Framer Motion is already available"
-        " -- use motion.* directly. whileInView with viewport={{ once: true }}"
-        " for on-scroll reveals, AnimatePresence for the showcase modal,"
-        " layoutId for the card-to-modal shared-element move,"
-        " useReducedMotion() as the a11y fallback. Spring for a snappy"
-        " motion_language, tween for a slow one. Reach for shadcn's Dialog,"
-        " Sheet, Tabs and Accordion over hand-rolled equivalents -- they"
-        " already handle focus and escape.",
+        profile.stack,
         "",
         "BUILD ALL OF THESE -- a page with none of them is not a pass:",
         *(f"{i}. {item}" for i, item in enumerate(floor_items, start=1)),
@@ -727,21 +886,33 @@ def render_lovable_prompt(
         "",
         "- Animate transform and opacity only -- width, height, top or left"
         " force layout on every frame and stutter on a mid-range phone.",
-        "- Reveal on scroll with whileInView, viewport={{ once: true }};"
-        " never re-trigger. Content is in the DOM and readable even if the animation never runs.",
-        "- Honour prefers-reduced-motion via useReducedMotion(): plain fade,"
-        " or nothing. Some people get motion sickness from parallax.",
+        profile.scroll_reveal,
+        profile.reduced_motion,
         "- No scroll-jacking, no page-load animation gate, no cursor effects,"
         " no WebGL or Three.js. Those belong on a designer's portfolio, not a"
         " shop that needs the booking -- and the cursor ones do not exist on"
         " a phone.",
     ]
 
+    # Design-decision constraint, not a business-specific one, so it does not
+    # belong in `avoid` below and does not depend on whether the spec named
+    # anything to avoid. Empty for lovable, whose IMAGERY block above already
+    # covers this case with a real photo pipeline.
+    if profile.no_photography_lines:
+        out += ["", *profile.no_photography_lines]
+
     if spec.avoid:
         out += [
             "",
             "DO NOT (specific to this business)",
             *(f"- {a}" for a in spec.avoid),
+        ]
+
+    if profile.fixed_do_not_lines:
+        out += [
+            "",
+            "DO NOT (platform rules -- apply regardless of the business)",
+            *profile.fixed_do_not_lines,
         ]
 
     contact = []
@@ -808,13 +979,19 @@ def render_lovable_prompt(
         " the budget.",
         "- Real images beat illustrations, but they must be sized and lazy",
         "  loaded below the fold, with width and height set so nothing jumps.",
-        "- Send every booking or enquiry to a spreadsheet via the",
-        "  Google Sheets connector, one row per enquiry with a timestamp.",
-        "  This owner has never had a website and will not log into an",
-        "  admin panel to check messages. A spreadsheet is a tool they already know.",
-        "- Put a WhatsApp click-to-chat link next to any form. In this market that is",
-        "  how people actually get in touch, and a form alone will lose enquiries.",
+        *profile.enquiry_lines,
     ]
+
+    if profile.footer_line:
+        out += [
+            "",
+            "FOOTER (render this exact text, verbatim, in a <footer> at the "
+            "bottom of the page -- do not paraphrase, translate, or omit it)",
+            profile.footer_line.format(business_name=business_name),
+        ]
+
+    if profile.output_format_lines:
+        out += list(profile.output_format_lines)
 
     return "\n".join(out) + "\n"
 

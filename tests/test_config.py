@@ -55,3 +55,77 @@ def test_missing_campaign_field_names_the_file(tmp_path):
     path.write_text("campaign:\n  name: x\ncompliance:\n  country_code: MY\n")
     with pytest.raises(ConfigError, match="category"):
         load_config(path, env_file=None)
+
+
+# --------------------------------------------------------------------- build
+
+
+def test_build_defaults_keep_lovable_the_live_target():
+    """Byte-identical today's behaviour: an untouched campaign still builds
+    through Lovable, and never turns on the Firebase spend on its own."""
+    config = load_config(PENANG, env_file=None)
+    assert config.build.target == "lovable"
+    assert config.build.enabled is False
+
+
+def test_build_defaults_are_pinned():
+    config = load_config(PENANG, env_file=None)
+    assert config.build.provider == "gemini"
+    assert config.build.model == "gemini-3-flash"
+    assert config.build.max_output_tokens == 32000
+    assert config.build.min_interval_seconds == 6.5
+    assert config.build.output_dir == "sites"
+    assert config.build.url_context is False
+    assert config.build.public_base_url == ""
+    assert config.build.max_versions == 5
+    assert config.build.min_bytes == 4000
+    assert config.build.max_bytes == 400000
+
+
+def test_build_max_output_tokens_is_not_the_json_writer_cap():
+    """32000 is deliberate -- reusing the JSON writers' 6000 truncates a
+    full HTML page mid-document. See the comment in config.py for why."""
+    config = load_config(PENANG, env_file=None)
+    assert config.build.max_output_tokens != 6000
+
+
+def test_build_target_rejects_an_unknown_value(tmp_path):
+    src = open(PENANG).read().replace("  target: lovable", "  target: wix", 1)
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
+    with pytest.raises(ConfigError, match="build.target must be one of.*firebase.*lovable"):
+        load_config(path, env_file=None)
+
+
+def test_firebase_target_requires_the_site_id_env_var(tmp_path, monkeypatch):
+    monkeypatch.delenv("FIREBASE_SITE_ID", raising=False)
+    src = open(PENANG).read().replace("  target: lovable", "  target: firebase", 1)
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
+    with pytest.raises(ConfigError, match="FIREBASE_SITE_ID") as excinfo:
+        load_config(path, env_file=None)
+    assert "Firebase console" in str(excinfo.value)
+
+
+def test_firebase_target_loads_once_the_site_id_is_set(tmp_path, monkeypatch):
+    monkeypatch.setenv("FIREBASE_SITE_ID", "my-demo-site")
+    src = (
+        open(PENANG)
+        .read()
+        .replace("  target: lovable", "  target: firebase", 1)
+        .replace("  enabled: false\n  # provider: gemini", "  enabled: true\n  # provider: gemini", 1)
+    )
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
+    config = load_config(path, env_file=None)
+    assert config.build.target == "firebase"
+    assert config.build.enabled is True
+    assert config.secrets.firebase_site_id == "my-demo-site"
+
+
+def test_build_secrets_never_come_from_yaml(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("FIREBASE_PROJECT_ID", raising=False)
+    config = load_config(PENANG, env_file=None)
+    assert config.secrets.gemini_api_key == ""
+    assert config.secrets.firebase_project_id == ""
