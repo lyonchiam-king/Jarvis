@@ -250,6 +250,33 @@ def load_config(
         raise ConfigError(
             f"discovery.page_size must be between 1 and 20 (Places API cap), got {page_size}"
         )
+    # Two lists have to agree: the domains discovery treats as "social, so this
+    # counts as having no website", and the hosts the code can actually name and
+    # link. They drifted once -- business.site, carrd.co and linktr.ee were in
+    # the campaign and not in the code, so those leads were accepted *because*
+    # they were social and then had their only URL silently dropped. Research
+    # now skips a lead whose URL it cannot classify, which turns that same drift
+    # into lost work, so it fails here instead: at load, naming the domain.
+    #
+    # Imported inside the function for the same reason selection.ORDERS is --
+    # providers.social imports requests, and config must stay cheap to import.
+    from .providers.social import platform_for
+
+    unknown = [
+        domain
+        for domain in (d.get("social_domains") or ())
+        if not platform_for(f"https://x.{domain}")
+    ]
+    if unknown:
+        raise ConfigError(
+            "discovery.social_domains lists "
+            + ", ".join(repr(u) for u in unknown)
+            + ", which the code cannot recognise, so leads found there would "
+            "be accepted as social and then lose their only link. Add each one "
+            "to PLATFORMS in src/outreach/providers/social.py with the name a "
+            "person would say (e.g. \"carrd.co\": \"Carrd\"), or remove it here."
+        )
+
     discovery = DiscoverySettings(
         max_results=int(d.get("max_results", 60)),
         page_size=page_size,

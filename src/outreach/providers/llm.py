@@ -621,10 +621,25 @@ def render_lovable_prompt(
             "WHAT THEY OFFER (build a card for each, in this order)",
             *(f"{i}. {item}" for i, item in enumerate(spec.showcase_items, start=1)),
             "",
-            "Each card: image area, name, its tags as small badges, and a tap "
-            "target opening a modal with a little more detail. Follow IMAGERY "
-            "above for the photo -- never a stock photo.",
         ]
+        # IMAGERY only renders when there is a source to pull photos from --
+        # pointing at it here when there is none would send the builder to a
+        # section that does not exist. No sources is exactly the case a
+        # tinted block exists for: an honest placeholder beats a fabricated
+        # photo.
+        if sources:
+            out.append(
+                "Each card: image area, name, its tags as small badges, and a tap "
+                "target opening a modal with a little more detail. Follow IMAGERY "
+                "above for the photo -- never a stock photo."
+            )
+        else:
+            out.append(
+                "Each card: image area, name, its tags as small badges, and a tap "
+                "target opening a modal with a little more detail. No source was "
+                "given to pull a photo from, so use a solid tinted block from the "
+                "palette for the image area -- never a stock photo."
+            )
 
     if spec.interactive_feature:
         out += [
@@ -665,6 +680,29 @@ def render_lovable_prompt(
     # not silently ship a static page. The floor list below is fixed text,
     # not derived from spec values, so it survives micro_interactions=None
     # and an empty signature_moment alike.
+    # Items 1-3 are the floor for every site -- they don't depend on which
+    # optional sections the spec asked for. 4 and 5 name a showcase card and
+    # the mobile bar specifically, so they only belong on the list when the
+    # spec actually has one; naming them unconditionally told the builder to
+    # invent both, straight against "if a section does not move someone
+    # toward the CTA, it does not belong on the page" a few paragraphs up.
+    floor_items = [
+        "The signature moment above, or the closest fit if none was given.",
+        "Sections below the fold reveal on scroll, staggered sibling to sibling.",
+        "The primary CTA answers the tap: a scale or opacity change on press,"
+        " not only on hover, which does not exist on a phone.",
+    ]
+    if spec.showcase_items:
+        floor_items.append(
+            "A showcase card expands into its modal as a shared-element move,"
+            " not a hard cut."
+        )
+    if spec.mobile_bar:
+        floor_items.append(
+            "The mobile bar enters with its own animation once the visitor has"
+            " scrolled past the hero -- it is not present from frame one."
+        )
+
     out += ["", "MOTION AND INTERACTION"]
     if motion:
         out += motion
@@ -680,14 +718,7 @@ def render_lovable_prompt(
         " already handle focus and escape.",
         "",
         "BUILD ALL OF THESE -- a page with none of them is not a pass:",
-        "1. The signature moment above, or the closest fit if none was given.",
-        "2. Sections below the fold reveal on scroll, staggered sibling to sibling.",
-        "3. The primary CTA answers the tap: a scale or opacity change on"
-        " press, not only on hover, which does not exist on a phone.",
-        "4. A showcase card expands into its modal as a shared-element move,"
-        " not a hard cut.",
-        "5. The mobile bar enters with its own animation once the visitor has"
-        " scrolled past the hero -- it is not present from frame one.",
+        *(f"{i}. {item}" for i, item in enumerate(floor_items, start=1)),
         "",
         "The hero itself does not animate: final position, full opacity, no"
         " entrance, no load gate, the instant the page paints. That alone"
@@ -745,14 +776,12 @@ def render_lovable_prompt(
             " handle for a platform that is not listed here, and do not guess a"
             " URL from the business name.",
         ]
-    elif social_handle:
-        out += [
-            "",
-            "SOCIAL PROFILES",
-            f"- {social_handle} -- link it prominently. Their customers already "
-            "follow them there, and it is the photo feed this site would "
-            "otherwise lack.",
-        ]
+    # A bare handle with no URL is deliberately not rendered here, even as
+    # unlinked text: "@sun -- link it prominently" with nothing to link is an
+    # invitation for the builder to guess a URL, and a guessed URL can send a
+    # real customer to a stranger's profile. `social_profiles` (backed by
+    # `social.profiles_text`/a real lookup) is the only path a link reaches
+    # this prompt by.
 
     out += [
         "",
@@ -768,13 +797,15 @@ def render_lovable_prompt(
         "  [TO CONFIRM] rather than guessing. That is the correct outcome.",
         "- Accessible by default: real contrast, real heading order, alt text,",
         "  and a form every keyboard can complete.",
-        "- Performance budget governs the hero and the first tap, not the",
-        "  rest of the page: largest contentful paint under 2.5s on a",
-        "  mid-range Android on 4G, no layout shift as things load, primary",
-        "  action tappable within one second. The hero renders at final",
-        "  position and full opacity with no entrance animation and no load",
-        "  gate -- that alone protects the budget. Below the fold, animate",
-        "  freely inside the transform/opacity rule above.",
+        "- Performance budget governs the hero and the first tap, not the"
+        " rest of the page: largest contentful paint under 2.5s on a"
+        " mid-range Android on 4G, no layout shift as things load, primary"
+        " action tappable within one second. The hero renders at final"
+        " position and full opacity with no entrance animation and no load"
+        " gate -- that alone protects the budget. Below the fold, animate"
+        " freely inside the transform/opacity rule above. If an effect cannot"
+        " fit inside the hero-and-first-tap budget, drop the effect -- not"
+        " the budget.",
         "- Real images beat illustrations, but they must be sized and lazy",
         "  loaded below the fold, with width and height set so nothing jumps.",
         "- Send every booking or enquiry to a spreadsheet via the",

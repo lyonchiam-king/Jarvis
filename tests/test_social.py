@@ -5,6 +5,9 @@ any platform, and guessing wrong sends the salon's customers to a stranger.
 These tests pin platform, handle and URL as three separate facts.
 """
 
+import pytest
+
+
 def test_platform_is_named_not_guessed():
     from outreach.providers.social import platform_for
 
@@ -230,3 +233,27 @@ def test_every_configured_social_domain_is_recognised_by_platform_for():
             f"{domain!r} is in discovery.social_domains but "
             "outreach.providers.social.PLATFORMS does not recognise it"
         )
+
+
+def test_a_social_domain_the_code_cannot_name_is_refused_at_load_time(tmp_path):
+    """The drift test below guards the shipped campaign. This guards the rest.
+
+    Dashboard edits fork to `*.local.yaml`, so a domain Lyon adds there is
+    never seen by a test that reads `penang-my.yaml`. And the cost of the
+    drift went up: research now skips a lead whose URL it cannot classify,
+    where before it looked one up anyway. So the check has to run against
+    whatever file is actually loaded, at load, naming the domain.
+    """
+    from outreach.config import ConfigError, load_config
+
+    src = open("config/campaigns/penang-my.yaml").read()
+    assert "\n    - beacons.ai\n" in src, "campaign no longer lists beacons.ai"
+    src = src.replace("\n    - beacons.ai\n", "\n    - beacons.ai\n    - myspace.example\n", 1)
+    path = tmp_path / "penang-my.local.yaml"
+    path.write_text(src)
+
+    with pytest.raises(ConfigError) as err:
+        load_config(path, env_file=None)
+
+    assert "myspace.example" in str(err.value)
+    assert "PLATFORMS" in str(err.value), "the message must name the fix"

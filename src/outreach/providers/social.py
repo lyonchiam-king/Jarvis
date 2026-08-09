@@ -33,8 +33,6 @@ _META_REVERSED_RE = re.compile(
     re.IGNORECASE,
 )
 
-_SOCIAL_HOSTS = ("facebook.com", "fb.com", "fb.me", "instagram.com")
-
 # Host -> the platform's name as a person would say it. A bare handle is not
 # enough for a site builder: "@espariohair" could be linked to any of these,
 # and guessing wrong sends the salon's customers to a stranger's profile.

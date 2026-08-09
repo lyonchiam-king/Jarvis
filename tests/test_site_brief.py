@@ -22,9 +22,8 @@ def config(**lovable_overrides):
 
     ``auto_approve`` lives in a campaign file the user edits, so any test that
     depends on it states its own value here. ``research.social_lookup`` is
-    pinned too: the Leads-tab fallback in stage 4 now depends on the social
-    provider's own classification, and a campaign edit to that flag must not
-    silently change what these tests assert.
+    pinned too: the Leads-tab fallback in stage 4 is gated on that flag, so a
+    campaign edit to it must not silently change what these tests assert.
     """
     cfg = load_config(PENANG, env_file=None)
     return replace(
@@ -496,11 +495,9 @@ def test_real_contact_details_are_passed_through_verbatim():
     prompt = rendered(
         phone="04-262 1188",
         address="58 Lebuh Chulia, 10200 George Town",
-        social_handle="@chuliahairhouse",
     )
     assert "04-262 1188" in prompt
     assert "58 Lebuh Chulia, 10200 George Town" in prompt
-    assert "@chuliahairhouse" in prompt
     assert "do not paraphrase" in prompt
 
 
@@ -533,7 +530,17 @@ def test_the_builder_is_told_to_mark_gaps_rather_than_guess():
 def test_stage_4_hands_the_lead_its_own_phone_and_address():
     sheets = FakeSheets(
         index([{**lead("a"), "Phone": "04-262 1188", "Address": "58 Lebuh Chulia"}]),
-        index([{**research_row("a"), "Social Handle": "@chuliahair"}]),
+        index(
+            [
+                {
+                    **research_row("a"),
+                    "Social Handle": "@chuliahair",
+                    "Social Profiles": (
+                        "Instagram @chuliahair https://instagram.com/chuliahair"
+                    ),
+                }
+            ]
+        ),
     )
     site_brief.run(config(), sheets, FakeWriter(), LovableAdapter())
 
@@ -591,6 +598,21 @@ def test_no_socials_means_no_social_section():
         business_name="X", category="salon", location="Penang", spec=FULL_SPEC
     )
     assert "SOCIAL PROFILES" not in prompt
+
+
+def test_a_bare_handle_with_no_url_never_reaches_the_builder():
+    """The bug: a handle with no known URL used to render 'SOCIAL PROFILES /
+    - @sun -- link it prominently' with nothing to link, which is an
+    invitation for the builder to guess a URL -- and a guessed URL can send
+    a real customer to a stranger's profile. Lyon's rule is that this can
+    never happen, so a bare handle renders nothing rather than unlinked
+    text with an instruction to link it."""
+    prompt = render_lovable_prompt(
+        business_name="X", category="salon", location="Penang", spec=FULL_SPEC,
+        social_handle="@sun",
+    )
+    assert "SOCIAL PROFILES" not in prompt
+    assert "@sun" not in prompt
 
 
 def test_stage_4_passes_the_whole_profile_list_through():
@@ -712,12 +734,25 @@ def test_the_performance_budget_outranks_the_visual_ideas():
     visual idea above' -- read literally as a veto over the whole motion
     section above it, which is exactly backwards. LCP is set by the hero, so
     the budget is scoped to the hero and the first tap; below the fold is
-    then explicitly free to move within the transform/opacity rule."""
+    then explicitly free to move within the transform/opacity rule.
+
+    The permissive half is not the whole rescope, though: the hero itself
+    still may not animate, and when an effect and the budget collide the
+    effect loses -- that tiebreak is what the rescope would otherwise be
+    silently missing, so it is asserted here too, against the rendered
+    prompt (not just the spec-writing system prompt)."""
     prompt = motion_prompt()
     assert "2.5s" in prompt
     assert "governs the hero and the first tap" in prompt
     assert "Below the fold, animate" in prompt
     assert "freely inside the transform/opacity rule" in prompt
+    # The restrictive half: no entrance animation on the hero, and the
+    # tiebreak restored from the pre-rewrite wording, adapted to the scope.
+    assert "no entrance animation and no load gate" in prompt
+    assert (
+        "If an effect cannot fit inside the hero-and-first-tap budget, "
+        "drop the effect -- not the budget." in prompt
+    )
 
 
 def test_a_thin_spec_still_gets_the_motion_floor():
@@ -731,6 +766,38 @@ def test_a_thin_spec_still_gets_the_motion_floor():
     assert "MOTION AND INTERACTION" in prompt
     assert "BUILD ALL OF THESE" in prompt
     assert "Signature moment:" not in prompt, "nothing to report, so it reports nothing"
+
+
+def test_motion_floor_never_demands_sections_the_spec_does_not_have():
+    """The bug: floor items 4 (showcase modal) and 5 (mobile bar) rendered
+    unconditionally, telling the builder to BUILD a showcase card and a
+    mobile bar that appear nowhere else in the prompt when the spec has
+    neither -- contradicting 'if a section does not move someone toward the
+    CTA, it does not belong on the page'. FULL_SPEC has no showcase_items and
+    no mobile_bar, so neither may appear in the floor, and the numbering
+    must not skip 4 and 5."""
+    prompt = render_lovable_prompt(
+        business_name="X", category="salon", location="Penang", spec=FULL_SPEC
+    )
+    floor = prompt[prompt.index("BUILD ALL OF THESE"):prompt.index("The hero itself")]
+
+    assert "showcase card" not in floor
+    assert "mobile bar" not in floor
+    assert "1. The signature moment" in floor
+    assert "2. Sections below the fold" in floor
+    assert "3. The primary CTA answers the tap" in floor
+    assert "4." not in floor
+    assert "5." not in floor
+
+
+def test_motion_floor_includes_showcase_and_mobile_bar_when_the_spec_has_them():
+    """Items 1-3 are the floor; 4 and 5 are numbered on without a gap when
+    the spec actually has a showcase and a mobile bar to build."""
+    prompt = rich()
+    floor = prompt[prompt.index("BUILD ALL OF THESE"):prompt.index("The hero itself")]
+
+    assert "4. A showcase card expands into its modal" in floor
+    assert "5. The mobile bar enters with its own animation" in floor
 
 
 # ------------------------------------------------ sources the builder studies
@@ -825,6 +892,20 @@ def test_imagery_admits_when_a_login_walled_platform_will_not_open():
 def test_showcase_cards_point_at_imagery_instead_of_repeating_it():
     prompt = rich(maps_url="https://maps.google.com/?cid=123")
     assert "Follow IMAGERY above for the photo" in prompt
+
+
+def test_showcase_cards_never_reference_imagery_when_there_are_no_sources():
+    """The bug: with no maps_url and no social_profiles, IMAGERY never
+    renders (see test_imagery_guidance_appears_only_when_there_are_sources),
+    but the showcase-card paragraph pointed at it anyway -- and the rule that
+    sentence replaced ('a solid tinted block from the palette') was gone, so
+    the one case with no photo source at all had no image instruction."""
+    prompt = rich()  # no maps_url, no social_profiles -- blank of both
+
+    assert "IMAGERY" not in prompt
+    assert "Follow IMAGERY" not in prompt
+    assert "solid tinted block from the palette" in prompt
+    assert "never a stock photo" in prompt
 
 
 def test_stage_4_passes_the_maps_url_through():

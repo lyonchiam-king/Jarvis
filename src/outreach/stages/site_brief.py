@@ -146,10 +146,13 @@ def run(
             # strictly a rendering fallback: nothing here is written back to
             # the Research tab, so a blank cell stays visible and eligible
             # for a real backfill later instead of being permanently masked.
-            social_profiles = (
-                research_row.get("Social Profiles", "").strip()
-                or social.profiles_text(lead.get("Website URL", ""))
-            )
+            # Gated on research.social_lookup: that flag is the user's one
+            # switch for "don't put social links in front of the builder",
+            # and a fallback that ignored it would keep doing the thing they
+            # just turned off.
+            social_profiles = research_row.get("Social Profiles", "").strip()
+            if not social_profiles and config.research.social_lookup:
+                social_profiles = social.profiles_text(lead.get("Website URL", ""))
 
             spec = writer.write_site_spec(
                 _spec_prompt(lead, research_row, config, social_profiles)
