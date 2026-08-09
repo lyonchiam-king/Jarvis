@@ -1,0 +1,114 @@
+# Jarvis -- SME outreach pipeline
+
+Finds small businesses with no website, researches them, writes a website brief,
+builds a demo site, and drafts the outreach message. The demo site **is** the
+pitch: nothing is sent to a business until their site exists.
+
+**Owner:** Lyon Chiam (COAI, Penang). Works on **Windows/PowerShell**, is not a
+programmer, and drives the tool through `Dashboard.bat` -- not the CLI. Anything
+that only works on Linux, or only works from a terminal, is not finished.
+
+**Stack:** Python 3.11+, stdlib-first. Flask-free single-file dashboard
+(`http.server`). No frontend build step. Google Sheets is the database.
+
+## Commands
+
+```bash
+.venv/bin/pytest -q          # the whole suite -- must be green before any push
+.venv/bin/pytest tests/test_research.py -q
+python -m outreach run discovery --limit 10
+python -m outreach dashboard
+```
+
+On Windows the equivalents are `run.bat` and `Dashboard.bat`.
+
+## Layout
+
+```
+src/outreach/
+  config.py        campaign YAML + .env loading, all validation at load time
+  selection.py     who gets picked next, and in what order -- shared by stages
+  sheets.py        Google Sheets client; column-position based
+  schema.py        tab + column definitions
+  stage.py         the Stage enum and legal transitions
+  dashboard.py     the local web UI Lyon actually uses
+  campaign_edit.py surgical YAML rewriting that preserves comments
+  env_edit.py      writes keys into .env without ever reading them back
+  modelcheck.py    proves a model can produce every required shape
+  stages/          discovery, research, site_brief, outreach_draft
+  providers/       places, sheets auth, llm, social, web, lovable
+config/campaigns/  penang-my.yaml is the live campaign
+tests/             473 tests, pytest, no CI -- the suite is the only gate
+```
+
+## Rules that came from real bugs
+
+**The Sheet is positional.** Rows are read by column index, so schema columns
+are **append-only**. Inserting a column in the middle silently shifts every
+value in every existing row.
+
+**Manual columns are manual.** `Approval Status` and anything else a human sets
+is guarded by `guard_manual_column`. A stage may never write one. A dashboard
+action on a named row the user just clicked may, with `user_edit=True`.
+
+**Test fakes must enforce what the real client enforces.** A `FakeSheets` that
+was more permissive than `SheetsClient` is how the manual-column bug shipped
+past a green suite. When you add a rule to the real client, add it to the fakes.
+
+**Never write to a git-tracked file at runtime.** The dashboard once wrote to
+`config/campaigns/penang-my.yaml` and broke `git pull` on Lyon's machine. Config
+edits fork to `*.local.yaml` via `fork_to_local`.
+
+**Pin what you assert.** Tests that read the live campaign file inherit its
+defaults; when the file changes, they quietly start asserting something else.
+Helpers pin the fields their assertions depend on.
+
+**Never inject a duplicate YAML key in a test.** Last-wins means the config you
+loaded was not the config you thought you wrote. Replace the real line.
+
+**Ordering is the user's, not ours.** Socials-first is the one reorder we do,
+because Lyon asked for it. Within that, sheet order is preserved -- a queue he
+can predict beats a marginally better-sorted one. Anything else goes behind
+`research.order` as an opt-in.
+
+**Secrets are write-only.** `env_edit.set_key` writes; `is_set` reports presence
+and never the value. No key is ever echoed to a page, a log, or a report.
+
+## Conventions
+
+- Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`, `chore:`)
+- No AI attribution trailers in commits
+- Comments explain *why*, in prose, at the density of the surrounding file
+- Config validates at load time and fails with a message naming the fix
+- Every stage is resumable: bounded by `--limit`, checkpointed, and skips work
+  already done
+
+## The agent team
+
+Five subagents live in `.claude/agents/`. Claude Code picks them up
+automatically; ask for one by name to force it.
+
+| Agent | When |
+|---|---|
+| `planner` | before a change big enough to get wrong -- returns a task plan, writes no code |
+| `coder` | implement a planned change, reusing the existing stage/provider patterns |
+| `code-reviewer` | after implementing, before pushing. Read-only, reviews a git range |
+| `tester` | write or strengthen tests, and prove each one fails without the fix |
+| `deployer` | run the suite, commit, push, and update the docs and handbook |
+
+The normal loop for anything non-trivial is planner → coder → tester →
+code-reviewer → deployer. For a one-file, sub-30-line change, skip to coder.
+
+Two skills in `.claude/skills/` are adapted from
+[superpowers](https://github.com/obra/superpowers) (MIT):
+`verification-before-completion` (never claim green without reading the number)
+and `systematic-debugging` (root cause before fix #4).
+
+## Not verified from this container
+
+Say so rather than implying otherwise:
+
+- The Windows launchers (`Dashboard.bat`, `run.bat`, `Schedule-Daily.ps1`) have
+  never been executed on Windows here.
+- The Ollama / OpenRouter transports have never reached a real endpoint --
+  outbound egress is blocked. `modelcheck` is how Lyon verifies them himself.
