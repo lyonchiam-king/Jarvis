@@ -29,6 +29,11 @@ log = logging.getLogger("outreach")
 API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
+# Statuses Google describes as temporary. 429 is included because the free
+# tier's per-minute window clears on its own -- waiting is the fix.
+_TRANSIENT = frozenset({429, 500, 502, 503, 504})
+
+
 class SiteGenError(Exception):
     """Gemini could not produce a usable HTML page for this lead."""
 
@@ -51,6 +56,8 @@ class SiteGenerator:
         model: str,
         max_output_tokens: int,
         min_interval_seconds: float = 6.5,
+        max_attempts: int = 3,
+        retry_base_seconds: float = 5.0,
         session: requests.Session | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
@@ -60,6 +67,8 @@ class SiteGenerator:
                 "GEMINI_API_KEY is empty. Set it in .env -- the demo builder "
                 "needs it to call Gemini."
             )
+        self.max_attempts = max(1, max_attempts)
+        self.retry_base_seconds = retry_base_seconds
         self.api_key = api_key
         self.model = model
         self.max_output_tokens = max_output_tokens
@@ -87,6 +96,33 @@ class SiteGenerator:
         self._last_call = self._clock()
 
     def generate(self, prompt: str) -> str:
+        """One page. Retries the failures Google itself calls temporary.
+
+        503 and 500 mean the model is busy, not that the request was wrong --
+        Google's own message says "please try again later". Failing the lead
+        on the first one turns a five-second wait into a page that never got
+        written, and on a sixty-lead run a brief spike would take out most of
+        the batch.
+        """
+        last: SiteGenError | None = None
+        for attempt in range(self.max_attempts):
+            try:
+                return self._attempt(prompt)
+            except SiteGenError as exc:
+                if exc.status_code not in _TRANSIENT or attempt == self.max_attempts - 1:
+                    raise
+                last = exc
+                # Back off 5s, 15s, 45s. Google asks for "later", and hammering
+                # a busy model is how a rate limit becomes a longer one.
+                wait = self.retry_base_seconds * (3 ** attempt)
+                log.info(
+                    "  Gemini is busy (HTTP %s). Waiting %.0fs, then retry %d of %d.",
+                    exc.status_code, wait, attempt + 2, self.max_attempts,
+                )
+                self._sleep(wait)
+        raise last  # unreachable; the loop either returns or raises
+
+    def _attempt(self, prompt: str) -> str:
         self._pace()
         self.call_count += 1
 
@@ -122,6 +158,14 @@ class SiteGenerator:
                 "actually use, then set the one you want under `build:` in "
                 "your campaign file.",
                 status_code=404,
+            )
+
+        if response.status_code in (500, 502, 503, 504):
+            raise SiteGenError(
+                f"Gemini is busy (HTTP {response.status_code}) for model "
+                f"{self.model}. This is Google's side and usually clears in "
+                "a minute or two.",
+                status_code=response.status_code,
             )
 
         if response.status_code != 200:

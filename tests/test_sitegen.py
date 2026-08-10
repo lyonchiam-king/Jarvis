@@ -182,7 +182,8 @@ def test_prompt_feedback_block_reason_raises():
 
 
 def test_http_429_raises_a_retryable_error():
-    g = generator(FakeResponse(status_code=429, text="rate limited"))
+    # max_attempts=1 so this test stays about the error, not the retrying.
+    g = generator(FakeResponse(status_code=429, text="rate limited"), max_attempts=1)
 
     with pytest.raises(SiteGenError) as exc_info:
         g.generate("prompt")
@@ -300,3 +301,51 @@ def test_an_unknown_model_name_points_at_list_models():
 
     assert "gemini-9-nope" in str(err.value)
     assert "list-models" in str(err.value)
+
+
+# ------------------------------------------------- Google's own "try again later"
+
+
+def test_a_busy_model_is_retried_rather_than_failing_the_lead():
+    """503 means the model is busy, not that the request was wrong -- Google's
+    message literally says "please try again later". Giving up on the first
+    one turns a few seconds of waiting into a page that never got written,
+    and on a sixty-lead run a brief spike would take out most of the batch.
+    """
+    slept = []
+    g = generator(
+        FakeResponse(status_code=503, text="high demand"),
+        FakeResponse(status_code=503, text="high demand"),
+        candidate_response(VALID_HTML),
+        sleep=slept.append,
+    )
+
+    out = g.generate("prompt")
+
+    assert out == VALID_HTML
+    assert g.call_count == 3, "it should have taken three attempts"
+    # Backing off, not hammering: a busy model hit hard stays busy longer.
+    assert slept and slept[0] < slept[1]
+
+
+def test_giving_up_after_the_last_attempt_reports_the_real_reason():
+    g = generator(
+        *[FakeResponse(status_code=503, text="high demand")] * 3,
+        sleep=lambda s: None,
+    )
+
+    with pytest.raises(SiteGenError) as err:
+        g.generate("prompt")
+
+    assert "busy" in str(err.value).casefold()
+    assert is_retryable(err.value), "the lead must come back on the next run"
+
+
+def test_a_bad_request_is_never_retried():
+    """Retrying a 400 wastes three calls to get the same answer."""
+    g = generator(*[FakeResponse(status_code=400, text="bad request")] * 3)
+
+    with pytest.raises(SiteGenError):
+        g.generate("prompt")
+
+    assert g.call_count == 1
