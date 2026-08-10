@@ -1457,3 +1457,143 @@ def test_rewrite_over_an_empty_sheet_logs_nothing_to_rewrite_and_returns_cleanly
     assert report.rewritten == 0
     assert sheets.upserts == []
     assert "nothing to rewrite" in caplog.text.lower()
+
+
+# ------------------------------------------------- generate to disk (dry run)
+
+
+class FakeGenerator:
+    """Returns canned HTML. `replies` is consumed in order."""
+
+    def __init__(self, replies):
+        self._replies = list(replies)
+        self.call_count = 0
+        self.prompts = []
+
+    def generate(self, prompt):
+        self.call_count += 1
+        self.prompts.append(prompt)
+        return self._replies.pop(0)
+
+
+def _good_page(phone="04-262 1188", headline=None):
+    # Must carry the spec's own headline: the prompt says "use this copy as
+    # written", and check_site enforces it.
+    headline = SPEC.hero_headline if headline is None else headline
+    return (
+        "<!doctype html><html><head><title>Chulia Hair House</title>"
+        '<meta name="robots" content="noindex"></head><body>'
+        f"<h1>{headline}</h1><p>Call {phone}</p>"
+        "<p>Unofficial concept by COAI -- not affiliated.</p>"
+        + "<p>content</p>" * 400
+        + "</body></html>"
+    )
+
+
+def _generate(tmp_path, replies, *, approval="Approved", stage="Site Briefed"):
+    from dataclasses import replace as dc_replace
+
+    cfg = config()
+    cfg = dc_replace(cfg, build=dc_replace(cfg.build, output_dir=str(tmp_path)))
+    leads = {
+        "a": (2, {
+            "Lead ID": "a", "Business Name": "Chulia Hair House", "Stage": stage,
+            "Category": "hair salon", "Phone": "04-262 1188",
+            "Address": "58 Lebuh Chulia", "Website URL": "", "Maps URL": "",
+        })
+    }
+    sheets = FakeSheets(
+        leads,
+        {"a": (2, {"Lead ID": "a", "Social Profiles": ""})},
+        {"a": (2, {
+            "Lead ID": "a", "Business Name": "Chulia Hair House",
+            "Approval Status": approval, "Lovable Project ID": "",
+        })},
+    )
+    gen = FakeGenerator(replies)
+    report = site_brief.generate_sites(cfg, sheets, FakeWriter(), gen)
+    return report, sheets, gen, tmp_path
+
+
+def test_a_generated_page_is_written_and_nothing_reaches_the_sheet(tmp_path):
+    """The whole point of the dry run: files on disk, Sheet untouched."""
+    report, sheets, _gen, root = _generate(tmp_path, [_good_page()])
+
+    assert report.generated == 1
+    written = list(root.rglob("index.html"))
+    assert len(written) == 1
+    assert "Chulia Hair House" in written[0].read_text()
+    # Not one Sheet write of any kind, beyond an Errors append that did not happen.
+    assert sheets.upserts == []
+    assert sheets.column_writes == []
+
+
+def test_a_page_that_stays_invalid_is_never_written(tmp_path):
+    """A truncated page must not reach disk, because a deploy walks the disk.
+
+    One repair is attempted; if it still fails the lead is logged and skipped.
+    """
+    truncated = "<!doctype html><html><body><h1>Half a p"
+    report, sheets, gen, root = _generate(tmp_path, [truncated, truncated])
+
+    assert gen.call_count == 2, "one generate, then one repair"
+    assert report.generated == 0
+    assert report.rejected == 1
+    assert report.errors == 1
+    assert list(root.rglob("index.html")) == []
+    assert sheets.appended and sheets.appended[0][0] is schema.ERRORS
+
+
+def test_one_repair_rescues_a_bad_first_reply(tmp_path):
+    report, _sheets, gen, root = _generate(
+        tmp_path, ["<!doctype html><html><body><h1>cut", _good_page()]
+    )
+
+    assert gen.call_count == 2
+    assert report.generated == 1
+    assert report.repaired == 1
+    assert len(list(root.rglob("index.html"))) == 1
+
+
+def test_a_page_already_on_disk_costs_no_model_call(tmp_path):
+    """What makes a re-run free -- and it only works because invalid pages
+    never land on disk in the first place."""
+    _first, _sheets, _gen, root = _generate(tmp_path, [_good_page()])
+
+    report, _s2, gen2, _r2 = _generate(tmp_path, [])
+
+    assert gen2.call_count == 0
+    assert report.already_on_disk == 1
+    assert report.generated == 0
+
+
+def test_a_disqualified_lead_never_gets_a_page(tmp_path):
+    """Its brief was approved before it was disqualified. Publishing a public
+    site for someone who asked not to be contacted is the worst outcome here."""
+    report, _sheets, gen, root = _generate(
+        tmp_path, [_good_page()], stage="Disqualified"
+    )
+
+    assert gen.call_count == 0
+    assert report.generated == 0
+    assert list(root.rglob("index.html")) == []
+
+
+def test_only_approved_rows_are_generated(tmp_path):
+    report, _sheets, gen, root = _generate(
+        tmp_path, [_good_page()], approval="Pending"
+    )
+
+    assert gen.call_count == 0
+    assert report.approved == 0
+    assert list(root.rglob("index.html")) == []
+
+
+def test_the_html_target_prompt_is_what_reaches_the_generator(tmp_path):
+    """A Lovable-targeted prompt here would ask for React that never builds."""
+    _report, _sheets, gen, _root = _generate(tmp_path, [_good_page()])
+
+    prompt = gen.prompts[0]
+    assert "Framer Motion" not in prompt
+    assert "shadcn" not in prompt
+    assert "IMAGERY" not in prompt

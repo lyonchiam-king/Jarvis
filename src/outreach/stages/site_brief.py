@@ -443,6 +443,204 @@ class BuildReport:
         ]
 
 
+@dataclass
+class GenerateReport:
+    """What one `--dry-run` generation pass did.
+
+    Deliberately separate from BuildReport: that one counts Lovable projects,
+    and reusing it would print "Projects created" for files on disk.
+    """
+
+    approved: int = 0
+    already_on_disk: int = 0
+    generated: int = 0
+    repaired: int = 0
+    rejected: int = 0
+    errors: int = 0
+    model_calls: int = 0
+    paths: list[str] = field(default_factory=list)
+
+    def summary_lines(self) -> list[str]:
+        out = [
+            f"Rows marked Approved      {self.approved}",
+            f"  already generated       {self.already_on_disk}  (skipped, free)",
+            f"Pages written             {self.generated}",
+            f"  needed one repair       {self.repaired}",
+            f"Pages refused             {self.rejected}  (nothing written)",
+            f"Errors logged             {self.errors}",
+            "",
+            f"Gemini calls              {self.model_calls}",
+        ]
+        if self.paths:
+            out += ["", "Open these in your browser:"]
+            out += [f"  {path}" for path in self.paths]
+        return out
+
+
+def generate_sites(
+    config: Config,
+    sheets: SheetsClient,
+    writer: BriefWriter,
+    generator,
+    *,
+    limit: int | None = None,
+) -> GenerateReport:
+    """Generate demo pages to disk. Writes nothing to the Sheet, publishes nothing.
+
+    This is the step that exists so a page can be looked at before anyone
+    outside sees it. Nothing here touches Google or Firebase, so a bad batch
+    costs Gemini calls and nothing else.
+
+    Two rules carry the safety:
+
+    A page is written only after it passes `check_site`. That is what lets the
+    next run trust a file on disk and skip it for free -- if half-valid pages
+    could land there, the cache would be a liability rather than a saving.
+
+    A page that still fails after one repair is logged and skipped. It is not
+    written, so it cannot be published later by a deploy that walks the
+    directory.
+    """
+    from pathlib import Path
+
+    from ..providers.sitegen import SiteGenError
+    from ..sitecheck import check_site, repair_instruction
+    from ..slug import site_slug
+
+    report = GenerateReport()
+    errors = ErrorLog("site-generate")
+
+    leads = sheets.read_rows(schema.LEADS)
+    research = sheets.read_rows(schema.RESEARCH)
+    briefs = sheets.read_rows(schema.SITE_BRIEFS)
+
+    # Resolved from the working directory. Dashboard.bat and run.bat both
+    # `cd /d "%~dp0"` before running anything, so on Windows this is the repo
+    # root by construction.
+    root = Path(config.build.output_dir)
+
+    queue: list[tuple[str, dict[str, str]]] = []
+    for lead_id, (_row, brief_row) in briefs.items():
+        approval = (brief_row.get("Approval Status") or "").strip().casefold()
+        if approval != "approved":
+            continue
+        report.approved += 1
+        # A lead disqualified after its brief was approved must not get a
+        # public page. build_approved has never checked this; here it would
+        # mean publishing a site for someone who asked not to be contacted.
+        lead_entry = leads.get(lead_id)
+        if lead_entry is not None:
+            _lrow, lead = lead_entry
+            if (lead.get("Stage") or "").strip() == Stage.DISQUALIFIED.value:
+                continue
+        if (brief_row.get("Lovable Project ID") or "").strip():
+            continue
+        if len(queue) < min(limit or config.batch_size, config.batch_size):
+            queue.append((lead_id, brief_row))
+
+    if not queue:
+        log.info("Nothing approved and unbuilt to generate.")
+        return report
+
+    log.info("Generating %d page(s) into %s/", len(queue), root)
+
+    for index, (lead_id, brief_row) in enumerate(queue, start=1):
+        name = brief_row.get("Business Name", "") or lead_id
+        lead_entry = leads.get(lead_id)
+        lead = lead_entry[1] if lead_entry else {}
+        research_entry = research.get(lead_id)
+        research_row = research_entry[1] if research_entry else {}
+
+        with errors.guard(lead_id=lead_id, business_name=name):
+            slug = site_slug(name, lead_id)
+            path = root / slug / "index.html"
+
+            if path.exists():
+                report.already_on_disk += 1
+                report.paths.append(str(path.resolve()))
+                log.info("[%d/%d] %s -- already on disk", index, len(queue), name)
+                continue
+
+            log.info("[%d/%d] %s", index, len(queue), name)
+
+            social_profiles = (
+                research_row.get("Social Profiles", "").strip()
+                or (
+                    social.profiles_text(lead.get("Website URL", ""))
+                    if config.research.social_lookup
+                    else ""
+                )
+            )
+            spec = writer.write_site_spec(
+                _spec_prompt(lead, research_row, config, social_profiles)
+            )
+            prompt = render_lovable_prompt(
+                business_name=name,
+                category=lead.get("Category", ""),
+                location=config.campaign.location,
+                spec=spec,
+                phone=lead.get("Phone", ""),
+                address=lead.get("Address", ""),
+                social_handle=research_row.get("Social Handle", ""),
+                social_profiles=social_profiles,
+                maps_url=lead.get("Maps URL", ""),
+                target="html",
+            )
+
+            html = generator.generate(prompt)
+            problems = check_site(
+                html,
+                phone=lead.get("Phone", ""),
+                headline=spec.hero_headline,
+                business_name=name,
+                min_bytes=config.build.min_bytes,
+                max_bytes=config.build.max_bytes,
+            )
+
+            if problems:
+                log.info(
+                    "  %d problem(s): %s -- asking for one repair",
+                    len(problems),
+                    ", ".join(p.code for p in problems),
+                )
+                html = generator.generate(
+                    prompt + "\n\n" + repair_instruction(problems)
+                )
+                problems = check_site(
+                    html,
+                    phone=lead.get("Phone", ""),
+                    headline=spec.hero_headline,
+                    business_name=name,
+                    min_bytes=config.build.min_bytes,
+                    max_bytes=config.build.max_bytes,
+                )
+                if not problems:
+                    report.repaired += 1
+
+            if problems:
+                report.rejected += 1
+                raise SiteGenError(
+                    f"page still invalid after one repair: "
+                    f"{', '.join(p.code for p in problems)}. Nothing was written."
+                )
+
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(html, encoding="utf-8")
+            report.generated += 1
+            report.paths.append(str(path.resolve()))
+
+    report.model_calls = getattr(generator, "call_count", 0)
+
+    if len(errors):
+        try:
+            sheets.append(schema.ERRORS, errors.rows())
+        except Exception as exc:  # noqa: BLE001
+            log.error("Could not write Errors tab: %s", exc)
+    report.errors = len(errors)
+
+    return report
+
+
 def build_approved(
     config: Config,
     sheets: SheetsClient,

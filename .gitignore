@@ -23,3 +23,7 @@ scripts/morning-run.ps1
 # never collides with what you have configured; the tracked *.yaml beside it
 # stays the starting template.
 config/campaigns/*.local.yaml
+
+# Generated demo pages. Build output, never edited by hand, and CLAUDE.md
+# forbids runtime writes to tracked files.
+sites/
