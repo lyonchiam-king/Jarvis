@@ -641,6 +641,81 @@ def generate_sites(
     return report
 
 
+def regenerate_one(
+    config: Config,
+    sheets: SheetsClient,
+    writer: BriefWriter,
+    lead_id: str,
+    *,
+    notes: str = "",
+) -> str:
+    """Rewrite one brief and return the new prompt. One model call.
+
+    Exists for the moment you read a brief and it is wrong -- flat, or aimed
+    at the wrong customer, or missing the thing that actually sells this
+    business. Re-rolling it costs one call and about ten seconds, which is
+    cheaper than building a demo from a brief you did not believe.
+
+    `notes` are yours, passed to the model alongside the research and not
+    stored anywhere. Approval Status is never touched: rewriting is not
+    deciding, and a rewrite that silently un-approved a row would lose work.
+    """
+    leads = sheets.read_rows(schema.LEADS)
+    research = sheets.read_rows(schema.RESEARCH)
+
+    lead_entry = leads.get(lead_id)
+    if lead_entry is None:
+        raise ValueError(f"No lead with ID {lead_id!r} on the Leads tab.")
+    _lrow, lead = lead_entry
+
+    research_entry = research.get(lead_id)
+    if research_entry is None:
+        raise ValueError(
+            f"{lead.get('Business Name', lead_id)} has no Research row -- "
+            "run Research for it before rewriting its brief."
+        )
+    _rrow, research_row = research_entry
+
+    name = lead.get("Business Name", "") or lead_id
+    social_profiles = (
+        research_row.get("Social Profiles", "").strip()
+        or (
+            social.profiles_text(lead.get("Website URL", ""))
+            if config.research.social_lookup
+            else ""
+        )
+    )
+
+    spec_prompt = _spec_prompt(lead, research_row, config, social_profiles)
+    if notes:
+        spec_prompt += (
+            "\n\nWHAT THE FOUNDER WANTS CHANGED\n"
+            f"{notes}\n"
+            "This is a direct instruction from the person who will show this "
+            "site to the owner. Follow it, and keep everything else grounded "
+            "in the evidence above."
+        )
+
+    spec = writer.write_site_spec(spec_prompt)
+    prompt = render_lovable_prompt(
+        business_name=name,
+        category=lead.get("Category", ""),
+        location=config.campaign.location,
+        spec=spec,
+        phone=lead.get("Phone", ""),
+        address=lead.get("Address", ""),
+        social_handle=research_row.get("Social Handle", ""),
+        social_profiles=social_profiles,
+        maps_url=lead.get("Maps URL", ""),
+        target="html" if config.build.target == "firebase" else "lovable",
+    )
+
+    # Only the prompt cell. Approval Status, Created At, Preview URL and the
+    # built marker all belong to other decisions and are left alone.
+    sheets.update_column(schema.SITE_BRIEFS, "Lovable Prompt", {lead_id: prompt})
+    return prompt
+
+
 def build_approved(
     config: Config,
     sheets: SheetsClient,

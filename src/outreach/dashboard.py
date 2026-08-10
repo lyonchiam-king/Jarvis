@@ -660,6 +660,43 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
         return jsonify({"queue": queue})
 
+    @app.route("/api/regenerate", methods=["POST"])
+    def api_regenerate():
+        """Rewrite one brief you are looking at, optionally with your notes.
+
+        Two shapes, one endpoint. With no `notes` it is a plain re-roll: the
+        model is not deterministic, so asking again genuinely gives a
+        different take rather than the same brief back. With `notes` your
+        words are handed to the model alongside the research.
+
+        Notes are deliberately not stored. A "make it darker" that silently
+        persisted would still be steering the tenth brief you wrote long after
+        you had forgotten typing it.
+
+        Never touches Approval Status. Rewriting is not deciding.
+        """
+        from .providers.llm import make_writer, render_lovable_prompt
+        from .stages.site_brief import regenerate_one
+
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        notes = (payload.get("notes") or "").strip()
+
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+        if len(notes) > 2000:
+            return jsonify({"error": "notes must be under 2000 characters"}), 400
+
+        try:
+            config = current()
+            sheets = _sheets_client(config)
+            prompt = regenerate_one(
+                config, sheets, make_writer(config), lead_id, notes=notes
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+        return jsonify({"ok": True, "prompt": prompt})
+
     @app.route("/api/decide", methods=["POST"])
     def api_decide():
         """Record Approve or Skip against one brief.
@@ -1447,9 +1484,49 @@ function drawReview() {
       <button onclick="move(1)" ${review.length < 2 ? 'disabled' : ''}>Decide later &rsaquo;</button>
       <span class="sub" id="rmsg"></span>
     </div>
+    <div class="row" style="margin-top:10px">
+      <button onclick="regen('')">Rewrite this brief</button>
+      <button onclick="regenAsk()">Rewrite with my notes&hellip;</button>
+    </div>
+    <p class="hint">Not happy with it? <b>Rewrite this brief</b> asks again from
+      scratch &mdash; the model is not deterministic, so you get a different
+      take, not the same one back. <b>Rewrite with my notes</b> lets you say what
+      to change: &ldquo;more upmarket&rdquo;, &ldquo;focus on the wedding
+      packages&rdquo;, &ldquo;less formal, it is a family shop&rdquo;. One model
+      call either way, and your notes are used once, not remembered.</p>
     <p class="hint">Approving queues it for step 3. Nothing is spent until you
       build it there.</p>
   </div>`;
+}
+
+async function regenAsk() {
+  const notes = prompt('What should change about this brief?\n\ne.g. more upmarket, focus on the wedding packages, less formal');
+  if (notes === null) return;          // cancelled -- do nothing, spend nothing
+  if (!notes.trim()) return;
+  regen(notes.trim());
+}
+
+async function regen(notes) {
+  const q = review[ri];
+  if (!q) return;
+  $('#rmsg').textContent = notes ? 'Rewriting with your notes\u2026' : 'Rewriting\u2026';
+  let d;
+  try {
+    d = await (await fetch('/api/regenerate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lead_id: q.lead_id, notes: notes || ''})
+    })).json();
+  } catch { d = {error: 'Could not reach the dashboard'}; }
+
+  if (!d.ok) {
+    $('#rmsg').innerHTML = `<span class="err">${esc(d.error || 'Failed')}</span>`;
+    return;
+  }
+  // Show it straight away. Sending him to the Sheet to find out whether the
+  // rewrite helped is how a ten-second decision becomes a two-minute one.
+  q.prompt = d.prompt;
+  drawReview();
+  $('#rmsg').textContent = 'Rewritten. Read it before approving.';
 }
 
 function move(n) {

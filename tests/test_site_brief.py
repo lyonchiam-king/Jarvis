@@ -1597,3 +1597,77 @@ def test_the_html_target_prompt_is_what_reaches_the_generator(tmp_path):
     assert "Framer Motion" not in prompt
     assert "shadcn" not in prompt
     assert "IMAGERY" not in prompt
+
+
+# ------------------------------------------------------------- regenerate one
+
+
+def _regen(notes="", *, approval="Pending"):
+    leads = {"a": (2, {
+        "Lead ID": "a", "Business Name": "Chulia Hair House", "Stage": "Site Briefed",
+        "Category": "hair salon", "Phone": "04-262 1188", "Address": "58 Lebuh Chulia",
+        "Website URL": "", "Maps URL": "",
+    })}
+    sheets = FakeSheets(
+        leads,
+        {"a": (2, {"Lead ID": "a", "Social Profiles": "", "Tone": "warm"})},
+        {"a": (2, {
+            "Lead ID": "a", "Business Name": "Chulia Hair House",
+            "Approval Status": approval, "Lovable Prompt": "the old prompt",
+            "Lovable Project ID": "", "Preview URL": "", "Created At": "2026-01-01",
+        })},
+    )
+
+    class Spy(FakeWriter):
+        def __init__(self):
+            super().__init__()
+            self.spec_prompt = ""
+
+        def write_site_spec(self, prompt):
+            self.spec_prompt = prompt
+            return super().write_site_spec(prompt)
+
+    writer = Spy()
+    result = site_brief.regenerate_one(config(), sheets, writer, "a", notes=notes)
+    return result, sheets, writer
+
+
+def test_regenerating_writes_only_the_prompt_cell():
+    """Approval Status, Created At and the built marker belong to other
+    decisions. A rewrite that cleared any of them would lose real work."""
+    prompt, sheets, _writer = _regen(approval="Approved")
+
+    assert prompt
+    written = [(tab.title, col) for tab, col, _v in sheets.column_writes]
+    assert written == [(schema.SITE_BRIEFS.title, "Lovable Prompt")]
+    assert all(col != "Approval Status" for _t, col, _v in sheets.column_writes)
+
+
+def test_my_notes_reach_the_model():
+    _prompt, _sheets, writer = _regen("make it far more upmarket")
+
+    assert "make it far more upmarket" in writer.spec_prompt
+    assert "WHAT THE FOUNDER WANTS CHANGED" in writer.spec_prompt
+
+
+def test_a_plain_rewrite_sends_no_notes_section():
+    """A leftover instruction from the last lead steering this one is the
+    failure mode that makes 'why is every brief dark now' unanswerable."""
+    _prompt, _sheets, writer = _regen("")
+
+    assert "WHAT THE FOUNDER WANTS CHANGED" not in writer.spec_prompt
+
+
+def test_regenerating_a_lead_with_no_research_says_what_to_do():
+    leads = {"a": (2, {"Lead ID": "a", "Business Name": "Sun Salon"})}
+    sheets = FakeSheets(leads, {}, {})
+
+    with pytest.raises(ValueError, match="run Research for it"):
+        site_brief.regenerate_one(config(), sheets, FakeWriter(), "a")
+
+
+def test_regenerating_an_unknown_lead_is_refused():
+    sheets = FakeSheets({}, {}, {})
+
+    with pytest.raises(ValueError, match="No lead with ID"):
+        site_brief.regenerate_one(config(), sheets, FakeWriter(), "nope")
