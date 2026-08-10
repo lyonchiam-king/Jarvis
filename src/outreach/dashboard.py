@@ -88,6 +88,11 @@ RANKS_ITS_QUEUE = {
 # very long run.
 MAX_LIMIT = 500
 
+# How many names the Next-up preview will render. The point is to curate the
+# run before it happens, so it follows the How-many box -- but sixty names is
+# a wall, not a list, so it stops here and says so.
+PREVIEW_CAP = 25
+
 
 def stage_args(
     stage: str, limit: int | None = None, *, social_first: bool | None = None
@@ -267,6 +272,10 @@ def queue_preview(
 ) -> dict[str, list[dict[str, object]]]:
     """Exactly who the next run would pick, per stage.
 
+    ``limit`` must match the number the run will actually take. Previewing six
+    of a fifteen-lead run means nine are chosen with nobody looking, which is
+    the opposite of what this is for.
+
     Answers the question the counts cannot: *which* businesses, and are they
     the good ones? Without this the ranking is invisible -- you press a button
     and hope -- and the honest reaction to that is to wonder whether you need
@@ -288,8 +297,12 @@ def queue_preview(
         )
         preview[name] = [
             {
+                # The ID is what makes a row actionable rather than decorative.
+                "lead_id": row.get("Lead ID", ""),
                 "name": row.get("Business Name", "") or row.get("Lead ID", ""),
                 "social": row.get("Website Status") == "social_only",
+                "rating": row.get("Rating", ""),
+                "reviews": row.get("Review Count", ""),
             }
             for row in selected
         ]
@@ -632,6 +645,14 @@ def create_app(config: Config) -> Flask:
         c = current()
         if not c.secrets.sheet_id:
             return jsonify({"queues": {}})
+        # Follow the How-many box: if fifteen will run, show fifteen. Capped
+        # so that setting sixty produces a list you can still read.
+        raw = request.args.get("limit")
+        try:
+            want = int(raw) if raw else 6
+        except ValueError:
+            want = 6
+        shown = max(1, min(want, PREVIEW_CAP))
         try:
             sheets = _sheets_client(c)
             preview = queue_preview(
@@ -639,10 +660,11 @@ def create_app(config: Config) -> Flask:
                 set(sheets.read_rows(schema.RESEARCH)),
                 set(sheets.read_rows(schema.SITE_BRIEFS)),
                 social_first=c.research.social_first,
+                limit=shown,
             )
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
-        return jsonify({"queues": preview})
+        return jsonify({"queues": preview, "shown": shown, "cap": PREVIEW_CAP})
 
     @app.route("/api/review-queue")
     def api_review_queue():
@@ -696,6 +718,29 @@ def create_app(config: Config) -> Flask:
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
         return jsonify({"ok": True, "prompt": prompt})
+
+    @app.route("/api/drop", methods=["POST"])
+    def api_drop():
+        """Take one lead out of every queue, for good.
+
+        Marks it Disqualified, which every stage already skips -- so this
+        needs no new machinery and cannot half-apply. It is deliberately the
+        only per-lead control on the preview: you act on the few you do not
+        want, rather than ticking the many you do, and a lead you have judged
+        once never comes back to be judged again.
+        """
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+        try:
+            sheets = _sheets_client(current())
+            sheets.update_column(
+                schema.LEADS, "Stage", {lead_id: Stage.DISQUALIFIED.value}
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+        return jsonify({"ok": True})
 
     @app.route("/api/decide", methods=["POST"])
     def api_decide():
@@ -938,6 +983,9 @@ PAGE = """<!doctype html>
   .n { font-size:30px; font-weight:650; letter-spacing:-.02em; line-height:1; }
   .n.zero { color:var(--muted); font-weight:400; }
   .what { font-size:14px; }
+  button.link { background:none; border:none; padding:0 0 0 6px; font-size:12px;
+    color:#8a8f98; text-decoration:underline; cursor:pointer; }
+  button.link:hover { color:#c0392b; }
   button { font:inherit; font-size:14px; padding:9px 14px; border-radius:8px;
            border:1px solid var(--line); background:transparent; color:var(--ink);
            cursor:pointer; }
@@ -1319,7 +1367,9 @@ async function saveModel() {
 
 async function loadNextUp() {
   let d;
-  try { d = await (await fetch('/api/next-up')).json(); } catch { return; }
+  const want = parseInt($('#howmany') && $('#howmany').value, 10);
+  const q = want > 0 ? ('?limit=' + want) : '';
+  try { d = await (await fetch('/api/next-up' + q)).json(); } catch { return; }
   const el = $('#nextup');
   if (!el || d.error || !d.queues) { if (el) el.innerHTML = ''; return; }
 
@@ -1328,16 +1378,48 @@ async function loadNextUp() {
   for (const stage of ['research', 'site-brief']) {
     const rows = d.queues[stage] || [];
     if (!rows.length) continue;
-    const names = rows.map(r =>
-      esc(r.name) + (r.social ? ' <b title="has a Facebook or Instagram page">&#9733;</b>' : '')
-    ).join(', ');
-    parts.push(`<div style="margin-top:6px"><b>${label[stage]} would take:</b> ${names}</div>`);
+    const items = rows.map(r => {
+      const star = r.social ? ' <b title="has a Facebook or Instagram page">&#9733;</b>' : '';
+      const score = r.rating ? ` <span class="sub">${esc(r.rating)}&#9733; &middot; ${esc(r.reviews || '0')}</span>` : '';
+      return `<li style="margin:3px 0">${esc(r.name)}${star}${score}
+        <button class="link" title="Never work on this lead again"
+          onclick="dropLead('${esc(r.lead_id)}', this)">not this one</button></li>`;
+    }).join('');
+    parts.push(`<div style="margin-top:8px"><b>${label[stage]} would take these ${rows.length}:</b>
+      <ul style="margin:4px 0 0 18px;padding:0">${items}</ul></div>`);
   }
+  const capped = d.shown >= d.cap
+    ? ` Showing the first ${d.cap}; the rest run as they come.` : '';
   el.innerHTML = parts.length
     ? parts.join('') +
-      '<div style="margin-top:4px">&#9733; has a social page, so it goes first. ' +
-      'Older leads without one wait their turn &mdash; nothing needs deleting.</div>'
+      '<div style="margin-top:8px">&#9733; has a social page, so it goes first. ' +
+      'This list follows <b>How many</b> above, so it is exactly who would run.' +
+      capped + ' <b>not this one</b> drops a lead from every queue permanently ' +
+      '&mdash; nothing is deleted from your Sheet, it is marked Disqualified.</div>'
     : '';
+}
+
+async function dropLead(leadId, btn) {
+  btn.disabled = true;
+  btn.textContent = 'dropping\u2026';
+  let d;
+  try {
+    d = await (await fetch('/api/drop', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lead_id: leadId})
+    })).json();
+  } catch { d = {error: 'Could not reach the dashboard'}; }
+
+  if (!d.ok) {
+    btn.disabled = false;
+    btn.textContent = 'not this one';
+    alert(d.error || 'Could not drop that lead');
+    return;
+  }
+  // Redraw rather than just hiding the row: dropping one pulls the next lead
+  // up into the list, and seeing that happen is the point of the preview.
+  await drawNextUp();
+  await refresh();
 }
 
 // -------------------------------------------------------- what you're hunting

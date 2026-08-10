@@ -1,5 +1,6 @@
 """The dashboard's numbers, and that it stays local and read-only."""
 
+from dataclasses import replace
 import ast
 import re
 from pathlib import Path
@@ -1230,3 +1231,118 @@ def test_every_dashboard_command_exists_in_the_cli():
                 continue
             group = group.commands[token] if hasattr(group, "commands") else group
         assert group is not None, f"{key} points at a command that does not exist"
+
+
+def test_the_preview_shows_as_many_as_the_run_will_take():
+    """Previewing six of a fifteen-lead run means nine are chosen with nobody
+    looking, which is the opposite of what the preview is for."""
+    from outreach.dashboard import queue_preview
+
+    leads = {
+        f"p{i}": (i + 2, {
+            "Lead ID": f"p{i}", "Business Name": f"Salon {i}",
+            "Stage": "Discovered", "Website Status": "none",
+        })
+        for i in range(20)
+    }
+    six = queue_preview(leads, set(), set(), limit=6)
+    fifteen = queue_preview(leads, set(), set(), limit=15)
+
+    assert len(six["research"]) == 6
+    assert len(fifteen["research"]) == 15
+
+
+def test_every_previewed_lead_carries_the_id_that_makes_it_actionable():
+    """Without the ID the row is decoration -- there is nothing to drop."""
+    from outreach.dashboard import queue_preview
+
+    leads = {"a": (2, {
+        "Lead ID": "a", "Business Name": "Sun Salon",
+        "Stage": "Discovered", "Website Status": "social_only",
+    })}
+    preview = queue_preview(leads, set(), set())
+
+    assert preview["research"][0]["lead_id"] == "a"
+    assert preview["research"][0]["social"] is True
+
+
+def test_the_preview_is_capped_so_sixty_is_not_a_wall():
+    from outreach.dashboard import PREVIEW_CAP
+
+    assert 6 <= PREVIEW_CAP <= 40, "a readable list, not every lead"
+
+
+def test_dropping_a_lead_marks_it_disqualified_and_nothing_else(monkeypatch):
+    """Disqualified is already skipped by every stage, so this needs no new
+    machinery and cannot half-apply. It must touch no other column."""
+    writes = []
+
+    class FakeSheets:
+        url = "https://sheet"
+
+        def update_column(self, tab, column, values, *, user_edit=False):
+            from outreach.sheets import guard_manual_column
+
+            guard_manual_column(tab, column, user_edit=user_edit)
+            writes.append((tab.title, column, dict(values)))
+            return len(values)
+
+    from outreach import dashboard as dash
+
+    monkeypatch.setattr(dash, "_sheets_client", lambda config: FakeSheets())
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    client = create_app(config).test_client()
+
+    r = client.post("/api/drop", json={"lead_id": "a"})
+
+    assert r.get_json() == {"ok": True}
+    assert writes == [("Leads", "Stage", {"a": "Disqualified"})]
+
+
+def test_dropping_without_a_lead_id_is_refused():
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    client = create_app(config).test_client()
+
+    assert client.post("/api/drop", json={}).status_code == 400
+
+
+def test_the_next_up_endpoint_honours_the_how_many_box(monkeypatch):
+    """Testing queue_preview directly does not cover the wiring.
+
+    Dropping `limit=shown` from the endpoint leaves the function test green
+    while the page silently goes back to showing six of fifteen.
+    """
+    from outreach import dashboard as dash
+    from outreach import schema
+
+    rows = {
+        f"p{i}": (i + 2, {
+            "Lead ID": f"p{i}", "Business Name": f"Salon {i}",
+            "Stage": "Discovered", "Website Status": "none",
+        })
+        for i in range(20)
+    }
+
+    class FakeSheets:
+        url = "https://sheet"
+
+        def read_rows(self, tab):
+            return rows if tab is schema.LEADS else {}
+
+    monkeypatch.setattr(dash, "_sheets_client", lambda config: FakeSheets())
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    # The endpoint short-circuits without a Sheet, which would make every
+    # assertion below vacuously pass on an empty payload.
+    config = replace(config, secrets=replace(config.secrets, sheet_id="s"))
+    client = create_app(config).test_client()
+
+    body = client.get("/api/next-up?limit=15").get_json()
+    assert len(body["queues"]["research"]) == 15
+    assert body["shown"] == 15
+
+    # And the cap holds, so 60 is not a wall of names.
+    capped = client.get("/api/next-up?limit=60").get_json()
+    assert capped["shown"] == dash.PREVIEW_CAP
+
+    # A junk value must not 500 the page.
+    assert client.get("/api/next-up?limit=abc").status_code == 200
