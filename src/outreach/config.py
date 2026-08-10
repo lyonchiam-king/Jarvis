@@ -175,6 +175,13 @@ class ComplianceSettings:
 # way.
 BUILD_TARGETS: frozenset[str] = frozenset({"lovable", "firebase"})
 
+# Which backend draws page images. "gemini" is AI Studio's Developer API,
+# whose free image quota resets daily and is already exhausted most days.
+# "vertex" bills against Cloud trial credits, which do cover it (AI Studio
+# does not). Kept separate from BUILD_TARGETS -- the build target is Lovable
+# vs. a self-hosted Firebase page; the image provider is orthogonal to that.
+IMAGE_PROVIDERS: frozenset[str] = frozenset({"gemini", "vertex"})
+
 
 @dataclass(frozen=True)
 class BuildSettings:
@@ -218,6 +225,22 @@ class BuildSettings:
     max_versions: int = 5
     min_bytes: int = 4000
     max_bytes: int = 400000
+    # Which backend draws page images -- see IMAGE_PROVIDERS above.
+    image_provider: str = "gemini"
+    # Deliberately never auto-discovered the way image_model above is for the
+    # Developer API. Vertex prices its image models roughly 5x apart --
+    # about $0.045 vs. $0.24 per image on the imagen family at the time this
+    # was written -- which on Lyon's ~$260 of Cloud trial credit is the
+    # difference between roughly 96 days of images and 18. Auto-picking by
+    # sorted(name, reverse=True) or "just take the first one the API lists"
+    # would be choosing that trade-off for him without him knowing it was
+    # made. So this must be named, on purpose, by whoever is paying.
+    vertex_image_model: str = ""
+    vertex_region: str = "global"
+    # Sent only when non-empty -- leaving it blank means "the model's own
+    # default", not "a size named 'default'".
+    vertex_image_size: str = ""
+    max_images_per_run: int = 60
 
 
 @dataclass(frozen=True)
@@ -235,6 +258,10 @@ class Secrets:
     firebase_site_id: str = ""
     firebase_project_id: str = ""
     firebase_service_account_file: str = ""
+    # A separate OAuth token from token_file above -- see auth.VERTEX_SCOPES
+    # for why the Sheets/Gmail token must never be asked to cover this too.
+    vertex_token_file: Path = Path("credentials/vertex_token.json")
+    vertex_project_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -430,6 +457,41 @@ def load_config(
             ".env. Find it in the Firebase console under Hosting -- it's the "
             "site name your demo URLs will be published under."
         )
+    image_provider = str(b.get("image_provider", "gemini")).strip().lower()
+    if image_provider not in IMAGE_PROVIDERS:
+        raise ConfigError(
+            f"build.image_provider must be one of {sorted(IMAGE_PROVIDERS)}, "
+            f"got {image_provider!r}"
+        )
+    if image_provider == "vertex" and not os.getenv("VERTEX_PROJECT_ID"):
+        raise ConfigError(
+            "build.image_provider is 'vertex', so VERTEX_PROJECT_ID must be "
+            "set in .env. That's the Project ID from the Google Cloud "
+            "Console project picker -- the short text one like "
+            "'sme-outreach-482913', not the project number and not the "
+            "display name."
+        )
+    vertex_image_model = str(b.get("vertex_image_model", ""))
+    if image_provider == "vertex" and not vertex_image_model:
+        raise ConfigError(
+            "build.image_provider is 'vertex', so build.vertex_image_model "
+            "must name a model -- unlike image_model above, this is never "
+            "auto-discovered (see the comment on BuildSettings.vertex_image_model "
+            "for why). Run `outreach vertex-models` to see what your project "
+            "has access to, and `outreach vertex-check --model <name>` to "
+            "prove one actually works before pinning it here."
+        )
+    # Guards against "Global" or "global " silently building the wrong host --
+    # https://{region}-aiplatform.googleapis.com/... is case-sensitive and
+    # whitespace-sensitive, and a typo here fails as a DNS error far from this
+    # line rather than as a config error naming the fix.
+    vertex_region = str(b.get("vertex_region", "global")).strip().lower()
+    max_images_per_run = int(b.get("max_images_per_run", 60))
+    if max_images_per_run < 0:
+        raise ConfigError(
+            f"build.max_images_per_run must be 0 or more, got {max_images_per_run}"
+        )
+
     build = BuildSettings(
         target=build_target,
         enabled=bool(b.get("enabled", False)),
@@ -450,6 +512,11 @@ def load_config(
         max_versions=int(b.get("max_versions", 5)),
         min_bytes=int(b.get("min_bytes", 4000)),
         max_bytes=int(b.get("max_bytes", 400000)),
+        image_provider=image_provider,
+        vertex_image_model=vertex_image_model,
+        vertex_region=vertex_region,
+        vertex_image_size=str(b.get("vertex_image_size", "")),
+        max_images_per_run=max_images_per_run,
     )
 
     c = raw.get("compliance") or {}
@@ -481,6 +548,10 @@ def load_config(
         firebase_service_account_file=os.getenv(
             "FIREBASE_SERVICE_ACCOUNT_FILE", ""
         ),
+        vertex_token_file=Path(
+            os.getenv("GOOGLE_VERTEX_TOKEN_FILE", "credentials/vertex_token.json")
+        ),
+        vertex_project_id=os.getenv("VERTEX_PROJECT_ID", ""),
     )
 
     return Config(

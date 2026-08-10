@@ -28,6 +28,19 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.compose",  # create drafts
 ]
 
+# A second, separate token for Vertex image generation. Do not fold this into
+# SCOPES above: re-consenting the existing Sheets/Gmail token with an added
+# scope is how you lose it. google-auth 2.56.3 raises RefreshError("Not all
+# requested scopes were granted...") the next time that token refreshes if the
+# scopes it was issued for don't match SCOPES exactly (see
+# google/oauth2/credentials.py, Credentials.refresh) -- and the except clause
+# above turns that into a fresh browser consent, which can simply fail if
+# there is no browser handy or the app is stuck behind Google's unverified-app
+# warning. Two token files means the worst that happens to a Vertex outage is
+# no images; folding the scopes together means the worst that happens is Lyon
+# loses Sheets and Gmail too.
+VERTEX_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
+
 
 class AuthError(Exception):
     """OAuth could not be completed. Message tells the user what to fix."""
@@ -84,6 +97,27 @@ def get_credentials(
 
     _persist(creds, token_file)
     return creds
+
+
+def vertex_credentials(client_file: Path, token_file: Path) -> Credentials:
+    """The Vertex-only counterpart to get_credentials -- same client secret
+    file (the same OAuth app can request different scopes), a separate token
+    file, and the cloud-platform scope instead of SCOPES.
+    """
+    return get_credentials(client_file, token_file, scopes=VERTEX_SCOPES)
+
+
+def access_token(creds: Credentials) -> str:
+    """A live bearer token string, refreshing first if the cached one has
+    expired.
+
+    A single research or build run can outlive the one-hour lifetime of an
+    OAuth access token, so every call site needs a token that is guaranteed
+    fresh at the moment it is used, not just at process start.
+    """
+    if not creds.valid:
+        creds.refresh(Request())
+    return creds.token
 
 
 def _persist(creds: Credentials, token_file: Path) -> None:

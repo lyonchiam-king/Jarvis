@@ -1,6 +1,6 @@
 import pytest
 
-from outreach.config import ConfigError, load_config
+from outreach.config import IMAGE_PROVIDERS, ConfigError, load_config
 
 PENANG = "config/campaigns/penang-my.yaml"
 UK = "config/campaigns/example-manchester-uk.yaml"
@@ -129,3 +129,109 @@ def test_build_secrets_never_come_from_yaml(monkeypatch):
     config = load_config(PENANG, env_file=None)
     assert config.secrets.gemini_api_key == ""
     assert config.secrets.firebase_project_id == ""
+
+
+# ------------------------------------------------------------- vertex images
+
+
+def test_vertex_image_defaults_keep_gemini_the_live_provider(monkeypatch):
+    """Byte-identical today's behaviour: an untouched campaign still draws
+    images through the Gemini Developer API, never Vertex, on its own."""
+    monkeypatch.delenv("VERTEX_PROJECT_ID", raising=False)
+    config = load_config(PENANG, env_file=None)
+    assert config.build.image_provider == "gemini"
+    assert config.build.vertex_image_model == ""
+    assert config.build.vertex_region == "global"
+    assert config.build.vertex_image_size == ""
+    assert config.build.max_images_per_run == 60
+    assert config.secrets.vertex_project_id == ""
+
+
+def test_image_providers_is_gemini_and_vertex_only():
+    assert IMAGE_PROVIDERS == frozenset({"gemini", "vertex"})
+
+
+def test_image_provider_rejects_an_unknown_value(tmp_path):
+    src = open(PENANG).read().replace("  # image_provider: gemini", "  image_provider: vertexai", 1)
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
+    with pytest.raises(
+        ConfigError,
+        match=r"build.image_provider must be one of \['gemini', 'vertex'\], got 'vertexai'",
+    ):
+        load_config(path, env_file=None)
+
+
+def test_vertex_image_provider_requires_the_project_id_env_var(tmp_path, monkeypatch):
+    monkeypatch.delenv("VERTEX_PROJECT_ID", raising=False)
+    src = (
+        open(PENANG)
+        .read()
+        .replace("  # image_provider: gemini", "  image_provider: vertex", 1)
+        .replace("  # vertex_image_model: \"\"", "  vertex_image_model: imagen-4.0-generate-001", 1)
+    )
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
+    with pytest.raises(ConfigError, match="VERTEX_PROJECT_ID") as excinfo:
+        load_config(path, env_file=None)
+    # Names the fix precisely enough that Lyon doesn't paste in the project
+    # number or the display name by mistake -- both look plausible and both
+    # are wrong.
+    assert "project picker" in str(excinfo.value)
+    assert "not the number" in str(excinfo.value) or "not the project number" in str(excinfo.value)
+
+
+def test_vertex_image_provider_requires_a_named_model(tmp_path, monkeypatch):
+    monkeypatch.setenv("VERTEX_PROJECT_ID", "sme-outreach-482913")
+    src = open(PENANG).read().replace("  # image_provider: gemini", "  image_provider: vertex", 1)
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
+    with pytest.raises(ConfigError, match="vertex_image_model") as excinfo:
+        load_config(path, env_file=None)
+    assert "vertex-models" in str(excinfo.value)
+    assert "vertex-check" in str(excinfo.value)
+
+
+def test_vertex_image_provider_loads_once_project_and_model_are_set(tmp_path, monkeypatch):
+    monkeypatch.setenv("VERTEX_PROJECT_ID", "sme-outreach-482913")
+    src = (
+        open(PENANG)
+        .read()
+        .replace("  # image_provider: gemini", "  image_provider: vertex", 1)
+        .replace("  # vertex_image_model: \"\"", "  vertex_image_model: imagen-4.0-generate-001", 1)
+    )
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
+    config = load_config(path, env_file=None)
+    assert config.build.image_provider == "vertex"
+    assert config.build.vertex_image_model == "imagen-4.0-generate-001"
+    assert config.secrets.vertex_project_id == "sme-outreach-482913"
+
+
+def test_vertex_region_is_normalised_to_lowercase_stripped(tmp_path, monkeypatch):
+    monkeypatch.setenv("VERTEX_PROJECT_ID", "sme-outreach-482913")
+    src = (
+        open(PENANG)
+        .read()
+        .replace("  # image_provider: gemini", "  image_provider: vertex", 1)
+        .replace("  # vertex_image_model: \"\"", "  vertex_image_model: imagen-4.0-generate-001", 1)
+        .replace("  # vertex_region: global", "  vertex_region: ' Global '", 1)
+    )
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
+    config = load_config(path, env_file=None)
+    assert config.build.vertex_region == "global"
+
+
+def test_max_images_per_run_rejects_negative(tmp_path):
+    src = open(PENANG).read().replace("  # max_images_per_run: 60", "  max_images_per_run: -1", 1)
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
+    with pytest.raises(ConfigError, match="max_images_per_run"):
+        load_config(path, env_file=None)
+
+
+def test_vertex_project_id_never_comes_from_yaml(monkeypatch):
+    monkeypatch.delenv("VERTEX_PROJECT_ID", raising=False)
+    config = load_config(PENANG, env_file=None)
+    assert config.secrets.vertex_project_id == ""

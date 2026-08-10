@@ -167,6 +167,16 @@ build:
   # model: gemini-3.6-flash
   # output_dir: sites
   # public_base_url: ""   # e.g. https://your-site.web.app, for the outreach draft
+  # Which backend draws page images. "gemini" is the AI Studio Developer API
+  # (the default, unchanged); "vertex" bills against Cloud trial credits
+  # instead of AI Studio's daily free quota. Switching this on also requires
+  # VERTEX_PROJECT_ID in .env and, below, a named vertex_image_model -- see
+  # `outreach vertex-models` / `outreach vertex-check`.
+  # image_provider: gemini
+  # vertex_image_model: ""
+  # vertex_region: global
+  # vertex_image_size: ""
+  # max_images_per_run: 60
 
 compliance:
   # ISO 3166-1 alpha-2. Drives the outreach-law gate in compliance.py.
