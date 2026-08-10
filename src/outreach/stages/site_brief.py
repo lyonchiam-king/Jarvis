@@ -503,7 +503,7 @@ def generate_sites(
     """
     from pathlib import Path
 
-    from ..images import generate_for_site, manifest_lines
+    from ..images import ImageBudget, generate_for_site, manifest_lines
     from ..providers.sitegen import SiteGenError
     from ..sitecheck import check_site, repair_instruction
     from ..slug import site_slug
@@ -544,6 +544,8 @@ def generate_sites(
         return report
 
     log.info("Generating %d page(s) into %s/", len(queue), root)
+    # Shared across the whole run: one quota refusal is enough to know.
+    image_budget = ImageBudget()
 
     for index, (lead_id, brief_row) in enumerate(queue, start=1):
         name = brief_row.get("Business Name", "") or lead_id
@@ -584,6 +586,7 @@ def generate_sites(
                 business_name=name,
                 category=lead.get("Category", ""),
                 count=config.build.images_per_page,
+                budget=image_budget,
             )
             if images:
                 log.info("  %d image(s) generated.", len(images))

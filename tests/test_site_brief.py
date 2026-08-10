@@ -1760,3 +1760,47 @@ def test_a_page_still_gets_built_when_images_fail():
     folder = next(p for p in root.iterdir() if p.is_dir())
     assert (folder / "index.html").exists()
     assert not [f for f in folder.iterdir() if f.name.startswith("image-")]
+
+
+def test_running_out_of_image_quota_stops_the_run_asking():
+    """Image models have their own, much smaller allowance than text. When it
+    runs out every request 429s instantly -- and without a breaker a sixty-lead
+    run spends a hundred and eighty calls learning that a hundred and eighty
+    times, against the same per-minute budget the pages need."""
+    import pathlib
+
+    from outreach.providers.sitegen import SiteGenError
+
+    class OutOfQuota(FakeGenerator):
+        def generate_image(self, prompt):
+            self.image_calls += 1
+            raise SiteGenError("over quota", status_code=429)
+
+    from dataclasses import replace as dc_replace
+
+    root = pathlib.Path(_tmp())
+    cfg = config()
+    cfg = dc_replace(cfg, build=dc_replace(cfg.build, output_dir=str(root)))
+
+    leads, sheets = {}, None
+    rows = {}
+    for key in ("a", "b"):
+        rows[key] = (2, {
+            "Lead ID": key, "Business Name": f"Salon {key}", "Stage": "Site Briefed",
+            "Category": "hair salon", "Phone": "04-262 1188",
+            "Address": "1 St", "Website URL": "", "Maps URL": "",
+        })
+    sheets = FakeSheets(
+        rows,
+        {k: (2, {"Lead ID": k, "Social Profiles": ""}) for k in rows},
+        {k: (2, {"Lead ID": k, "Business Name": f"Salon {k}",
+                 "Approval Status": "Approved", "Lovable Project ID": ""}) for k in rows},
+    )
+    gen = OutOfQuota([_good_page(), _good_page()])
+
+    report = site_brief.generate_sites(cfg, sheets, FakeWriter(), gen)
+
+    assert report.generated == 2, "pages must still be built without images"
+    # One refusal on the first lead closes it. Without the breaker this would
+    # be 3 per lead across 2 leads = 6.
+    assert gen.image_calls == 1, f"asked {gen.image_calls} times after running out"

@@ -34,11 +34,48 @@ API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:gener
 _TRANSIENT = frozenset({429, 500, 502, 503, 504})
 
 
+def _quota_details(response) -> tuple[str, float | None]:
+    """The quota that ran out, and the delay Google asked for."""
+    try:
+        details = ((response.json() or {}).get("error") or {}).get("details") or []
+    except Exception:  # noqa: BLE001 -- a 429 with an unreadable body is still a 429
+        return "", None
+
+    quota = ""
+    delay: float | None = None
+    for item in details:
+        kind = str(item.get("@type", ""))
+        if "QuotaFailure" in kind:
+            violations = item.get("violations") or []
+            if violations:
+                quota = str(
+                    violations[0].get("quotaId")
+                    or violations[0].get("quotaMetric")
+                    or ""
+                )
+        elif "RetryInfo" in kind:
+            raw = str(item.get("retryDelay", "")).rstrip("s")
+            try:
+                delay = float(raw)
+            except ValueError:
+                delay = None
+    return quota, delay
+
+
 class SiteGenError(Exception):
     """Gemini could not produce a usable HTML page for this lead."""
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
         super().__init__(message)
+        # What Google asked us to wait, when it said. Honouring it beats a
+        # fixed backoff that is either rude or needlessly slow.
+        self.retry_after = retry_after
         # `errors.is_retryable` reads `status_code` off the exception (falling
         # back to `.response.status_code`) to decide whether the Errors tab
         # marks this lead safe to retry. A 429 here is a pacing problem, not a
@@ -162,7 +199,7 @@ class SiteGenerator:
                 last = exc
                 # Back off 5s, 15s, 45s. Google asks for "later", and hammering
                 # a busy model is how a rate limit becomes a longer one.
-                wait = self.retry_base_seconds * (3 ** attempt)
+                wait = exc.retry_after or self.retry_base_seconds * (3 ** attempt)
                 log.info(
                     "  Gemini is busy (HTTP %s). Waiting %.0fs, then retry %d of %d.",
                     exc.status_code, wait, attempt + 2, self.max_attempts,
@@ -188,11 +225,26 @@ class SiteGenerator:
             raise SiteGenError(f"Could not reach Gemini: {exc}") from exc
 
         if response.status_code == 429:
+            # Google puts the useful part in the error details: which quota
+            # ran out, and how long it wants you to wait. "Rate limited" on
+            # its own cannot tell a per-minute pause (wait) from a per-day
+            # ceiling (come back tomorrow) or a model that needs billing --
+            # and those need completely different reactions.
+            quota, retry_after = _quota_details(response)
             raise SiteGenError(
-                f"Gemini rate-limited this request (HTTP 429) for model "
-                f"{model}. The free tier allows 10 requests/minute -- "
-                "if this keeps happening, raise build.min_interval_seconds.",
+                f"Gemini refused the request for {model}: over quota (HTTP 429)."
+                + (f" Quota: {quota}." if quota else "")
+                + (
+                    f" Google asks for {retry_after:.0f}s."
+                    if retry_after
+                    else ""
+                )
+                + " A per-minute limit clears by waiting; a per-day one does"
+                " not. Image models have their own, much smaller allowance"
+                " than text and may need billing enabled on the Google Cloud"
+                " project.",
                 status_code=429,
+                retry_after=retry_after,
             )
         if response.status_code == 404:
             # Model names move. A name that was correct when it was written

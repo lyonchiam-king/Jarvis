@@ -118,6 +118,33 @@ def image_briefs(spec, business_name: str, category: str, *, count: int) -> list
     return briefs[: max(0, count)]
 
 
+class ImageBudget:
+    """Stops a run asking for images the account cannot currently make.
+
+    Image models have their own, much smaller allowance than text. When that
+    runs out every request 429s instantly, and without this a sixty-lead run
+    spends a hundred and eighty calls discovering the same thing a hundred
+    and eighty times -- against the same per-minute budget the pages need.
+
+    One quota refusal closes it for the rest of the run. It is deliberately
+    not persisted: quotas reset, and a run tomorrow should try again.
+    """
+
+    def __init__(self) -> None:
+        self.open = True
+        self.reason = ""
+
+    def close(self, reason: str) -> None:
+        if self.open:
+            self.open = False
+            self.reason = reason
+            log.warning(
+                "  Image generation is out of quota, so the rest of this run "
+                "builds pages without images. %s",
+                reason,
+            )
+
+
 def generate_for_site(
     generator: SiteGenerator,
     spec,
@@ -125,10 +152,14 @@ def generate_for_site(
     business_name: str,
     category: str,
     count: int,
+    budget: "ImageBudget | None" = None,
 ) -> list[GeneratedImage]:
     """Generate this page's images. Never raises -- a page without images is
     still a page, and losing the whole lead over decoration is the wrong trade.
     """
+    if budget is not None and not budget.open:
+        return []
+
     images: list[GeneratedImage] = []
     for index, (purpose, prompt, alt) in enumerate(
         image_briefs(spec, business_name, category, count=count), start=1
@@ -142,6 +173,11 @@ def generate_for_site(
         try:
             data, mime = generator.generate_image(prompt)
         except SiteGenError as exc:
+            if exc.status_code == 429 and budget is not None:
+                # Not "busy" -- out of allowance. Every later request in this
+                # run will fail the same way, so stop asking.
+                budget.close(str(exc))
+                return images
             log.info("  Image %d not generated (%s). The page still gets built.", index, exc)
             continue
 

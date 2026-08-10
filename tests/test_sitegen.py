@@ -349,3 +349,52 @@ def test_a_bad_request_is_never_retried():
         g.generate("prompt")
 
     assert g.call_count == 1
+
+
+def test_a_quota_error_reports_which_quota_and_waits_as_asked():
+    """"Rate limited" cannot tell a per-minute pause from a per-day ceiling,
+    and those need opposite reactions. Google puts both in the error details."""
+    body = {
+        "error": {
+            "code": 429,
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                    "violations": [{"quotaId": "GenerateRequestsPerDayPerProject-FreeTier"}],
+                },
+                {
+                    "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                    "retryDelay": "27s",
+                },
+            ],
+        }
+    }
+    g = generator(FakeResponse(body, status_code=429, text="quota"), max_attempts=1)
+
+    with pytest.raises(SiteGenError) as err:
+        g.generate("prompt")
+
+    assert "PerDay" in str(err.value)
+    assert err.value.retry_after == 27.0
+
+
+def test_googles_own_retry_delay_is_used_over_the_default_backoff():
+    body = {
+        "error": {
+            "details": [
+                {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "2s"}
+            ]
+        }
+    }
+    slept = []
+    g = generator(
+        FakeResponse(body, status_code=429, text="quota"),
+        candidate_response(VALID_HTML),
+        sleep=slept.append,
+    )
+
+    g.generate("prompt")
+
+    # The first sleep is the retry wait. The 6.5s after it is the ordinary
+    # per-minute pacing before the second request, which is unrelated.
+    assert slept[0] == 2.0, "should wait what Google asked, not the default 5s"
