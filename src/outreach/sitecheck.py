@@ -104,6 +104,64 @@ def _digits(text: str) -> str:
     return re.sub(r"\D", "", text or "")
 
 
+# Characters a model routinely substitutes while writing prose. Comparing the
+# headline raw means a curly apostrophe or an en dash rejects an otherwise
+# perfect page -- and a rejection costs two Gemini calls and produces nothing.
+_LOOKALIKES = str.maketrans({
+    "‘": "'", "’": "'", "‚": "'", "‛": "'",
+    "“": '"', "”": '"', "„": '"',
+    "–": "-", "—": "-", "―": "-", "−": "-",
+    " ": " ", "…": "...",
+})
+
+
+class _VisibleText(HTMLParser):
+    """Text a reader would actually see, with script and style dropped."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._muted = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self._muted += 1
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style") and self._muted:
+            self._muted -= 1
+
+    def handle_data(self, data):
+        if not self._muted:
+            self._parts.append(data)
+
+    def text(self) -> str:
+        # Space-joined, because markup is a word boundary: a headline written
+        # as `<h1>French <span>Technique</span></h1>` must not fold to
+        # "FrenchTechnique" and then fail to match.
+        return " ".join(self._parts)
+
+
+def _comparable(text: str) -> str:
+    """Fold a string to what a reader would see.
+
+    Lookalike punctuation normalised, whitespace collapsed, case ignored.
+    This check exists to catch a model that invented its own headline, and
+    none of those differences are invention.
+    """
+    return re.sub(r"\s+", " ", (text or "").translate(_LOOKALIKES)).strip().casefold()
+
+
+def _visible(html: str) -> str:
+    parser = _VisibleText()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception:  # noqa: BLE001 -- a page too broken to parse fails elsewhere
+        return _comparable(html)
+    return _comparable(parser.text())
+
+
 def _host(url: str) -> str | None:
     """The URL's host, or ``None`` if the reference is one of the allowed
     "no host to check" shapes: relative, or a ``data:`` URI.
@@ -188,8 +246,10 @@ def check_site(
     # A blank headline is a thin spec, not a page defect -- checking it would
     # pass vacuously (an empty string is a substring of everything) and give
     # false confidence that the hero copy is present. Skip outright instead.
-    if headline.strip() and headline not in html:
-        problems.append(SiteProblem("missing_headline", f"{headline!r} not found verbatim"))
+    if headline.strip() and _comparable(headline) not in _visible(html):
+        problems.append(
+            SiteProblem("missing_headline", f"{headline!r} is not on the page")
+        )
 
     for pattern, label in (
         (_IMG_SRC_RE, "img"),

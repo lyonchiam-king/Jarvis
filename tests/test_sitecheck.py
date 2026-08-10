@@ -4,6 +4,8 @@ from a page that otherwise passes every check, so a broken check fails only
 its own test, never a neighbour's.
 """
 
+import pytest
+
 from outreach.sitecheck import (
     DISCLAIMER_TEXT,
     SiteProblem,
@@ -311,3 +313,64 @@ def test_repair_instruction_names_each_problem_and_asks_for_the_whole_page():
     assert "missing_phone" in message
     assert "missing <!DOCTYPE html>" in message
     assert "whole" in message.lower() or "complete" in message.lower()
+
+
+# ---------------------------------------------- the headline, as a reader sees it
+
+_H = "Ojuvé — Georgetown's muslim-friendly salon"
+
+
+def _page_with(h1: str) -> str:
+    return (
+        '<!doctype html><html><head><title>t</title>'
+        '<meta name="robots" content="noindex"></head><body>'
+        f"{h1}<p>Call 04-262 1188</p><p>Unofficial concept by COAI</p>"
+        + "<p>x</p>" * 400
+        + "</body></html>"
+    )
+
+
+def _headline_rejected(h1: str, headline: str = _H) -> bool:
+    codes = [
+        p.code
+        for p in check_site(
+            _page_with(h1),
+            phone="04-262 1188",
+            headline=headline,
+            business_name="Ojuvé",
+            min_bytes=4000,
+            max_bytes=400000,
+        )
+    ]
+    return "missing_headline" in codes
+
+
+@pytest.mark.parametrize(
+    "label, h1",
+    [
+        ("entities", "<h1>Ojuv&eacute; &mdash; Georgetown&#39;s muslim-friendly salon</h1>"),
+        ("curly apostrophe", "<h1>Ojuvé — Georgetown’s muslim-friendly salon</h1>"),
+        ("split by markup", "<h1>Ojuvé — <span>Georgetown's</span> muslim-friendly salon</h1>"),
+        ("wrapped and indented", "<h1>\n  Ojuvé — Georgetown's\n  muslim-friendly salon\n</h1>"),
+        ("uppercased", "<h1>OJUVÉ — GEORGETOWN'S MUSLIM-FRIENDLY SALON</h1>"),
+    ],
+)
+def test_a_headline_a_reader_would_recognise_is_accepted(label, h1):
+    """A raw substring match on raw HTML rejected all five of these.
+
+    Every one is the model writing the copy it was given -- entity-encoded,
+    re-quoted, wrapped in a span, or line-broken by a formatter. Rejecting
+    them costs two Gemini calls and produces nothing, which is how a working
+    batch reports every lead as failed.
+    """
+    assert not _headline_rejected(h1), f"{label} should be accepted"
+
+
+def test_a_headline_the_model_invented_is_still_caught():
+    """The point of the check. Normalising must not soften it into nothing."""
+    assert _headline_rejected("<h1>Welcome to our salon</h1>")
+
+
+def test_headline_text_hidden_in_a_script_does_not_count():
+    """Otherwise a model could satisfy the check without a visible headline."""
+    assert _headline_rejected(f'<h1>Something else</h1><script>var t = "{_H}";</script>')
