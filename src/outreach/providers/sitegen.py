@@ -27,6 +27,7 @@ import requests
 log = logging.getLogger("outreach")
 
 API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 
 # Statuses Google describes as temporary. 429 is included because the free
@@ -96,7 +97,7 @@ class SiteGenerator:
         *,
         model: str,
         max_output_tokens: int,
-        image_model: str = "gemini-2.5-flash-image",
+        image_model: str = "",   # "" means ask the API which one to use
         min_interval_seconds: float = 6.5,
         max_attempts: int = 3,
         retry_base_seconds: float = 5.0,
@@ -109,7 +110,8 @@ class SiteGenerator:
                 "GEMINI_API_KEY is empty. Set it in .env -- the demo builder "
                 "needs it to call Gemini."
             )
-        self.image_model = image_model
+        self._image_model = image_model
+        self._discovered: str | None = None
         self.max_attempts = max(1, max_attempts)
         self.retry_base_seconds = retry_base_seconds
         self.api_key = api_key
@@ -137,6 +139,57 @@ class SiteGenerator:
             if remaining > 0:
                 self._sleep(remaining)
         self._last_call = self._clock()
+
+    @property
+    def image_model(self) -> str:
+        """The image model to use, discovered from the API if not configured.
+
+        A model name written into a config file is a guess with a shelf life.
+        This one was wrong three times before it was worth admitting that the
+        API already knows the answer and should just be asked. Configure
+        `build.image_model` to override; leave it blank and it finds one.
+        """
+        if self._image_model:
+            return self._image_model
+        if self._discovered is None:
+            self._discovered = self._find_image_model()
+        return self._discovered
+
+    def _find_image_model(self) -> str:
+        """Ask ListModels for something that can return an image."""
+        try:
+            resp = self._session.get(
+                LIST_URL,
+                headers={"x-goog-api-key": self.api_key},
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            raise SiteGenError(f"Could not ask Gemini which models exist: {exc}") from exc
+
+        if resp.status_code != 200:
+            raise SiteGenError(
+                f"Could not list Gemini models (HTTP {resp.status_code}). "
+                "Set build.image_model in your campaign file to skip the lookup."
+            )
+
+        names = [
+            str(m.get("name", "")).removeprefix("models/")
+            for m in ((resp.json() or {}).get("models") or [])
+            if "generateContent" in (m.get("supportedGenerationMethods") or [])
+        ]
+        # Newest first: the API lists oldest-first and a later generation is
+        # what a person picking by hand in AI Studio would choose.
+        candidates = sorted(
+            (n for n in names if "image" in n and "embedding" not in n), reverse=True
+        )
+        if not candidates:
+            raise SiteGenError(
+                "Your key has no image-capable Gemini model. Run "
+                "`outreach list-models` to see what it does have. Image "
+                "generation may need billing enabled on the Google Cloud project."
+            )
+        log.info("  Using %s for images (found via the API).", candidates[0])
+        return candidates[0]
 
     def generate_image(self, prompt: str) -> tuple[bytes, str]:
         """One image. Returns ``(bytes, mime_type)``.

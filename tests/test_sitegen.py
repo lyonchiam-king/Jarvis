@@ -398,3 +398,68 @@ def test_googles_own_retry_delay_is_used_over_the_default_backoff():
     # The first sleep is the retry wait. The 6.5s after it is the ordinary
     # per-minute pacing before the second request, which is unrelated.
     assert slept[0] == 2.0, "should wait what Google asked, not the default 5s"
+
+
+# --------------------------------------------- finding the image model, not guessing
+
+
+class ListSession(FakeSession):
+    """A session that answers ListModels as well as generateContent."""
+
+    def __init__(self, models, *replies):
+        super().__init__(*replies)
+        self._models = models
+        self.listed = 0
+
+    def get(self, url, headers, timeout):
+        self.listed += 1
+        return FakeResponse(
+            {
+                "models": [
+                    {"name": f"models/{n}", "supportedGenerationMethods": ["generateContent"]}
+                    for n in self._models
+                ]
+            }
+        )
+
+
+def test_the_image_model_is_discovered_rather_than_guessed():
+    """A model name in a config file is a guess with a shelf life. This one
+    was wrong three separate times before it was worth admitting the API
+    already knows the answer."""
+    session = ListSession(["gemini-3.6-flash", "gemini-2.5-flash-image", "gemini-3.1-flash-image"])
+    g = SiteGenerator("key", model="gemini-3.6-flash", max_output_tokens=1000, session=session)
+
+    assert g.image_model == "gemini-3.1-flash-image", "should prefer the newer image model"
+    assert session.listed == 1
+
+
+def test_the_discovered_model_is_looked_up_once_per_run():
+    session = ListSession(["gemini-3.1-flash-image"])
+    g = SiteGenerator("key", model="m", max_output_tokens=1000, session=session)
+
+    g.image_model, g.image_model, g.image_model
+
+    assert session.listed == 1, "one lookup, not one per page"
+
+
+def test_an_explicitly_configured_image_model_skips_the_lookup():
+    session = ListSession(["gemini-3.1-flash-image"])
+    g = SiteGenerator(
+        "key", model="m", max_output_tokens=1000,
+        image_model="gemini-9-pinned", session=session,
+    )
+
+    assert g.image_model == "gemini-9-pinned"
+    assert session.listed == 0
+
+
+def test_a_key_with_no_image_model_says_so_and_names_the_next_step():
+    session = ListSession(["gemini-3.6-flash", "text-embedding-004"])
+    g = SiteGenerator("key", model="m", max_output_tokens=1000, session=session)
+
+    with pytest.raises(SiteGenError) as err:
+        g.image_model
+
+    assert "list-models" in str(err.value)
+    assert "billing" in str(err.value)

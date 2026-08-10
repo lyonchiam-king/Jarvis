@@ -193,7 +193,11 @@ class BuildSettings:
     # and texture only -- never a depiction of the real premises, which the
     # page prompt and images.py both enforce. 3 keeps a 60-lead run inside
     # the free tier's daily image allowance with room to re-run.
-    image_model: str = "gemini-2.5-flash-image"
+    # Blank means "ask the API which image model this key has". A name typed
+    # here is a guess with a shelf life -- this one was wrong three times
+    # before it was worth admitting the API already knows. Set it to pin a
+    # specific model and skip the lookup.
+    image_model: str = ""
     # One image per page, not three. The free tier meters image models by
     # input tokens *per minute*, and three requests inside one page's
     # generation window exhausts it -- so asking for three reliably returns
@@ -431,7 +435,7 @@ def load_config(
         enabled=bool(b.get("enabled", False)),
         provider=str(b.get("provider", "gemini")),
         model=str(b.get("model", "gemini-3.6-flash")),
-        image_model=str(b.get("image_model", "gemini-2.5-flash-image")),
+        image_model=str(b.get("image_model", "")),
         images_per_page=int(b.get("images_per_page", 1)),
         base_url=str(b.get("base_url", "")),
         max_output_tokens=int(b.get("max_output_tokens", 32000)),
