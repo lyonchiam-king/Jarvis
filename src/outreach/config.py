@@ -188,7 +188,7 @@ class BuildSettings:
     target: str = "lovable"          # "lovable" | "firebase"
     enabled: bool = False            # separate from lovable.enabled -- never default true
     provider: str = "gemini"
-    model: str = "gemini-3-flash"
+    model: str = "gemini-3.6-flash"
     base_url: str = ""
     # The JSON writers (briefs, specs, outreach copy) cap output at 6000
     # tokens because their replies are a handful of short fields. A full HTML
@@ -419,7 +419,7 @@ def load_config(
         target=build_target,
         enabled=bool(b.get("enabled", False)),
         provider=str(b.get("provider", "gemini")),
-        model=str(b.get("model", "gemini-3-flash")),
+        model=str(b.get("model", "gemini-3.6-flash")),
         base_url=str(b.get("base_url", "")),
         max_output_tokens=int(b.get("max_output_tokens", 32000)),
         min_interval_seconds=float(b.get("min_interval_seconds", 6.5)),

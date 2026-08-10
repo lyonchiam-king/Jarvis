@@ -111,6 +111,19 @@ class SiteGenerator:
                 "if this keeps happening, raise build.min_interval_seconds.",
                 status_code=429,
             )
+        if response.status_code == 404:
+            # Model names move. A name that was correct when it was written
+            # into a config file will one day 404, and the raw Google error
+            # says only "not found" -- which reads like the whole setup is
+            # broken rather than one string being stale.
+            raise SiteGenError(
+                f"Gemini has no model called {self.model!r}. Model names change; "
+                "run `outreach list-models` to see the ones your key can "
+                "actually use, then set the one you want under `build:` in "
+                "your campaign file.",
+                status_code=404,
+            )
+
         if response.status_code != 200:
             raise SiteGenError(
                 f"Gemini returned HTTP {response.status_code} for model "

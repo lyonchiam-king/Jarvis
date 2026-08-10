@@ -164,7 +164,7 @@ build:
   # firebase must not silently start spending Gemini credits on its own.
   enabled: false
   # provider: gemini
-  # model: gemini-3-flash
+  # model: gemini-3.6-flash
   # output_dir: sites
   # public_base_url: ""   # e.g. https://your-site.web.app, for the outreach draft
 

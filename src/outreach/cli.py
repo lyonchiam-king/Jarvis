@@ -202,6 +202,67 @@ def preflight(ctx: click.Context) -> None:
         raise SystemExit(1)
 
 
+@main.command("list-models")
+@click.pass_context
+def list_models(ctx: click.Context) -> None:
+    """Ask Gemini which models your key can actually use.
+
+    Model names move -- the name in a config file written months ago will
+    one day 404. Rather than guessing, ask the API and paste back one of
+    the names it prints.
+    """
+    import requests
+
+    config = _load(ctx.obj["config_path"])
+    key = config.secrets.gemini_api_key
+    if not key:
+        raise click.ClickException(
+            "GEMINI_API_KEY is not set. Add a line to .env:\n"
+            "    GEMINI_API_KEY=your-key-here\n"
+            "Get one at aistudio.google.com -- the key icon in the left sidebar."
+        )
+
+    try:
+        resp = requests.get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            headers={"x-goog-api-key": key},
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        raise click.ClickException(f"Could not reach Gemini: {exc}") from exc
+
+    if resp.status_code == 403:
+        raise click.ClickException(
+            "Gemini refused the key (403). Check GEMINI_API_KEY in .env is the "
+            "one from aistudio.google.com, pasted whole and without quotes."
+        )
+    if resp.status_code != 200:
+        raise click.ClickException(
+            f"Gemini returned HTTP {resp.status_code}: {resp.text[:400]}"
+        )
+
+    models = [
+        m
+        for m in (resp.json().get("models") or [])
+        if "generateContent" in (m.get("supportedGenerationMethods") or [])
+    ]
+    if not models:
+        raise click.ClickException("Your key sees no models that can generate content.")
+
+    click.echo("")
+    click.echo("Models your key can use for building sites:")
+    click.echo("")
+    for m in sorted(models, key=lambda m: m.get("name", "")):
+        # The API returns "models/gemini-3.6-flash"; the config wants the tail.
+        name = m.get("name", "").removeprefix("models/")
+        limit = m.get("outputTokenLimit")
+        note = f"  (max output {limit:,})" if limit else ""
+        click.echo(f"  {name}{note}")
+    click.echo("")
+    click.echo(f"Currently set to: build.model = {config.build.model}")
+    click.echo("Change it under `build:` in your campaign file.")
+
+
 @main.command("init-sheet")
 @click.option("--title", default=None, help="Title for a newly created spreadsheet.")
 @click.pass_context

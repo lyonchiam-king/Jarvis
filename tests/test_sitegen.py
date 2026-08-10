@@ -268,3 +268,35 @@ def test_a_call_after_a_long_gap_does_not_sleep():
 def test_empty_api_key_names_the_env_var():
     with pytest.raises(SiteGenError, match="GEMINI_API_KEY"):
         SiteGenerator("", model="gemini-2.5-flash", max_output_tokens=1000)
+
+
+def test_an_unknown_model_name_points_at_list_models():
+    """Google's own 404 says only "not found", which reads like the whole
+    setup is broken rather than one stale string. Model names move -- the
+    error has to say how to find the current one."""
+    import pytest
+
+    from outreach.providers.sitegen import SiteGenError, SiteGenerator
+
+    class Resp:
+        status_code = 404
+        text = '{"error": {"code": 404, "message": "models/x is not found"}}'
+
+        def json(self):
+            import json
+
+            return json.loads(self.text)
+
+    class Session:
+        def post(self, *a, **k):
+            return Resp()
+
+    gen = SiteGenerator(
+        "k", model="gemini-9-nope", max_output_tokens=1000,
+        min_interval_seconds=0, session=Session(),
+    )
+    with pytest.raises(SiteGenError) as err:
+        gen.generate("build me a page")
+
+    assert "gemini-9-nope" in str(err.value)
+    assert "list-models" in str(err.value)
