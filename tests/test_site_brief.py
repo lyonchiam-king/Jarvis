@@ -1463,17 +1463,34 @@ def test_rewrite_over_an_empty_sheet_logs_nothing_to_rewrite_and_returns_cleanly
 
 
 class FakeGenerator:
-    """Returns canned HTML. `replies` is consumed in order."""
+    """Returns canned HTML, and canned image bytes.
 
-    def __init__(self, replies):
+    Mirrors the real SiteGenerator closely enough that a page which never
+    asked for images still works: `images=None` means image generation is
+    unavailable, which is exactly what a quota-exhausted run looks like.
+    """
+
+    def __init__(self, replies, images=b"\x89PNG-fake"):
         self._replies = list(replies)
+        self._image = images
         self.call_count = 0
+        self.image_calls = 0
         self.prompts = []
+        self.image_prompts = []
 
     def generate(self, prompt):
         self.call_count += 1
         self.prompts.append(prompt)
         return self._replies.pop(0)
+
+    def generate_image(self, prompt):
+        from outreach.providers.sitegen import SiteGenError
+
+        self.image_calls += 1
+        self.image_prompts.append(prompt)
+        if self._image is None:
+            raise SiteGenError("no image quota left")
+        return self._image, "image/png"
 
 
 def _good_page(phone="04-262 1188", headline=None):
@@ -1490,7 +1507,13 @@ def _good_page(phone="04-262 1188", headline=None):
     )
 
 
-def _generate(tmp_path, replies, *, approval="Approved", stage="Site Briefed"):
+def _tmp():
+    import tempfile
+
+    return tempfile.mkdtemp()
+
+
+def _generate(tmp_path, replies, *, approval="Approved", stage="Site Briefed", images=b"\x89PNG-fake"):
     from dataclasses import replace as dc_replace
 
     cfg = config()
@@ -1510,7 +1533,7 @@ def _generate(tmp_path, replies, *, approval="Approved", stage="Site Briefed"):
             "Approval Status": approval, "Lovable Project ID": "",
         })},
     )
-    gen = FakeGenerator(replies)
+    gen = FakeGenerator(replies, images=images)
     report = site_brief.generate_sites(cfg, sheets, FakeWriter(), gen)
     return report, sheets, gen, tmp_path
 
@@ -1671,3 +1694,69 @@ def test_regenerating_an_unknown_lead_is_refused():
 
     with pytest.raises(ValueError, match="No lead with ID"):
         site_brief.regenerate_one(config(), sheets, FakeWriter(), "nope")
+
+
+# ------------------------------------------------------------------- imagery
+
+
+def test_images_are_generated_and_written_next_to_the_page():
+    """A page of colour and type alone reads as a wireframe. The images sit
+    beside index.html and are referenced relatively, which is also the only
+    shape the site check allows."""
+    report, _sheets, gen, root = _generate(
+        __import__("pathlib").Path(_tmp()), [_good_page()]
+    )
+
+    assert gen.image_calls == 3
+    folder = next(p for p in root.iterdir() if p.is_dir())
+    written = sorted(f.name for f in folder.iterdir())
+    assert "index.html" in written
+    assert len([f for f in written if f.startswith("image-")]) == 3
+
+
+def test_the_page_is_told_which_image_files_exist():
+    _report, _sheets, gen, _root = _generate(
+        __import__("pathlib").Path(_tmp()), [_good_page()]
+    )
+
+    prompt = gen.prompts[0]
+    assert "IMAGES YOU HAVE" in prompt
+    assert "image-1.png" in prompt
+    # It must not be free to invent a filename or reach off-site for one.
+    assert "Do not invent an image file" in prompt
+
+
+def test_no_image_prompt_ever_asks_for_the_real_premises():
+    """A generated interior of *their* salon, inside a pitch that says 'I
+    looked at your business', is a fabricated depiction of a real place --
+    and the owner is the one person certain to know it is not their room."""
+    _report, _sheets, gen, _root = _generate(
+        __import__("pathlib").Path(_tmp()), [_good_page()]
+    )
+
+    # Assert something was actually asked for first. `generate_for_site`
+    # refuses a banned prompt before sending it, so a loop over "prompts that
+    # were sent" passes vacuously on an empty list -- which is exactly what a
+    # briefs list full of banned wording would produce.
+    assert len(gen.image_prompts) == 3, "no image prompts were sent at all"
+
+    banned = ("shopfront", "storefront", "interior of", "the owner", "the staff")
+    for prompt in gen.image_prompts:
+        low = prompt.casefold()
+        for word in banned:
+            assert word not in low, f"image prompt asks for {word!r}: {prompt}"
+        assert "no people" in low or "not a person" in low
+
+
+def test_a_page_still_gets_built_when_images_fail():
+    """Image quota is a separate, smaller budget. Losing the whole lead over
+    decoration is the wrong trade."""
+    import pathlib
+
+    root = pathlib.Path(_tmp())
+    report, _sheets, gen, _r = _generate(root, [_good_page()], images=None)
+
+    assert report.generated == 1
+    folder = next(p for p in root.iterdir() if p.is_dir())
+    assert (folder / "index.html").exists()
+    assert not [f for f in folder.iterdir() if f.name.startswith("image-")]

@@ -189,6 +189,12 @@ class BuildSettings:
     enabled: bool = False            # separate from lovable.enabled -- never default true
     provider: str = "gemini"
     model: str = "gemini-3.6-flash"
+    # Which model draws the pictures, and how many per page. Images are mood
+    # and texture only -- never a depiction of the real premises, which the
+    # page prompt and images.py both enforce. 3 keeps a 60-lead run inside
+    # the free tier's daily image allowance with room to re-run.
+    image_model: str = "gemini-2.5-flash-image"
+    images_per_page: int = 3
     base_url: str = ""
     # The JSON writers (briefs, specs, outreach copy) cap output at 6000
     # tokens because their replies are a handful of short fields. A full HTML
@@ -420,6 +426,8 @@ def load_config(
         enabled=bool(b.get("enabled", False)),
         provider=str(b.get("provider", "gemini")),
         model=str(b.get("model", "gemini-3.6-flash")),
+        image_model=str(b.get("image_model", "gemini-2.5-flash-image")),
+        images_per_page=int(b.get("images_per_page", 3)),
         base_url=str(b.get("base_url", "")),
         max_output_tokens=int(b.get("max_output_tokens", 32000)),
         min_interval_seconds=float(b.get("min_interval_seconds", 6.5)),

@@ -683,6 +683,7 @@ def render_lovable_prompt(
     social_profiles: str = "",
     maps_url: str = "",
     target: str = "lovable",
+    images: str = "",
 ) -> str:
     """Turn the structured spec into the text you paste into Lovable.
 
@@ -898,7 +899,25 @@ def render_lovable_prompt(
     # belong in `avoid` below and does not depend on whether the spec named
     # anything to avoid. Empty for lovable, whose IMAGERY block above already
     # covers this case with a real photo pipeline.
-    if profile.no_photography_lines:
+    if images.strip():
+        # Real files, already generated and sitting next to index.html. They
+        # are mood and texture -- never a depiction of this business's actual
+        # premises, which is why the alt text describes what the image *is*
+        # rather than claiming it shows their shop.
+        out += [
+            "",
+            "IMAGES YOU HAVE (real files, in the same folder as index.html)",
+            images.strip(),
+            "",
+            "Reference them exactly as written, as relative paths -- src=\"image-1.png\", "
+            "not a URL. Use each one for the purpose given, set width and height so "
+            "nothing jumps as they load, and lazy-load any below the fold. Use the alt "
+            "text given: these are atmosphere, not photographs of this business, and "
+            "must never be captioned as their premises, their staff or their work. "
+            "Do not invent an image file that is not on this list, and do not link to "
+            "an image anywhere else on the internet.",
+        ]
+    elif profile.no_photography_lines:
         out += ["", *profile.no_photography_lines]
 
     if spec.avoid:

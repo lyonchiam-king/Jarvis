@@ -503,6 +503,7 @@ def generate_sites(
     """
     from pathlib import Path
 
+    from ..images import generate_for_site, manifest_lines
     from ..providers.sitegen import SiteGenError
     from ..sitecheck import check_site, repair_instruction
     from ..slug import site_slug
@@ -574,6 +575,19 @@ def generate_sites(
             spec = writer.write_site_spec(
                 _spec_prompt(lead, research_row, config, social_profiles)
             )
+            # Images first: the page has to be told which files exist before
+            # it can reference them, and a page written against images that
+            # were never generated would ship broken <img> tags.
+            images = generate_for_site(
+                generator,
+                spec,
+                business_name=name,
+                category=lead.get("Category", ""),
+                count=config.build.images_per_page,
+            )
+            if images:
+                log.info("  %d image(s) generated.", len(images))
+
             prompt = render_lovable_prompt(
                 business_name=name,
                 category=lead.get("Category", ""),
@@ -585,6 +599,7 @@ def generate_sites(
                 social_profiles=social_profiles,
                 maps_url=lead.get("Maps URL", ""),
                 target="html",
+                images=manifest_lines(images),
             )
 
             html = generator.generate(prompt)
@@ -625,6 +640,8 @@ def generate_sites(
                 )
 
             path.parent.mkdir(parents=True, exist_ok=True)
+            for image in images:
+                (path.parent / image.filename).write_bytes(image.data)
             path.write_text(html, encoding="utf-8")
             report.generated += 1
             report.paths.append(str(path.resolve()))

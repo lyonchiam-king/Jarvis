@@ -55,6 +55,7 @@ class SiteGenerator:
         *,
         model: str,
         max_output_tokens: int,
+        image_model: str = "gemini-2.5-flash-image",
         min_interval_seconds: float = 6.5,
         max_attempts: int = 3,
         retry_base_seconds: float = 5.0,
@@ -67,6 +68,7 @@ class SiteGenerator:
                 "GEMINI_API_KEY is empty. Set it in .env -- the demo builder "
                 "needs it to call Gemini."
             )
+        self.image_model = image_model
         self.max_attempts = max(1, max_attempts)
         self.retry_base_seconds = retry_base_seconds
         self.api_key = api_key
@@ -95,6 +97,38 @@ class SiteGenerator:
                 self._sleep(remaining)
         self._last_call = self._clock()
 
+    def generate_image(self, prompt: str) -> tuple[bytes, str]:
+        """One image. Returns ``(bytes, mime_type)``.
+
+        Same transport, same pacing and retries as the page call -- image
+        requests count against the same per-minute budget, so they have to
+        share the throttle or a page plus its images trips the rate limit on
+        its own.
+        """
+        from ..images import decode_inline
+
+        payload = self._call_with_retry(
+            self.image_model,
+            {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+            },
+        )
+        candidates = payload.get("candidates") or []
+        if not candidates:
+            raise SiteGenError(
+                f"Gemini returned no image for {self.image_model}. "
+                f"{payload.get('promptFeedback', '')}"
+            )
+        for part in candidates[0].get("content", {}).get("parts") or []:
+            if part.get("inlineData") or part.get("inline_data"):
+                return decode_inline(part)
+        raise SiteGenError(
+            "Gemini replied without an image part -- it answered in text "
+            f"instead. Check build.image_model ({self.image_model!r}) is an "
+            "image model; `outreach list-models` shows the ones your key has."
+        )
+
     def generate(self, prompt: str) -> str:
         """One page. Retries the failures Google itself calls temporary.
 
@@ -104,10 +138,24 @@ class SiteGenerator:
         written, and on a sixty-lead run a brief spike would take out most of
         the batch.
         """
+        return self._text_from(
+            self._call_with_retry(
+                self.model,
+                {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "maxOutputTokens": self.max_output_tokens,
+                        "temperature": 0.7,
+                    },
+                },
+            )
+        )
+
+    def _call_with_retry(self, model: str, body: dict) -> dict:
         last: SiteGenError | None = None
         for attempt in range(self.max_attempts):
             try:
-                return self._attempt(prompt)
+                return self._post(model, body)
             except SiteGenError as exc:
                 if exc.status_code not in _TRANSIENT or attempt == self.max_attempts - 1:
                     raise
@@ -122,19 +170,18 @@ class SiteGenerator:
                 self._sleep(wait)
         raise last  # unreachable; the loop either returns or raises
 
-    def _attempt(self, prompt: str) -> str:
+    def _post(self, model: str, body: dict) -> dict:
+        """One request. Pacing, status mapping and JSON parsing, no retrying.
+
+        Shared by the page call and the image call: both spend from the same
+        per-minute budget, so both must go through the same throttle or a
+        page plus its images trips the rate limit on its own.
+        """
         self._pace()
         self.call_count += 1
 
-        url = API_URL.format(model=self.model)
+        url = API_URL.format(model=model)
         headers = {"x-goog-api-key": self.api_key, "Content-Type": "application/json"}
-        body = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "maxOutputTokens": self.max_output_tokens,
-                "temperature": 0.7,
-            },
-        }
         try:
             response = self._session.post(url, json=body, headers=headers, timeout=self.timeout)
         except (requests.Timeout, requests.ConnectionError) as exc:
@@ -143,7 +190,7 @@ class SiteGenerator:
         if response.status_code == 429:
             raise SiteGenError(
                 f"Gemini rate-limited this request (HTTP 429) for model "
-                f"{self.model}. The free tier allows 10 requests/minute -- "
+                f"{model}. The free tier allows 10 requests/minute -- "
                 "if this keeps happening, raise build.min_interval_seconds.",
                 status_code=429,
             )
@@ -153,7 +200,7 @@ class SiteGenerator:
             # says only "not found" -- which reads like the whole setup is
             # broken rather than one string being stale.
             raise SiteGenError(
-                f"Gemini has no model called {self.model!r}. Model names change; "
+                f"Gemini has no model called {model!r}. Model names change; "
                 "run `outreach list-models` to see the ones your key can "
                 "actually use, then set the one you want under `build:` in "
                 "your campaign file.",
@@ -163,7 +210,7 @@ class SiteGenerator:
         if response.status_code in (500, 502, 503, 504):
             raise SiteGenError(
                 f"Gemini is busy (HTTP {response.status_code}) for model "
-                f"{self.model}. This is Google's side and usually clears in "
+                f"{model}. This is Google's side and usually clears in "
                 "a minute or two.",
                 status_code=response.status_code,
             )
@@ -171,7 +218,7 @@ class SiteGenerator:
         if response.status_code != 200:
             raise SiteGenError(
                 f"Gemini returned HTTP {response.status_code} for model "
-                f"{self.model}: {(response.text or '')[:300]}",
+                f"{model}: {(response.text or '')[:300]}",
                 status_code=response.status_code,
             )
 
@@ -188,6 +235,11 @@ class SiteGenerator:
                 f"(blockReason: {block_reason})."
             )
 
+        return payload
+
+    def _text_from(self, payload: dict) -> str:
+        """The HTML out of a page reply, or a raise naming what went wrong."""
+        feedback = payload.get("promptFeedback") or {}
         candidates = payload.get("candidates") or []
         if not candidates:
             raise SiteGenError(
