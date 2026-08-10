@@ -1346,3 +1346,40 @@ def test_the_next_up_endpoint_honours_the_how_many_box(monkeypatch):
 
     # A junk value must not 500 the page.
     assert client.get("/api/next-up?limit=abc").status_code == 200
+
+
+def test_the_page_javascript_actually_parses():
+    """The whole dashboard is one <script> block. One syntax error anywhere
+    in it and *nothing* runs -- every panel sits on "Loading...", no request
+    is ever made, and the server log looks perfectly healthy because it only
+    ever served `GET /`. There is no visible error unless you open the
+    browser console, which Lyon has no reason to do.
+
+    This shipped once. PAGE is a Python string, so a JS escape needs doubling:
+    `\\n` in the source becomes a real newline and breaks the string literal
+    it sits in. Every other escape in this file is written `\\\\n` for exactly
+    that reason.
+
+    Skipped where node is absent rather than approximated in Python -- a
+    half-check that passes on a broken page is worse than no check.
+    """
+    import re
+    import shutil
+    import subprocess
+
+    from outreach.dashboard import PAGE
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available to parse the page script")
+
+    blocks = re.findall(r"<script>(.*?)</script>", PAGE, re.S)
+    assert blocks, "the page has no script block -- did the markup change?"
+
+    for i, js in enumerate(blocks):
+        proc = subprocess.run(
+            [node, "--check", "-"], input=js, capture_output=True, text=True
+        )
+        assert proc.returncode == 0, (
+            f"script block {i} does not parse:\n{proc.stderr}"
+        )

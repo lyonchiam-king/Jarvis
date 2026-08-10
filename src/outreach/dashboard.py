@@ -1582,7 +1582,7 @@ function drawReview() {
 }
 
 async function regenAsk() {
-  const notes = prompt('What should change about this brief?\n\ne.g. more upmarket, focus on the wedding packages, less formal');
+  const notes = prompt('What should change about this brief?\\n\\ne.g. more upmarket, focus on the wedding packages, less formal');
   if (notes === null) return;          // cancelled -- do nothing, spend nothing
   if (!notes.trim()) return;
   regen(notes.trim());
