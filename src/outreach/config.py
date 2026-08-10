@@ -194,7 +194,12 @@ class BuildSettings:
     # page prompt and images.py both enforce. 3 keeps a 60-lead run inside
     # the free tier's daily image allowance with room to re-run.
     image_model: str = "gemini-2.5-flash-image"
-    images_per_page: int = 3
+    # One image per page, not three. The free tier meters image models by
+    # input tokens *per minute*, and three requests inside one page's
+    # generation window exhausts it -- so asking for three reliably returns
+    # zero. One hero image lands, and a page with a real hero and tinted
+    # blocks below it beats a page with nothing.
+    images_per_page: int = 1
     base_url: str = ""
     # The JSON writers (briefs, specs, outreach copy) cap output at 6000
     # tokens because their replies are a handful of short fields. A full HTML
@@ -427,7 +432,7 @@ def load_config(
         provider=str(b.get("provider", "gemini")),
         model=str(b.get("model", "gemini-3.6-flash")),
         image_model=str(b.get("image_model", "gemini-2.5-flash-image")),
-        images_per_page=int(b.get("images_per_page", 3)),
+        images_per_page=int(b.get("images_per_page", 1)),
         base_url=str(b.get("base_url", "")),
         max_output_tokens=int(b.get("max_output_tokens", 32000)),
         min_interval_seconds=float(b.get("min_interval_seconds", 6.5)),

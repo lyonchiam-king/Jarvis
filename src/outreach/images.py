@@ -118,29 +118,63 @@ def image_briefs(spec, business_name: str, category: str, *, count: int) -> list
     return briefs[: max(0, count)]
 
 
+# A quota that refills on its own clock, versus one that is gone for the day.
+# The distinction decides whether waiting helps, and getting it wrong either
+# wastes an hour retrying a dead quota or throws away images that would have
+# worked a minute later.
+_PER_MINUTE = re.compile(r"per\s*minute", re.IGNORECASE)
+
+
 class ImageBudget:
-    """Stops a run asking for images the account cannot currently make.
+    """How the run reacts to Gemini refusing an image.
 
-    Image models have their own, much smaller allowance than text. When that
-    runs out every request 429s instantly, and without this a sixty-lead run
-    spends a hundred and eighty calls discovering the same thing a hundred
-    and eighty times -- against the same per-minute budget the pages need.
+    Two different refusals wear the same HTTP 429:
 
-    One quota refusal closes it for the rest of the run. It is deliberately
-    not persisted: quotas reset, and a run tomorrow should try again.
+    **Per-minute.** Refills on its own. The right answer is to stop asking
+    for *this* page and try again on the next one, by which time a minute of
+    page generation has passed. Closing the run over this would throw away
+    every image for sixty leads because one minute was busy.
+
+    **Per-day, or billing.** Gone until tomorrow, or until the account
+    changes. Every later request fails identically, so the run stops asking
+    entirely -- otherwise sixty leads spend a hundred and eighty calls
+    learning the same thing, against the budget the pages themselves need.
+
+    Neither is persisted: quotas reset, and tomorrow's run should try again.
     """
 
     def __init__(self) -> None:
         self.open = True
         self.reason = ""
+        self.skipped_pages = 0
+        self._cooling = False
+
+    def start_page(self) -> None:
+        """A new page. Whatever the last one hit, a minute-limit has moved on."""
+        self._cooling = False
+
+    @property
+    def available(self) -> bool:
+        return self.open and not self._cooling
+
+    def refused(self, reason: str, *, quota: str) -> None:
+        if _PER_MINUTE.search(quota or "") or (not quota and "per minute" in reason.lower()):
+            self._cooling = True
+            self.skipped_pages += 1
+            log.info(
+                "  Image quota is per-minute and currently full, so this page "
+                "goes out without images. The next page tries again."
+            )
+            return
+        self.close(reason)
 
     def close(self, reason: str) -> None:
         if self.open:
             self.open = False
             self.reason = reason
             log.warning(
-                "  Image generation is out of quota, so the rest of this run "
-                "builds pages without images. %s",
+                "  Image generation is out of quota for now, so the rest of "
+                "this run builds pages without images. %s",
                 reason,
             )
 
@@ -157,8 +191,10 @@ def generate_for_site(
     """Generate this page's images. Never raises -- a page without images is
     still a page, and losing the whole lead over decoration is the wrong trade.
     """
-    if budget is not None and not budget.open:
-        return []
+    if budget is not None:
+        budget.start_page()
+        if not budget.available:
+            return []
 
     images: list[GeneratedImage] = []
     for index, (purpose, prompt, alt) in enumerate(
@@ -174,9 +210,7 @@ def generate_for_site(
             data, mime = generator.generate_image(prompt)
         except SiteGenError as exc:
             if exc.status_code == 429 and budget is not None:
-                # Not "busy" -- out of allowance. Every later request in this
-                # run will fail the same way, so stop asking.
-                budget.close(str(exc))
+                budget.refused(str(exc), quota=getattr(exc, "quota", ""))
                 return images
             log.info("  Image %d not generated (%s). The page still gets built.", index, exc)
             continue

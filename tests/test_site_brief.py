@@ -1513,11 +1513,17 @@ def _tmp():
     return tempfile.mkdtemp()
 
 
-def _generate(tmp_path, replies, *, approval="Approved", stage="Site Briefed", images=b"\x89PNG-fake"):
+def _generate(
+    tmp_path, replies, *, approval="Approved", stage="Site Briefed",
+    images=b"\x89PNG-fake", images_per_page=None,
+):
     from dataclasses import replace as dc_replace
 
     cfg = config()
-    cfg = dc_replace(cfg, build=dc_replace(cfg.build, output_dir=str(tmp_path)))
+    build = dc_replace(cfg.build, output_dir=str(tmp_path))
+    if images_per_page is not None:
+        build = dc_replace(build, images_per_page=images_per_page)
+    cfg = dc_replace(cfg, build=build)
     leads = {
         "a": (2, {
             "Lead ID": "a", "Business Name": "Chulia Hair House", "Stage": stage,
@@ -1704,10 +1710,10 @@ def test_images_are_generated_and_written_next_to_the_page():
     beside index.html and are referenced relatively, which is also the only
     shape the site check allows."""
     report, _sheets, gen, root = _generate(
-        __import__("pathlib").Path(_tmp()), [_good_page()]
+        __import__("pathlib").Path(_tmp()), [_good_page()], images_per_page=3
     )
 
-    assert gen.image_calls == 3
+    assert gen.image_calls == 3  # this test asks for three explicitly
     folder = next(p for p in root.iterdir() if p.is_dir())
     written = sorted(f.name for f in folder.iterdir())
     assert "index.html" in written
@@ -1716,7 +1722,7 @@ def test_images_are_generated_and_written_next_to_the_page():
 
 def test_the_page_is_told_which_image_files_exist():
     _report, _sheets, gen, _root = _generate(
-        __import__("pathlib").Path(_tmp()), [_good_page()]
+        __import__("pathlib").Path(_tmp()), [_good_page()], images_per_page=3
     )
 
     prompt = gen.prompts[0]
@@ -1731,7 +1737,7 @@ def test_no_image_prompt_ever_asks_for_the_real_premises():
     looked at your business', is a fabricated depiction of a real place --
     and the owner is the one person certain to know it is not their room."""
     _report, _sheets, gen, _root = _generate(
-        __import__("pathlib").Path(_tmp()), [_good_page()]
+        __import__("pathlib").Path(_tmp()), [_good_page()], images_per_page=3
     )
 
     # Assert something was actually asked for first. `generate_for_site`
@@ -1772,9 +1778,11 @@ def test_running_out_of_image_quota_stops_the_run_asking():
     from outreach.providers.sitegen import SiteGenError
 
     class OutOfQuota(FakeGenerator):
+        quota = "GenerateRequestsPerDayPerProject-FreeTier"
+
         def generate_image(self, prompt):
             self.image_calls += 1
-            raise SiteGenError("over quota", status_code=429)
+            raise SiteGenError("over quota", status_code=429, quota=self.quota)
 
     from dataclasses import replace as dc_replace
 
@@ -1804,3 +1812,64 @@ def test_running_out_of_image_quota_stops_the_run_asking():
     # One refusal on the first lead closes it. Without the breaker this would
     # be 3 per lead across 2 leads = 6.
     assert gen.image_calls == 1, f"asked {gen.image_calls} times after running out"
+
+
+def test_a_per_minute_image_limit_only_skips_the_page_it_hit():
+    """The two refusals wear the same HTTP 429 and need opposite reactions.
+
+    A per-minute limit refills on its own clock, so the next page -- a minute
+    of page generation later -- should try again. Treating it like a per-day
+    ceiling throws away the images for every remaining lead because one
+    minute happened to be busy.
+    """
+    import pathlib
+    from dataclasses import replace as dc_replace
+
+    from outreach.providers.sitegen import SiteGenError
+
+    class Busy(FakeGenerator):
+        def __init__(self, replies):
+            super().__init__(replies)
+            self.fail_next = True
+
+        def generate_image(self, prompt):
+            self.image_calls += 1
+            if self.fail_next:
+                self.fail_next = False
+                raise SiteGenError(
+                    "over quota",
+                    status_code=429,
+                    quota="GenerateContentInputTokensPerModelPerMinute-FreeTier",
+                )
+            return b"\x89PNG", "image/png"
+
+    root = pathlib.Path(_tmp())
+    cfg = config()
+    cfg = dc_replace(
+        cfg, build=dc_replace(cfg.build, output_dir=str(root), images_per_page=3)
+    )
+    rows = {
+        k: (2, {
+            "Lead ID": k, "Business Name": f"Salon {k}", "Stage": "Site Briefed",
+            "Category": "hair salon", "Phone": "04-262 1188", "Address": "1 St",
+            "Website URL": "", "Maps URL": "",
+        })
+        for k in ("a", "b")
+    }
+    sheets = FakeSheets(
+        rows,
+        {k: (2, {"Lead ID": k, "Social Profiles": ""}) for k in rows},
+        {k: (2, {"Lead ID": k, "Business Name": f"Salon {k}",
+                 "Approval Status": "Approved", "Lovable Project ID": ""}) for k in rows},
+    )
+    gen = Busy([_good_page(), _good_page()])
+
+    report = site_brief.generate_sites(cfg, sheets, FakeWriter(), gen)
+
+    assert report.generated == 2
+    # First page hit the limit and went without. The second tried again and
+    # got its three images -- 1 failed call + 3 successful ones.
+    assert gen.image_calls == 4, f"expected a retry on the next page, got {gen.image_calls}"
+    folders = sorted(p for p in root.iterdir() if p.is_dir())
+    counts = sorted(len([f for f in d.iterdir() if f.name.startswith("image-")]) for d in folders)
+    assert counts == [0, 3], f"expected one page without images and one with, got {counts}"

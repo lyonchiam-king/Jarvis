@@ -71,8 +71,12 @@ class SiteGenError(Exception):
         *,
         status_code: int | None = None,
         retry_after: float | None = None,
+        quota: str = "",
     ) -> None:
         super().__init__(message)
+        # Google's own name for the limit that was hit. The caller needs it to
+        # tell a per-minute pause from a per-day ceiling.
+        self.quota = quota
         # What Google asked us to wait, when it said. Honouring it beats a
         # fixed backoff that is either rude or needlessly slow.
         self.retry_after = retry_after
@@ -245,6 +249,7 @@ class SiteGenerator:
                 " project.",
                 status_code=429,
                 retry_after=retry_after,
+                quota=quota,
             )
         if response.status_code == 404:
             # Model names move. A name that was correct when it was written
