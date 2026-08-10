@@ -507,6 +507,53 @@ def run_site_build(ctx: click.Context, limit: int | None) -> None:
     _echo_sheet_link(config)
 
 
+@run.command("site-generate")
+@click.option("--limit", type=int, default=None, help="Process fewer than the batch size.")
+@click.pass_context
+def run_site_generate(ctx: click.Context, limit: int | None) -> None:
+    """Stage 4c -- write the approved demo pages to disk. Publishes nothing.
+
+    Gemini writes one self-contained HTML file per approved lead into
+    `sites/`. Nothing is deployed and nothing is written to the Sheet, so a
+    bad batch costs Gemini calls and nothing else. Open the files it prints
+    and look at them before anyone else can.
+    """
+    from .providers.sitegen import SiteGenError, SiteGenerator
+
+    config = _load(ctx.obj["config_path"])
+    if not config.secrets.gemini_api_key:
+        raise click.ClickException(
+            "GEMINI_API_KEY is not set. Create a key at aistudio.google.com "
+            "(the key icon in the left sidebar), then paste it into the Model "
+            "card in the dashboard -- it is written to .env for you."
+        )
+
+    sheets = _sheets_client(config)
+    writer = make_writer(config)
+    generator = SiteGenerator(
+        config.secrets.gemini_api_key,
+        model=config.build.model,
+        max_output_tokens=config.build.max_output_tokens,
+        min_interval_seconds=config.build.min_interval_seconds,
+    )
+
+    click.echo(
+        f"Writing pages with {config.build.model}. Gemini's free tier allows "
+        f"10 calls a minute, so this waits {config.build.min_interval_seconds:.0f}s "
+        "between pages -- 10 pages takes about a minute."
+    )
+    try:
+        report = site_brief_stage.generate_sites(
+            config, sheets, writer, generator, limit=limit
+        )
+    except SiteGenError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo("")
+    for line in report.summary_lines():
+        click.echo(line)
+
+
 @run.command("outreach-draft")
 @click.option("--limit", type=int, default=None, help="Process fewer than the batch size.")
 @click.option(

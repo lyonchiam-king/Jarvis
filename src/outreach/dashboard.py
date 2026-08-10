@@ -46,6 +46,7 @@ STAGE_COMMANDS = {
     "site-brief": ["run", "site-brief"],
     "site-brief-rewrite": ["run", "site-brief", "--rewrite"],
     "site-build": ["run", "site-build"],
+    "site-generate": ["run", "site-generate"],
     "outreach-draft": ["run", "outreach-draft"],
     "preflight": ["preflight"],
     "test-model": ["test-model"],
@@ -63,6 +64,7 @@ TAKES_LIMIT = {
     "site-brief",
     "site-brief-rewrite",
     "site-build",
+    "site-generate",
     "outreach-draft",
     "preview-leads",
     "preview-messages",
@@ -1037,6 +1039,16 @@ PAGE = """<!doctype html>
       <span class="sub" style="text-transform:none;letter-spacing:0">
       &mdash; approved, waiting for you to paste into Lovable</span>
       <a class="sub" href="/guide#3-build-the-ones-you-approved" target="_blank" rel="noopener">What is this?</a></h2>
+  <div class="row" style="margin-bottom:10px">
+    <button data-run="site-generate">Generate pages with Gemini</button>
+  </div>
+  <p class="hint">Writes each approved brief to a file in your
+    <code>sites\\</code> folder using Gemini. Nothing is published and nothing
+    is sent &mdash; the run prints the path of every page so you can open one
+    and look at it first. A page that comes back broken is refused and never
+    written. Gemini's free tier allows 10 pages a minute, so 60 takes about
+    seven minutes, mostly waiting. Pages already written are skipped and
+    cost nothing.</p>
   <div id="queue"></div>
 
   <h2><span class="stepno">4</span> Send

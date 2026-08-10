@@ -1199,3 +1199,34 @@ def test_the_rewrite_button_obeys_the_socials_first_tick():
     assert "site-brief-rewrite" in RANKS_ITS_QUEUE
     assert "--social-first" in stage_args("site-brief-rewrite", social_first=True)
     assert "--sheet-order" in stage_args("site-brief-rewrite", social_first=False)
+
+
+def test_the_generate_button_is_wired_and_bounded():
+    """A button with no command behind it looks like a broken feature."""
+    from outreach.dashboard import STAGE_COMMANDS, TAKES_LIMIT, stage_args
+
+    assert STAGE_COMMANDS["site-generate"] == ["run", "site-generate"]
+    assert "site-generate" in TAKES_LIMIT
+    assert stage_args("site-generate", 5) == ["run", "site-generate", "--limit", "5"]
+
+
+def test_the_generate_button_says_what_it_costs_and_does_not_publish():
+    """Lyon must not press this expecting it to put sites online."""
+    from outreach.dashboard import PAGE
+
+    assert 'data-run="site-generate"' in PAGE
+    assert "Nothing is published" in PAGE
+
+
+def test_every_dashboard_command_exists_in_the_cli():
+    """Guards the whole table, not just the new row."""
+    from outreach.cli import main
+    from outreach.dashboard import STAGE_COMMANDS
+
+    for key, args in STAGE_COMMANDS.items():
+        group = main
+        for token in args:
+            if token.startswith("-"):
+                continue
+            group = group.commands[token] if hasattr(group, "commands") else group
+        assert group is not None, f"{key} points at a command that does not exist"
