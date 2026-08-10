@@ -37,12 +37,37 @@ src/outreach/
   env_edit.py      writes keys into .env without ever reading them back
   modelcheck.py    proves a model can produce every required shape
   stages/          discovery, research, site_brief, outreach_draft
-  providers/       places, sheets auth, llm, social, web, lovable
+  providers/       places, sheets auth, llm, social, web, lovable, sitegen
+  images.py        generated page imagery -- mood and texture, never the premises
+  sitecheck.py     refuses a generated page that would embarrass you
+  slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             473 tests, pytest, no CI -- the suite is the only gate
+tests/             670 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
+
+**Never write a model name into config.** `gemini-3-flash` was invented and
+404'd; `gemini-2.5-flash-image` was taken from a doc and never checked. A name
+that is correct today has a shelf life, and nothing in this container can
+verify one -- egress is blocked. Ask the API: `build.image_model` defaults to
+blank and discovers, and `outreach list-models` shows what a key really has.
+
+**The dashboard page is a Python string full of JavaScript.** A JS escape has
+to be doubled -- `\n` becomes a real newline and breaks the string it sits in.
+The whole page is one `<script>`, so one bad line stops every panel with no
+visible error and a server log that looks healthy. `test_the_page_javascript_actually_parses`
+runs a real parser over it; keep it green.
+
+**A green suite is not a working app.** 646 tests passed while the dashboard
+was entirely dead. Tests asserted the buttons were in the HTML and the
+endpoints answered -- all true, all useless when the script would not parse.
+Ask what the test would have caught, not how many there are.
+
+**Read the quota name, not the status code.** Gemini returns 429 for a
+per-minute limit that clears by waiting and for a per-day one that does not.
+Treating them alike either wastes an hour retrying a dead quota or throws
+away a whole run's images because one minute was busy.
 
 **The Sheet is positional.** Rows are read by column index, so schema columns
 are **append-only**. Inserting a column in the middle silently shifts every
