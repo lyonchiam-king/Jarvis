@@ -287,11 +287,16 @@ def test_service_disabled_by_the_other_phrase_is_also_recognised():
 
 
 def test_billing_403_names_billing():
+    # The match string is deliberately something only our own message would
+    # say -- Google's raw text ("requires billing to be enabled") also
+    # contains the word "billing" and gets echoed into the generic HTTP-403
+    # fallback too, so asserting on that word alone would pass even if this
+    # branch were deleted.
     c = client(
         FakeResponse(status_code=403, text="This API method requires billing to be enabled"),
         max_attempts=1,
     )
-    with pytest.raises(SiteGenError, match="[Bb]illing"):
+    with pytest.raises(SiteGenError, match="link a billing account"):
         c.generate_image("prompt")
 
 
@@ -431,12 +436,16 @@ def test_list_models_strips_the_publishers_google_models_prefix():
 
 
 def test_list_models_reports_a_non_200_without_pretending_it_found_nothing():
-    session = FakeSession(FakeResponse(status_code=500, text="internal error"))
+    # 400 rather than 500: a 5xx is already caught (and turned into a
+    # SiteGenError) by the shared 403/429/5xx mapping before list_models's
+    # own "did this come back 200" check ever runs, so it would not exercise
+    # that check at all.
+    session = FakeSession(FakeResponse(status_code=400, text="bad request"))
     c = VertexImageClient(
         lambda: "tok", project="proj-1", region="global", model="imagen-4",
         session=session, sleep=lambda s: None,
     )
-    with pytest.raises(SiteGenError):
+    with pytest.raises(SiteGenError, match="Could not list Vertex models"):
         c.list_models()
 
 
