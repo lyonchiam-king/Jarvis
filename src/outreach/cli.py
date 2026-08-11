@@ -240,6 +240,129 @@ def preflight(ctx: click.Context) -> None:
         raise SystemExit(1)
 
 
+@main.command("vertex-models")
+@click.pass_context
+def vertex_models(ctx: click.Context) -> None:
+    """List the Vertex image models Google publishes.
+
+    This is Google's catalogue, not proof your project may call any given
+    one -- the only proof of that is generating an image, which is what
+    `outreach vertex-check` does.
+    """
+    config = _load(ctx.obj["config_path"])
+    client = _image_client(config)
+    if client is None:
+        raise click.ClickException(
+            "build.image_provider is not 'vertex', so there is nothing to list. "
+            "Set it under `build:` in your campaign file first."
+        )
+
+    from .providers.sitegen import SiteGenError
+
+    try:
+        names = client.list_models()
+    except SiteGenError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    images = [n for n in names if "image" in n.lower()]
+    click.echo("")
+    click.echo("Image models Google publishes:")
+    for name in images or names:
+        click.echo(f"  {name}")
+    click.echo("")
+    click.echo(
+        "This is Google's catalogue, not proof your project can call one. "
+        "Put a name in build.vertex_image_model, then run "
+        "`outreach vertex-check` to prove it."
+    )
+
+
+@main.command("vertex-check")
+@click.option("--model", default=None, help="Try this model instead of the configured one.")
+@click.pass_context
+def vertex_check(ctx: click.Context, model: str | None) -> None:
+    """Prove the whole Vertex chain, ending in one real image on your disk.
+
+    Ordered so the first failure is the real one: a missing project ID
+    reported after a confusing auth error would send you to fix the wrong
+    thing.
+    """
+    from pathlib import Path
+
+    from .providers.sitegen import SiteGenError
+
+    config = _load(ctx.obj["config_path"])
+
+    # Printed first, and deliberately: if the dashboard has ever saved a
+    # setting, the live file is the *.local.yaml twin, and edits to the
+    # tracked file are a silent no-op that looks exactly like broken code.
+    click.echo(f"Campaign config   {config.source_path}")
+
+    if config.build.image_provider != "vertex":
+        click.echo("[FAIL] build.image_provider is not 'vertex'")
+        raise click.ClickException(
+            "Set `image_provider: vertex` under `build:` in the campaign file "
+            "named above, then run this again."
+        )
+
+    if not config.secrets.vertex_project_id:
+        click.echo("[FAIL] VERTEX_PROJECT_ID is not set")
+        raise click.ClickException(
+            "Add a line to .env:\n    VERTEX_PROJECT_ID=your-project-id\n"
+            "It is the Project ID from the Google Cloud Console project picker "
+            "-- the short text one, not the number and not the display name."
+        )
+    click.echo(f"[ OK ] VERTEX_PROJECT_ID is set ({config.secrets.vertex_project_id})")
+
+    try:
+        client = _image_client(config)
+    except click.ClickException:
+        click.echo("[FAIL] Could not sign in for Google Cloud")
+        raise
+    click.echo(f"[ OK ] Signed in for Google Cloud ({config.secrets.vertex_token_file})")
+    click.echo("       Your Sheets and Gmail login is a different file and is untouched.")
+
+    try:
+        names = client.list_models()
+    except SiteGenError as exc:
+        click.echo("[FAIL] Vertex did not answer")
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"[ OK ] Vertex reachable -- {len(names)} models listed")
+
+    chosen = model or config.build.vertex_image_model
+    if not chosen:
+        click.echo("[FAIL] No image model chosen")
+        raise click.ClickException(
+            "Set build.vertex_image_model, or pass --model to try one. "
+            "`outreach vertex-models` lists what Google publishes."
+        )
+    if model:
+        from .providers.vertex_image import _strip_model_prefix
+
+        client.model = _strip_model_prefix(model)
+
+    try:
+        data, mime = client.generate_image(
+            "A soft, out-of-focus warm light gradient. Texture only, no objects, "
+            "no people, no text. Muted amber and cream."
+        )
+    except SiteGenError as exc:
+        click.echo(f"[FAIL] {chosen} did not produce an image")
+        raise click.ClickException(str(exc)) from exc
+
+    out = Path(".cache") / "vertex-check.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(data)
+    click.echo(f"[ OK ] Image generated with {chosen} ({len(data):,} bytes, {mime})")
+    click.echo(f"       {out.resolve()}  -- open it and look at it")
+    click.echo("")
+    click.echo(
+        "That image was paid for with Google Cloud credits, not the AI Studio "
+        "free tier. Check Billing -> Reports in a few hours to confirm the "
+        "credit line matches the cost."
+    )
+
+
 @main.command("list-models")
 @click.pass_context
 def list_models(ctx: click.Context) -> None:

@@ -143,11 +143,24 @@ class ImageBudget:
     Neither is persisted: quotas reset, and tomorrow's run should try again.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, limit: int = 0) -> None:
+        # A hard ceiling on images per run. This is the only guardrail that is
+        # code rather than a note in the docs, and it exists because Vertex
+        # spends real credits: a loop that misbehaves at 3am is Lyon's money,
+        # not a free-tier 429. 0 means unlimited, which keeps the Developer
+        # API path exactly as it was.
+        self.limit = max(0, limit)
+        self.used = 0
         self.open = True
         self.reason = ""
         self.skipped_pages = 0
         self._cooling = False
+
+    def spent(self) -> None:
+        """One image was generated. Closes the budget at the cap."""
+        self.used += 1
+        if self.limit and self.used >= self.limit:
+            self.close(f"run image cap of {self.limit} reached")
 
     def start_page(self) -> None:
         """A new page. Whatever the last one hit, a minute-limit has moved on."""
@@ -225,6 +238,12 @@ def generate_for_site(
                 filename=f"image-{index}.{ext}", data=data, alt=alt, purpose=purpose
             )
         )
+        if budget is not None:
+            budget.spent()
+            if not budget.open:
+                # The cap closed mid-page. Keep what this page already has --
+                # a page with one image beats discarding it over a ceiling.
+                return images
     return images
 
 

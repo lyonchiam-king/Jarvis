@@ -1873,3 +1873,60 @@ def test_a_per_minute_image_limit_only_skips_the_page_it_hit():
     folders = sorted(p for p in root.iterdir() if p.is_dir())
     counts = sorted(len([f for f in d.iterdir() if f.name.startswith("image-")]) for d in folders)
     assert counts == [0, 3], f"expected one page without images and one with, got {counts}"
+
+
+def test_the_run_image_cap_stops_spending_but_not_the_run():
+    """The only guardrail that is code rather than documentation.
+
+    Vertex spends real credits, so a loop that misbehaves overnight is Lyon's
+    money rather than a free-tier 429. Reaching the cap must close the budget
+    and let the remaining pages build without images -- failing the run would
+    throw away pages that are already paid for.
+    """
+    import pathlib
+    from dataclasses import replace as dc_replace
+
+    root = pathlib.Path(_tmp())
+    cfg = config()
+    cfg = dc_replace(
+        cfg,
+        build=dc_replace(
+            cfg.build, output_dir=str(root), images_per_page=1, max_images_per_run=2
+        ),
+    )
+    rows = {
+        k: (2, {
+            "Lead ID": k, "Business Name": f"Salon {k}", "Stage": "Site Briefed",
+            "Category": "hair salon", "Phone": "04-262 1188", "Address": "1 St",
+            "Website URL": "", "Maps URL": "",
+        })
+        for k in ("a", "b", "c", "d")
+    }
+    sheets = FakeSheets(
+        rows,
+        {k: (2, {"Lead ID": k, "Social Profiles": ""}) for k in rows},
+        {k: (2, {"Lead ID": k, "Business Name": f"Salon {k}",
+                 "Approval Status": "Approved", "Lovable Project ID": ""}) for k in rows},
+    )
+    gen = FakeGenerator([_good_page() for _ in rows])
+
+    report = site_brief.generate_sites(cfg, sheets, FakeWriter(), gen)
+
+    assert report.generated == 4, "every page still gets built"
+    assert gen.image_calls == 2, f"cap of 2 not honoured -- {gen.image_calls} images bought"
+    with_images = sum(
+        1 for d in root.iterdir()
+        if d.is_dir() and any(f.name.startswith("image-") for f in d.iterdir())
+    )
+    assert with_images == 2
+
+
+def test_an_unlimited_cap_is_the_default_behaviour():
+    """0 means unlimited, so the free-tier path is unchanged by this."""
+    from outreach.images import ImageBudget
+
+    budget = ImageBudget(limit=0)
+    for _ in range(500):
+        budget.spent()
+
+    assert budget.open, "limit=0 must never close the budget"

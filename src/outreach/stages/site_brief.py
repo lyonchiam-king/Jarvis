@@ -545,7 +545,7 @@ def generate_sites(
 
     log.info("Generating %d page(s) into %s/", len(queue), root)
     # Shared across the whole run: one quota refusal is enough to know.
-    image_budget = ImageBudget()
+    image_budget = ImageBudget(limit=config.build.max_images_per_run)
 
     for index, (lead_id, brief_row) in enumerate(queue, start=1):
         name = brief_row.get("Business Name", "") or lead_id
