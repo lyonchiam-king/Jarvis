@@ -359,6 +359,17 @@ def vertex_check(ctx: click.Context, model: str | None) -> None:
         )
     except SiteGenError as exc:
         click.echo(f"[FAIL] {chosen} did not produce an image")
+        # The model list is already in hand from the reachability check above.
+        # Making him run a second command to see names we already fetched is
+        # a round trip for nothing.
+        if exc.status_code == 404 and names:
+            images = [n for n in names if "image" in n.lower()]
+            click.echo("")
+            click.echo("       Your project offers these image models:")
+            for name in images or names:
+                click.echo(f"         {name}")
+            click.echo("")
+            click.echo(f"       Try: outreach vertex-check --model {(images or names)[0]}")
         raise click.ClickException(str(exc)) from exc
 
     out = Path(".cache") / "vertex-check.png"
