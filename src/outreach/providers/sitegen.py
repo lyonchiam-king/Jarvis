@@ -104,12 +104,21 @@ class SiteGenerator:
         session: requests.Session | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        image_client: Any = None,
     ) -> None:
         if not api_key:
             raise SiteGenError(
                 "GEMINI_API_KEY is empty. Set it in .env -- the demo builder "
                 "needs it to call Gemini."
             )
+        # Duck-typed, not imported: a client with a `generate_image(prompt) ->
+        # (bytes, mime)` method (see `providers.vertex_image.VertexImageClient`)
+        # takes over the picture half of the run while `generate` -- the page
+        # call -- stays exactly where it was. Keeping the import out of this
+        # module (rather than importing VertexImageClient to type-check
+        # against) is what keeps this dependency pointing one way: sitegen
+        # knows nothing about Vertex, only about the shape it needs.
+        self._image_client = image_client
         self._image_model = image_model
         self._discovered: str | None = None
         self.max_attempts = max(1, max_attempts)
@@ -198,7 +207,16 @@ class SiteGenerator:
         requests count against the same per-minute budget, so they have to
         share the throttle or a page plus its images trips the rate limit on
         its own.
+
+        Unless an ``image_client`` was injected: then this hands the prompt
+        straight to it and returns whatever it returns, untouched by this
+        class's pacing, retrying or endpoint. `generate` (the page call) never
+        goes through this seam -- it stays on Gemini regardless of who is
+        drawing the pictures.
         """
+        if self._image_client is not None:
+            return self._image_client.generate_image(prompt)
+
         from ..images import decode_inline
 
         payload = self._call_with_retry(

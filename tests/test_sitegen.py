@@ -463,3 +463,62 @@ def test_a_key_with_no_image_model_says_so_and_names_the_next_step():
 
     assert "list-models" in str(err.value)
     assert "billing" in str(err.value)
+
+
+# ------------------------------------------------------- injected image client
+
+
+class FakeImageClient:
+    """Stands in for `providers.vertex_image.VertexImageClient` -- or anything
+    else duck-typed the same way -- without sitegen importing it."""
+
+    def __init__(self, image=b"vertex-bytes", mime="image/png"):
+        self._image = image
+        self._mime = mime
+        self.prompts = []
+
+    def generate_image(self, prompt):
+        self.prompts.append(prompt)
+        return self._image, self._mime
+
+
+def test_an_injected_image_client_answers_generate_image_and_is_not_gemini():
+    """When a client is handed in, its bytes come back and Gemini's own image
+    endpoint is never touched -- the fake session records no posts."""
+    client = FakeImageClient(image=b"the-vertex-bytes", mime="image/webp")
+    session = FakeSession()  # no replies queued: a post here would raise IndexError
+    g = SiteGenerator(
+        "key", model="m", max_output_tokens=1000,
+        session=session, image_client=client,
+    )
+
+    data, mime = g.generate_image("a warm still life")
+
+    assert (data, mime) == (b"the-vertex-bytes", "image/webp")
+    assert client.prompts == ["a warm still life"]
+    assert session.posts == [], "nothing should have been posted to Gemini"
+
+
+def test_with_no_image_client_generate_image_still_goes_through_gemini():
+    """The default, no-argument path this whole seam must leave untouched:
+    behaviour byte-identical to before `image_client` existed."""
+    payload = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}
+                    ]
+                },
+                "finishReason": "STOP",
+            }
+        ]
+    }
+    session = ListSession(["gemini-3.1-flash-image"], FakeResponse(payload))
+    g = SiteGenerator("key", model="m", max_output_tokens=1000, session=session)
+
+    data, mime = g.generate_image("a warm still life")
+
+    assert (data, mime) == (b"hello", "image/png")
+    assert session.posts, "the image call should have gone to Gemini"
+    assert "generativelanguage.googleapis.com" in session.posts[0]["url"]

@@ -66,6 +66,44 @@ def _writer(config: Config):
         raise click.ClickException(str(exc)) from exc
 
 
+def _image_client(config: Config):
+    """The Vertex client for `run site-generate`'s images, or None.
+
+    Checking `image_provider` before anything else in this function matters
+    more than it looks: `auth.vertex_credentials` is an OAuth call -- a
+    browser consent flow the first time, a token refresh after -- and the
+    default campaign never sets `image_provider` to "vertex". Someone who has
+    never touched this feature must be able to run `site-generate` and have
+    this function construct nothing and call nothing, not silently pay for an
+    OAuth round trip on a token they never asked to create.
+    """
+    if config.build.image_provider != "vertex":
+        return None
+
+    from . import auth
+    from .providers.vertex_image import VertexImageClient
+
+    try:
+        creds = auth.vertex_credentials(
+            config.secrets.oauth_client_file, config.secrets.vertex_token_file
+        )
+    except AuthError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    return VertexImageClient(
+        # A closure, not a captured token string: an OAuth access token lives
+        # one hour and a sixty-page overnight run outlives that. Calling
+        # `access_token(creds)` fresh for every request is what lets it
+        # refresh the cached token in place instead of going stale partway
+        # through the run.
+        lambda: auth.access_token(creds),
+        project=config.secrets.vertex_project_id,
+        region=config.build.vertex_region,
+        model=config.build.vertex_image_model,
+        image_size=config.build.vertex_image_size,
+    )
+
+
 def _sheets_client(config: Config, *, require_sheet_id: bool = True) -> SheetsClient:
     creds = _credentials(config)
 
@@ -591,18 +629,31 @@ def run_site_generate(ctx: click.Context, limit: int | None) -> None:
 
     sheets = _sheets_client(config)
     writer = make_writer(config)
+    # None on the default "gemini" path -- see `_image_client` for why that
+    # matters more than a one-line function suggests.
+    image_client = _image_client(config)
     generator = SiteGenerator(
         config.secrets.gemini_api_key,
         model=config.build.model,
         max_output_tokens=config.build.max_output_tokens,
         min_interval_seconds=config.build.min_interval_seconds,
+        image_client=image_client,
     )
 
+    # The page call goes to Gemini either way -- GEMINI_API_KEY is required
+    # above regardless of image_provider, because it still writes the HTML.
     click.echo(
         f"Writing pages with {config.build.model}. Gemini's free tier allows "
         f"10 calls a minute, so this waits {config.build.min_interval_seconds:.0f}s "
         "between pages -- 10 pages takes about a minute."
     )
+    if image_client is not None:
+        click.echo(
+            f"Images: Vertex, model {image_client.model}, project "
+            f"{image_client.project}, region {image_client.region}. At most "
+            f"{config.build.max_images_per_run} images this run -- spending "
+            "Google Cloud credits, not the free tier."
+        )
     try:
         report = site_brief_stage.generate_sites(
             config, sheets, writer, generator, limit=limit
