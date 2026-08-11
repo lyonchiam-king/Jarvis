@@ -290,8 +290,13 @@ def vertex_models(ctx: click.Context) -> None:
 
 @main.command("vertex-check")
 @click.option("--model", default=None, help="Try this model instead of the configured one.")
+@click.option(
+    "--region",
+    default=None,
+    help="Try this region instead of the configured one, e.g. us-central1.",
+)
 @click.pass_context
-def vertex_check(ctx: click.Context, model: str | None) -> None:
+def vertex_check(ctx: click.Context, model: str | None, region: str | None) -> None:
     """Prove the whole Vertex chain, ending in one real image on your disk.
 
     Ordered so the first failure is the real one: a missing project ID
@@ -303,6 +308,10 @@ def vertex_check(ctx: click.Context, model: str | None) -> None:
     from .providers.sitegen import SiteGenError
 
     config = _load(ctx.obj["config_path"])
+    if region:
+        from dataclasses import replace as _replace
+
+        config = _replace(config, build=_replace(config.build, vertex_region=region.strip().lower()))
 
     # Printed first, and deliberately: if the dashboard has ever saved a
     # setting, the live file is the *.local.yaml twin, and edits to the
@@ -365,11 +374,28 @@ def vertex_check(ctx: click.Context, model: str | None) -> None:
         if exc.status_code == 404 and names:
             images = [n for n in names if "image" in n.lower()]
             click.echo("")
-            click.echo("       Your project offers these image models:")
+            click.echo("       Google publishes these image models:")
             for name in images or names:
                 click.echo(f"         {name}")
             click.echo("")
-            click.echo(f"       Try: outreach vertex-check --model {(images or names)[0]}")
+            # The list above is Google's catalogue, not this project's
+            # availability in this location -- and that gap is exactly what a
+            # 404 on a name that IS in the list means. Image models, preview
+            # ones especially, are frequently not served on `global`.
+            click.echo(
+                f"       That list is Google's catalogue. A 404 on a name that IS in it"
+            )
+            click.echo(
+                f"       usually means the model is not served in region"
+                f" '{config.build.vertex_region}'."
+            )
+            click.echo("       Try another region:")
+            for candidate in ("us-central1", "asia-southeast1"):
+                if candidate != config.build.vertex_region:
+                    click.echo(
+                        f"         outreach vertex-check --model {chosen}"
+                        f" --region {candidate}"
+                    )
         raise click.ClickException(str(exc)) from exc
 
     out = Path(".cache") / "vertex-check.png"

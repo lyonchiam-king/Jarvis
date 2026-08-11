@@ -42,7 +42,13 @@ def _run_check(client, *, config=None, args=()):
 
     original_load, original_client = cli._load, cli._image_client
     cli._load = lambda path: cfg
-    cli._image_client = lambda c, require_model=True: client
+    # Record the config the command actually built the client from, so a test
+    # can assert on a flag that only shows up there (like --region).
+    def _stub(c, require_model=True):
+        client.seen_config = c
+        return client
+
+    cli._image_client = _stub
     try:
         return runner.invoke(cli.main, ["vertex-check", *args])
     finally:
@@ -116,12 +122,17 @@ def test_an_unknown_model_prints_the_names_the_project_does_have(tmp_path, monke
 
     result = _run_check(Unknown())
 
-    assert "Your project offers these image models" in result.output
+    assert "Google publishes these image models" in result.output
     assert "imagen-4.0-generate-001" in result.output
     assert "gemini-2.5-flash-image" in result.output
     # The text model is not an image model and must not be offered as one.
     assert "  gemini-3.6-flash\n" not in result.output
     assert "outreach vertex-check --model" in result.output
+    # A 404 on a name that IS in the list means the model is not served in
+    # this region -- saying "your project offers these" would send him
+    # hunting for the wrong problem.
+    assert "not served in region" in result.output
+    assert "--region us-central1" in result.output
 
 
 def test_a_missing_project_id_stops_before_the_confusing_auth_error(tmp_path, monkeypatch):
@@ -137,3 +148,17 @@ def test_a_missing_project_id_stops_before_the_confusing_auth_error(tmp_path, mo
     assert result.exit_code != 0
     assert "[FAIL] VERTEX_PROJECT_ID is not set" in result.output
     assert "[ OK ] Signed in" not in result.output
+
+
+def test_the_region_can_be_tried_without_editing_the_campaign_file(tmp_path, monkeypatch):
+    """Region is the likely fix for a 404 on a published model, so trying one
+    must not cost a YAML edit and a reload."""
+    monkeypatch.chdir(tmp_path)
+
+    client = _Ok()
+    result = _run_check(client, args=("--region", "US-Central1"))
+
+    assert result.exit_code == 0, result.output
+    assert client.seen_config.build.vertex_region == "us-central1", (
+        "the flag must reach the client, lowercased"
+    )
