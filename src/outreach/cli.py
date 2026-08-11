@@ -251,6 +251,104 @@ def preflight(ctx: click.Context) -> None:
         raise SystemExit(1)
 
 
+@main.command("vertex-probe")
+@click.option("--limit", type=int, default=0, help="Stop after this many working combinations.")
+@click.pass_context
+def vertex_probe(ctx: click.Context, limit: int) -> None:
+    """Find a model, region and API version that actually work, by trying them.
+
+    Vertex refuses a wrong model, a wrong region and a wrong API version with
+    the same 404, so a person tries combinations one at a time and cannot
+    tell which axis is wrong. This sweeps them and prints what worked. A 404
+    costs nothing, so the sweep is free apart from the seconds it takes; only
+    a combination that *succeeds* generates an image and spends anything.
+    """
+    from dataclasses import replace as _replace
+
+    from .providers.sitegen import SiteGenError
+
+    config = _load(ctx.obj["config_path"])
+    click.echo(f"Campaign config   {config.source_path}")
+    if config.build.image_provider != "vertex":
+        raise click.ClickException(
+            "build.image_provider is not 'vertex'. Set it under `build:` first."
+        )
+
+    base = _image_client(config, require_model=False)
+    try:
+        catalogue = [n for n in base.list_models() if "image" in n.lower()]
+    except SiteGenError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not catalogue:
+        raise click.ClickException(
+            "Google publishes no image models to this account. Check the "
+            "Vertex AI API is enabled on the project."
+        )
+
+    regions = [config.build.vertex_region, "global", "us-central1", "asia-southeast1"]
+    seen: list[str] = []
+    for r in regions:
+        if r and r not in seen:
+            seen.append(r)
+
+    click.echo("")
+    click.echo(
+        f"Trying {len(catalogue)} model(s) x {len(seen)} region(s) x 2 API versions. "
+        "Only a success costs anything."
+    )
+    click.echo("")
+
+    working: list[tuple[str, str, str]] = []
+    for model in catalogue:
+        for region in seen:
+            for version in ("v1beta1", "v1"):
+                probe_config = _replace(
+                    config,
+                    build=_replace(
+                        config.build, vertex_image_model=model, vertex_region=region
+                    ),
+                )
+                client = _image_client(probe_config)
+                client.api_version = version
+                try:
+                    data, _mime = client.generate_image(
+                        "A soft out-of-focus warm gradient. Texture only, no objects, "
+                        "no people, no text."
+                    )
+                except SiteGenError as exc:
+                    code = exc.status_code or "?"
+                    click.echo(f"  [{code:>3}] {model}  {region}  {version}")
+                    continue
+                click.echo(
+                    f"  [ OK ] {model}  {region}  {version}  ({len(data):,} bytes)"
+                )
+                working.append((model, region, version))
+                if limit and len(working) >= limit:
+                    break
+            if limit and len(working) >= limit:
+                break
+        if limit and len(working) >= limit:
+            break
+
+    click.echo("")
+    if not working:
+        raise click.ClickException(
+            "No combination worked. Every one returned an error above -- if they "
+            "are all 403, the Vertex AI API is probably not enabled on this "
+            "project, or the project is not linked to the billing account "
+            "holding your credits."
+        )
+
+    model, region, version = working[0]
+    click.echo("Put this in your campaign file under `build:`")
+    click.echo(f"  vertex_image_model: \"{model}\"")
+    click.echo(f"  vertex_region: {region}")
+    if version != "v1beta1":
+        click.echo(f"  vertex_api_version: {version}")
+    click.echo("")
+    click.echo(f"Then: outreach vertex-check")
+
+
 @main.command("vertex-models")
 @click.pass_context
 def vertex_models(ctx: click.Context) -> None:

@@ -36,12 +36,16 @@ from .sitegen import SiteGenError, _quota_details, _safety_category
 
 log = logging.getLogger("outreach")
 
+# v1beta1, not v1. The publisher catalogue lists Gemini 3.x image models
+# under v1beta1, and asking v1 for one returns 404 "no such model" -- which
+# reads as a wrong name and sends you hunting through regions instead. The
+# version is a constructor argument so it can be tried both ways.
 _GLOBAL_URL = (
-    "https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/"
+    "https://aiplatform.googleapis.com/{version}/projects/{project}/locations/global/"
     "publishers/google/models/{model}:generateContent"
 )
 _REGIONAL_URL = (
-    "https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/"
+    "https://{region}-aiplatform.googleapis.com/{version}/projects/{project}/locations/"
     "{region}/publishers/google/models/{model}:generateContent"
 )
 # ListPublisherModels -- unlike the Developer API's per-key ListModels, this
@@ -76,12 +80,14 @@ class VertexImageClient:
         region: str,
         model: str,
         image_size: str = "",
+        api_version: str = "v1beta1",
         session: requests.Session | None = None,
         sleep: Callable[[float], None] = time.sleep,
         max_attempts: int = 3,
         timeout: float = 180.0,
     ) -> None:
         self._token_provider = token_provider
+        self.api_version = api_version
         self.project = project
         self.region = region
         self.model = _strip_model_prefix(model)
@@ -97,8 +103,15 @@ class VertexImageClient:
         """The exact URL, so ``outreach vertex-check`` can print what it is
         about to call rather than leaving Lyon to guess at a 403."""
         if self.region == "global":
-            return _GLOBAL_URL.format(project=self.project, model=self.model)
-        return _REGIONAL_URL.format(project=self.project, region=self.region, model=self.model)
+            return _GLOBAL_URL.format(
+                version=self.api_version, project=self.project, model=self.model
+            )
+        return _REGIONAL_URL.format(
+            version=self.api_version,
+            project=self.project,
+            region=self.region,
+            model=self.model,
+        )
 
     def generate_image(self, prompt: str) -> tuple[bytes, str]:
         payload = self._call_with_retry(prompt)

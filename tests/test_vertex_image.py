@@ -102,7 +102,7 @@ def test_the_global_url_has_no_region_segment_duplicated():
 
     post = c._session.posts[0]
     assert post["url"] == (
-        "https://aiplatform.googleapis.com/v1/projects/proj-1/locations/"
+        "https://aiplatform.googleapis.com/v1beta1/projects/proj-1/locations/"
         "global/publishers/google/models/imagen-4:generateContent"
     )
     assert c.endpoint == post["url"]
@@ -114,7 +114,7 @@ def test_a_named_region_uses_the_regional_host_and_path():
 
     post = c._session.posts[0]
     assert post["url"] == (
-        "https://us-central1-aiplatform.googleapis.com/v1/projects/proj-1/"
+        "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/proj-1/"
         "locations/us-central1/publishers/google/models/imagen-4:"
         "generateContent"
     )
@@ -459,3 +459,29 @@ def test_list_models_service_disabled_reuses_the_same_message():
     )
     with pytest.raises(SiteGenError, match="not switched on"):
         c.list_models()
+
+
+def test_the_api_version_defaults_to_the_one_the_catalogue_uses():
+    """The publisher catalogue lists Gemini 3.x image models under v1beta1.
+    Asking v1 for one returns 404 'no such model', which reads as a wrong
+    name and sends you hunting through regions instead -- which is exactly
+    what happened."""
+    from outreach.providers.vertex_image import VertexImageClient
+
+    client = VertexImageClient(
+        lambda: "t", project="p", region="global", model="gemini-3.1-flash-image"
+    )
+
+    assert "/v1beta1/" in client.endpoint
+    assert "/v1/" not in client.endpoint
+
+
+def test_the_api_version_can_be_overridden():
+    from outreach.providers.vertex_image import VertexImageClient
+
+    client = VertexImageClient(
+        lambda: "t", project="p", region="global",
+        model="m", api_version="v1",
+    )
+
+    assert "/v1/projects/" in client.endpoint
