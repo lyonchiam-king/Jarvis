@@ -1008,10 +1008,14 @@ def test_the_prompt_stays_pasteable():
         phone="04-262 1188",
         address="58 Lebuh Chulia, 10200 George Town",
     )
-    # Measured at 9150 chars post Tasks 4-6 (IMAGERY, the motion floor, and
-    # the scoped performance-budget bullet). 9500 leaves ~350 chars of
-    # headroom -- enough to fix a typo, not enough to add a section for free.
-    assert len(prompt) < 9500
+    # Was 9150/9500 post Tasks 4-6. Moved once, deliberately, when the
+    # Front-End Design Checklist work added DESIGN SYSTEM, INTERACTION STATES,
+    # the layout line and three build rules -- ~1800 chars bought the UI
+    # quality Lyon asked for after judging the generated pages too plain.
+    # Measured at 10958; 11300 keeps the same ~350 chars of headroom, which is
+    # enough to fix a typo and not enough to add a section for free. Moving
+    # this number again should be as visible as this comment was.
+    assert len(prompt) < 11300
 
 
 # ------------------------------- a build order, not a description of a website

@@ -42,7 +42,7 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             670 tests, pytest, no CI -- the suite is the only gate
+tests/             751 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -91,6 +91,20 @@ Helpers pin the fields their assertions depend on.
 
 **Never inject a duplicate YAML key in a test.** Last-wins means the config you
 loaded was not the config you thought you wrote. Replace the real line.
+
+**Per-business facts are schema fields; craft rules are template text.** The
+site prompt grew by asking the model to restate rules that never change. If
+every business gets the same answer -- focus rings, token declaration, icon
+format -- it belongs in `render_lovable_prompt` as fixed text, where it costs
+nothing per lead and cannot be forgotten. Only what genuinely differs per
+business earns a field in `SITE_SPEC_SCHEMA`.
+
+**The required-field count is capped at 19 on purpose.** A 20th required field
+costs every weaker non-Anthropic model the whole spec, not just that field --
+Lyon runs Ollama. New spec fields go in `properties` but not `required`, with
+the prompt block rendered conditionally, so a model that skips one produces
+the previous prompt rather than a broken one. `layout_system` is the worked
+example.
 
 **Ordering is the user's, not ours.** Socials-first is the one reorder we do,
 because Lyon asked for it. Within that, sheet order is preserved -- a queue he

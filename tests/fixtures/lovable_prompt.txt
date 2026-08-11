@@ -59,6 +59,16 @@ Palette: #1a1a1a background, #f5f5f5 text, #d4a373 accent
 Type:    Playfair Display for headings, Inter for body
 Feel:    Warm and modern, a neighbourhood spot
 
+DESIGN SYSTEM (declare once, build everything from it)
+- Put the palette, spacing scale, radius and type steps into the Tailwind theme (tailwind.config, extend) and use those names in the markup -- bg-surface, text-muted, rounded-card. Arbitrary values like p-[13px] or text-[#3a2b1f] scattered through the JSX are the design system leaking.
+- One shadow level for the whole page, or none. A component that wants a second one is really asking for a border.
+- One card, one badge, one button, reused. Twelve slightly different cards is what a generated page looks like; one card used twelve times is what a designed one looks like.
+
+INTERACTION STATES (the cheapest quality there is -- elements with one state each are most of why a page feels dead)
+- Every link, button and input: default, hover, focus-visible, pressed, and disabled or error where it applies. Mark the current nav item.
+- focus-visible is a real visible ring in the accent colour. Never `outline: none` without replacing it -- that is the usual way a site becomes unusable by keyboard.
+- Anything that waits has a waiting state, so a slow connection reads as busy rather than broken.
+
 MOTION AND INTERACTION
 Signature moment: A before/after that wipes as you drag
 Motion language:   Snappy, 200ms, ease-out
@@ -79,6 +89,7 @@ The hero itself does not animate: final position, full opacity, no entrance, no 
 - Animate transform and opacity only -- width, height, top or left force layout on every frame and stutter on a mid-range phone.
 - Reveal on scroll with whileInView, viewport={{ once: true }}; never re-trigger. Content is in the DOM and readable even if the animation never runs.
 - Honour prefers-reduced-motion via useReducedMotion(): plain fade, or nothing. Some people get motion sickness from parallax.
+- Watch paint cost, not just layout: stacked large-radius shadows, full-page gradients and heavy blurs repaint every frame and turn a smooth animation into a stuttering one on the mid-range Android this is really for.
 - No scroll-jacking, no page-load animation gate, no cursor effects, no WebGL or Three.js. Those belong on a designer's portfolio, not a shop that needs the booking -- and the cursor ones do not exist on a phone.
 
 DO NOT (specific to this business)
@@ -112,6 +123,11 @@ BUILD RULES
   [TO CONFIRM] rather than guessing. That is the correct outcome.
 - Accessible by default: real contrast, real heading order, alt text,
   and a form every keyboard can complete.
+- Icons are inline SVG on currentColor at one square size -- no icon
+  font, no icon library, no emoji standing in for an icon. Draw the
+  simple graphics (rules, badges, section shapes) in CSS, not images.
+- Assume the text runs longer than it looks here: names and badges must
+  survive a second line without the card jumping or the button clipping.
 - Performance budget governs the hero and the first tap, not the rest of the page: largest contentful paint under 2.5s on a mid-range Android on 4G, no layout shift as things load, primary action tappable within one second. The hero renders at final position and full opacity with no entrance animation and no load gate -- that alone protects the budget. Below the fold, animate freely inside the transform/opacity rule above. If an effect cannot fit inside the hero-and-first-tap budget, drop the effect -- not the budget.
 - Real images beat illustrations, but they must be sized and lazy
   loaded below the fold, with width and height set so nothing jumps.

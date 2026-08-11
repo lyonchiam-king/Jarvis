@@ -156,21 +156,46 @@ SITE_SPEC_SCHEMA: dict[str, Any] = {
                 "the evidence supports none. Never manufacture one."
             ),
         },
+        # Deliberately NOT in `required`. The cap of 19 required fields is a
+        # ratchet: a 20th costs every weaker non-Anthropic model the whole
+        # spec, not just this field. Optional degrades instead -- a model that
+        # fills it gets a designed layout, one that skips it renders exactly
+        # what it rendered before, because the prompt block is conditional.
+        "layout_system": {
+            "type": "string",
+            "description": (
+                "The structure, decided rather than defaulted: content max-width "
+                "in px, how many columns and which sections deliberately break "
+                "out of them (full-bleed, offset, overlapping), the gutter, the "
+                "spacing scale as actual numbers, the corner radius language, "
+                "and whether edges are borders, shadow, or neither. This is the "
+                "field that stops every site looking alike, so derive it from "
+                "the business: a tailor earns an asymmetric editorial split with "
+                "generous margins, a tuition centre a dense readable grid, a "
+                "hawker stall full-bleed slabs with almost no chrome. If your "
+                "answer would suit all three, you have not designed it."
+            ),
+        },
         "palette": {
             "type": "string",
             "description": (
-                "Actual decisions with hex values and where each is used: page "
-                "background, body text, one accent for the CTA. Justify the "
-                "choice from the business, not from taste. Three or four "
-                "colours total -- more is a sign of an undecided design."
+                "Actual decisions with hex values, named as tokens and given "
+                "their job: --bg, --surface, --text, --muted, --accent. Include "
+                "the accent's hover and pressed variants, and confirm body text "
+                "on background clears 4.5:1. Justify the choice from the "
+                "business, not from taste. Three or four colours total -- more "
+                "is a sign of an undecided design."
             ),
         },
         "typography": {
             "type": "string",
             "description": (
                 "Named typefaces available on Google Fonts, one for headings "
-                "and one for body, with the size and weight relationship "
-                "between them. Say why this pairing suits this business."
+                "and one for body, each with a real fallback stack. Give the "
+                "scale as numbers -- the body size, the ratio between steps, "
+                "and the clamp() range the hero headline moves through between "
+                "phone and desktop -- plus the weights used. Say why this "
+                "pairing suits this business."
             ),
         },
         "avoid": {
@@ -316,6 +341,15 @@ direction, it is an evasion -- it tells the builder nothing and it will produce 
 the same beige template every other business has. Derive the choices from the \
 business: a 30-year-old barber shop and a new lash studio should not resolve to \
 the same palette, and if yours do, you have designed neither.
+
+**Decide the structure, do not inherit it.** Colour and type are the easy half; \
+two sites with different palettes and the same layout still look like the same \
+site. The layout is what a visitor reads as "someone designed this": where the \
+grid holds and where a section deliberately breaks out of it, how much air sits \
+around the content, whether edges are drawn with a border, a shadow, or \
+nothing at all. Give `layout_system` real numbers, and make them follow from \
+this business -- a jeweller and a tyre shop should not resolve to the same \
+1100px centred column with cards in it.
 
 **Design for the phone first and the thumb specifically.** Assume a mid-range \
 Android on a patchy connection. Tap targets big, phone number tappable, no \
@@ -488,6 +522,7 @@ class SiteSpec:
     showcase_items: tuple[str, ...] = ()
     interactive_feature: str = ""
     mobile_bar: tuple[str, ...] = ()
+    layout_system: str = ""
     palette: str = ""
     typography: str = ""
     avoid: tuple[str, ...] = ()
@@ -519,6 +554,10 @@ class TargetProfile:
     stack: str
     scroll_reveal: str
     reduced_motion: str
+    # How this builder is told to declare its design tokens. The rule ("declare
+    # them once, build from them") is the same everywhere; only the mechanism
+    # differs, so the mechanism is the part that lives here.
+    tokens_line: str
     enquiry_lines: tuple[str, ...]
     # Rendered inside STUDY THESE FIRST, only when there is a source to pull
     # from. Empty for html: a one-shot generation call cannot browse or
@@ -559,6 +598,13 @@ TARGETS: dict[str, TargetProfile] = {
         reduced_motion=(
             "- Honour prefers-reduced-motion via useReducedMotion(): plain fade,"
             " or nothing. Some people get motion sickness from parallax."
+        ),
+        tokens_line=(
+            "- Put the palette, spacing scale, radius and type steps into the"
+            " Tailwind theme (tailwind.config, extend) and use those names in"
+            " the markup -- bg-surface, text-muted, rounded-card. Arbitrary"
+            " values like p-[13px] or text-[#3a2b1f] scattered through the JSX"
+            " are the design system leaking."
         ),
         enquiry_lines=(
             "- Send every booking or enquiry to a spreadsheet via the",
@@ -612,6 +658,14 @@ TARGETS: dict[str, TargetProfile] = {
             "- Honour prefers-reduced-motion via a @media (prefers-reduced-motion:"
             " reduce) block: plain fade, or nothing. Some people get motion"
             " sickness from parallax."
+        ),
+        tokens_line=(
+            "- Declare every token as a CSS custom property in a single :root"
+            " block at the top of the <style> -- --bg, --surface, --text,"
+            " --muted, --accent, --accent-hover, --space-1 through --space-6,"
+            " --radius, --step-0 up the scale -- and use var() everywhere"
+            " after it. A hex code or a raw px value further down the"
+            " stylesheet is a token you forgot to name."
         ),
         enquiry_lines=(
             "- No backend exists for this site. Every enquiry must go through a",
@@ -828,12 +882,43 @@ def render_lovable_prompt(
         ]
 
     out += ["", "ART DIRECTION"]
+    # Structure before surface: the layout is what makes two sites look
+    # different from each other, and a builder that reads the palette first
+    # tends to recolour a default column rather than build the grid asked for.
+    if spec.layout_system:
+        out.append(f"Layout:  {spec.layout_system}")
     if spec.palette:
         out.append(f"Palette: {spec.palette}")
     if spec.typography:
         out.append(f"Type:    {spec.typography}")
     if spec.visual_direction:
         out.append(f"Feel:    {spec.visual_direction}")
+
+    # Fixed craft rules, identical for every business, so they are template
+    # text rather than schema fields -- the model has no per-lead decision to
+    # make here and asking it to restate them each time only spends tokens on
+    # a chance to get them wrong.
+    out += [
+        "",
+        "DESIGN SYSTEM (declare once, build everything from it)",
+        profile.tokens_line,
+        "- One shadow level for the whole page, or none. A component that wants"
+        " a second one is really asking for a border.",
+        "- One card, one badge, one button, reused. Twelve slightly different"
+        " cards is what a generated page looks like; one card used twelve"
+        " times is what a designed one looks like.",
+        "",
+        "INTERACTION STATES (the cheapest quality there is -- elements with one"
+        " state each are most of why a page feels dead)",
+        "- Every link, button and input: default, hover, focus-visible,"
+        " pressed, and disabled or error where it applies. Mark the current"
+        " nav item.",
+        "- focus-visible is a real visible ring in the accent colour. Never"
+        " `outline: none` without replacing it -- that is the usual way a site"
+        " becomes unusable by keyboard.",
+        "- Anything that waits has a waiting state, so a slow connection reads"
+        " as busy rather than broken.",
+    ]
 
     motion = []
     if spec.signature_moment:
@@ -889,6 +974,10 @@ def render_lovable_prompt(
         " force layout on every frame and stutter on a mid-range phone.",
         profile.scroll_reveal,
         profile.reduced_motion,
+        "- Watch paint cost, not just layout: stacked large-radius shadows,"
+        " full-page gradients and heavy blurs repaint every frame and turn a"
+        " smooth animation into a stuttering one on the mid-range Android this"
+        " is really for.",
         "- No scroll-jacking, no page-load animation gate, no cursor effects,"
         " no WebGL or Three.js. Those belong on a designer's portfolio, not a"
         " shop that needs the booking -- and the cursor ones do not exist on"
@@ -987,6 +1076,11 @@ def render_lovable_prompt(
         "  [TO CONFIRM] rather than guessing. That is the correct outcome.",
         "- Accessible by default: real contrast, real heading order, alt text,",
         "  and a form every keyboard can complete.",
+        "- Icons are inline SVG on currentColor at one square size -- no icon",
+        "  font, no icon library, no emoji standing in for an icon. Draw the",
+        "  simple graphics (rules, badges, section shapes) in CSS, not images.",
+        "- Assume the text runs longer than it looks here: names and badges must",
+        "  survive a second line without the card jumping or the button clipping.",
         "- Performance budget governs the hero and the first tap, not the"
         " rest of the page: largest contentful paint under 2.5s on a"
         " mid-range Android on 4G, no layout shift as things load, primary"
@@ -1240,6 +1334,7 @@ class _Writer:
             visual_direction=str(payload.get("visual_direction", "")).strip(),
             visitor=str(payload.get("visitor", "")).strip(),
             proof_points=_as_tuple(payload.get("proof_points")),
+            layout_system=str(payload.get("layout_system", "")).strip(),
             palette=str(payload.get("palette", "")).strip(),
             typography=str(payload.get("typography", "")).strip(),
             avoid=_as_tuple(payload.get("avoid")),

@@ -82,7 +82,12 @@ class ModelReport:
                 out.append(f"    fields it left out: {', '.join(check.missing)}")
         out += [
             "",
-            "The site spec is the demanding one -- nineteen required fields.",
+            # Counted from the schema rather than written out, because a
+            # spelled-out number silently goes stale the moment a field is
+            # added -- and this line is read by someone already confused
+            # about why their model failed.
+            f"The site spec is the demanding one -- "
+            f"{len(llm.SITE_SPEC_SCHEMA['required'])} required fields.",
             "A model that passes the brief and fails the spec will research "
             "your leads happily and then fail every single site brief.",
             "",

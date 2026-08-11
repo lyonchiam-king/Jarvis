@@ -712,3 +712,116 @@ def test_the_empty_reply_message_follows_the_schema_when_it_moves(monkeypatch):
 
     assert "at 25 required fields" in str(err.value)
     assert "19" not in str(err.value)
+
+
+# --- The Front-End Design Checklist upgrade ----------------------------------
+#
+# Lyon judged the generated pages too plain to show a client and asked for a
+# more UI-focused, per-business result, pointing at thedaviddias'
+# Front-End Design Checklist. Two kinds of change came out of that, and these
+# tests hold the line between them: what varies per business is a spec field,
+# what is identical for every business is fixed template text.
+
+
+def _with_layout(layout, **kwargs):
+    """_rendered() pins spec=_TARGET_SPEC, so it cannot take a spec override."""
+    from dataclasses import replace as _replace
+
+    return render_lovable_prompt(
+        business_name="Sun Salon",
+        category="hair salon",
+        location="Georgetown, Penang, Malaysia",
+        spec=_replace(_TARGET_SPEC, layout_system=layout),
+        phone="+60123456789",
+        address="123 Jalan Example, Georgetown",
+        social_handle="@sunsalon",
+        social_profiles="Instagram: @sunsalon -- https://instagram.com/sunsalon",
+        maps_url="https://maps.google.com/?cid=12345",
+        **kwargs,
+    )
+
+
+def test_the_layout_decision_reaches_the_prompt():
+    """`layout_system` is the field that makes two sites structurally
+    different rather than just differently coloured. If it does not render,
+    the model spent tokens deciding a grid nobody was told about."""
+    prompt = _with_layout("1180px, 12 columns, 24px gutter")
+
+    assert "Layout:  1180px, 12 columns, 24px gutter" in prompt
+
+
+def test_the_layout_line_is_placed_before_the_palette():
+    """Structure before surface. A builder that meets the palette first tends
+    to recolour its default centred column instead of building the grid it was
+    given, which is the exact failure this field exists to stop."""
+    prompt = _with_layout("Asymmetric editorial split")
+
+    assert prompt.index("Layout:") < prompt.index("Palette:")
+
+
+def test_a_spec_without_a_layout_renders_exactly_as_it_did_before():
+    """The field is optional, so the graceful path is the common one: a model
+    that skips it must produce today's prompt, not a prompt with a dangling
+    empty heading in it."""
+    prompt = _rendered()  # _TARGET_SPEC leaves layout_system at ""
+
+    assert "Layout:" not in prompt
+    assert "ART DIRECTION\nPalette:" in prompt
+
+
+def test_layout_system_is_not_a_required_field():
+    """A ratchet with a reason, not a preference. The 19 required fields are
+    capped because a 20th costs every weaker non-Anthropic model the entire
+    spec -- Lyon runs Ollama -- while an optional field costs a weak model
+    nothing and still buys a designed layout from a capable one."""
+    from outreach.providers.llm import SITE_SPEC_SCHEMA
+
+    assert "layout_system" in SITE_SPEC_SCHEMA["properties"]
+    assert "layout_system" not in SITE_SPEC_SCHEMA["required"]
+    assert len(SITE_SPEC_SCHEMA["required"]) == 19
+
+
+def test_every_target_says_how_to_declare_its_tokens():
+    """The rule is the same for both builders; only the mechanism differs. A
+    target added later with no tokens_line would render a blank line under a
+    DESIGN SYSTEM heading and silently lose the section."""
+    from outreach.providers.llm import TARGETS
+
+    for name, profile in TARGETS.items():
+        assert profile.tokens_line.strip(), f"{name} has no tokens_line"
+
+
+def test_the_token_vocabulary_matches_the_builder_it_is_aimed_at():
+    """Telling a one-file HTML page to edit tailwind.config is an instruction
+    it cannot follow, and the builder will improvise something instead."""
+    html = _rendered(target="html")
+    lovable = _rendered(target="lovable")
+
+    assert ":root" in html and "custom propert" in html
+    assert "tailwind.config" not in html
+
+    assert "Tailwind theme" in lovable
+    assert ":root" not in lovable
+
+
+def test_the_interaction_states_block_demands_a_visible_focus_ring():
+    """The checklist's states section is worth almost nothing if the builder
+    satisfies it with `outline: none`, which is the single most common way a
+    site becomes unusable by keyboard."""
+    from outreach.providers.llm import TARGETS
+
+    for target in TARGETS:
+        prompt = _rendered(target=target)
+        assert "INTERACTION STATES" in prompt
+        assert "focus-visible" in prompt
+        assert "`outline: none`" in prompt
+
+
+def test_the_states_rule_covers_more_than_the_primary_button():
+    """The motion floor already handles the CTA's press state. This block
+    earns its place only by generalising past that one element."""
+    prompt = _rendered()
+    states = prompt.split("INTERACTION STATES", 1)[1]
+
+    assert "Every link, button and input" in states
+    assert "nav item" in states
