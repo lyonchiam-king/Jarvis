@@ -181,15 +181,48 @@ def test_vertex_image_provider_requires_the_project_id_env_var(tmp_path, monkeyp
     assert "not the number" in str(excinfo.value) or "not the project number" in str(excinfo.value)
 
 
-def test_vertex_image_provider_requires_a_named_model(tmp_path, monkeypatch):
+def test_a_missing_vertex_model_does_not_block_the_command_that_finds_one(
+    tmp_path, monkeypatch
+):
+    """The model check is deliberately NOT at load time.
+
+    `vertex-models` is how you discover a model name, and it has to load the
+    config to know the project and region. Refusing to load without a model
+    would mean the only way to satisfy the check is a command the check
+    forbids you to run -- which is exactly the dead end Lyon hit.
+    """
     monkeypatch.setenv("VERTEX_PROJECT_ID", "sme-outreach-482913")
-    src = open(PENANG).read().replace("  # image_provider: gemini", "  image_provider: vertex", 1)
+    src = open(PENANG).read().replace(
+        "  # image_provider: gemini", "  image_provider: vertex", 1
+    )
     path = tmp_path / "c.yaml"
     path.write_text(src)
-    with pytest.raises(ConfigError, match="vertex_image_model") as excinfo:
-        load_config(path, env_file=None)
-    assert "vertex-models" in str(excinfo.value)
-    assert "vertex-check" in str(excinfo.value)
+
+    config = load_config(path, env_file=None)
+
+    assert config.build.image_provider == "vertex"
+    assert config.build.vertex_image_model == ""
+
+
+def test_the_model_is_required_where_it_is_actually_used(monkeypatch):
+    """Moved, not dropped: generating still refuses without a named model."""
+    from dataclasses import replace
+
+    import click
+
+    from outreach import cli
+
+    config = load_config(PENANG, env_file=None)
+    config = replace(
+        config,
+        build=replace(config.build, image_provider="vertex", vertex_image_model=""),
+        secrets=replace(config.secrets, vertex_project_id="p"),
+    )
+
+    with pytest.raises(click.ClickException) as err:
+        cli._image_client(config)
+
+    assert "vertex-models" in str(err.value)
 
 
 def test_vertex_image_provider_loads_once_project_and_model_are_set(tmp_path, monkeypatch):

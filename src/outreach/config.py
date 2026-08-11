@@ -471,16 +471,13 @@ def load_config(
             "'sme-outreach-482913', not the project number and not the "
             "display name."
         )
+    # Deliberately NOT validated at load time, unlike every other required
+    # setting in this file. The commands that exist to *find* a model name --
+    # `vertex-models` and `vertex-check` -- have to load the config to know
+    # the project and region, so refusing to load without a model name means
+    # the only way to satisfy the check is a tool that the check forbids you
+    # to run. It is enforced where it is used instead: cli._image_client.
     vertex_image_model = str(b.get("vertex_image_model", ""))
-    if image_provider == "vertex" and not vertex_image_model:
-        raise ConfigError(
-            "build.image_provider is 'vertex', so build.vertex_image_model "
-            "must name a model -- unlike image_model above, this is never "
-            "auto-discovered (see the comment on BuildSettings.vertex_image_model "
-            "for why). Run `outreach vertex-models` to see what your project "
-            "has access to, and `outreach vertex-check --model <name>` to "
-            "prove one actually works before pinning it here."
-        )
     # Guards against "Global" or "global " silently building the wrong host --
     # https://{region}-aiplatform.googleapis.com/... is case-sensitive and
     # whitespace-sensitive, and a typo here fails as a DNS error far from this

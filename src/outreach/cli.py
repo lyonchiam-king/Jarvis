@@ -66,7 +66,7 @@ def _writer(config: Config):
         raise click.ClickException(str(exc)) from exc
 
 
-def _image_client(config: Config):
+def _image_client(config: Config, *, require_model: bool = True):
     """The Vertex client for `run site-generate`'s images, or None.
 
     Checking `image_provider` before anything else in this function matters
@@ -82,6 +82,17 @@ def _image_client(config: Config):
 
     from . import auth
     from .providers.vertex_image import VertexImageClient
+
+    # Checked here rather than at config load: `vertex-models` is how you find
+    # a model name, and it needs a loadable config to know the project. It
+    # passes require_model=False so it can run before one is chosen.
+    if require_model and not config.build.vertex_image_model:
+        raise click.ClickException(
+            "build.vertex_image_model is not set. Run `outreach vertex-models` "
+            "to see what your project offers, then `outreach vertex-check "
+            "--model <name>` to prove one works before pinning it in the "
+            "campaign file."
+        )
 
     try:
         creds = auth.vertex_credentials(
@@ -250,7 +261,7 @@ def vertex_models(ctx: click.Context) -> None:
     `outreach vertex-check` does.
     """
     config = _load(ctx.obj["config_path"])
-    client = _image_client(config)
+    client = _image_client(config, require_model=False)
     if client is None:
         raise click.ClickException(
             "build.image_provider is not 'vertex', so there is nothing to list. "
@@ -315,7 +326,7 @@ def vertex_check(ctx: click.Context, model: str | None) -> None:
     click.echo(f"[ OK ] VERTEX_PROJECT_ID is set ({config.secrets.vertex_project_id})")
 
     try:
-        client = _image_client(config)
+        client = _image_client(config, require_model=False)
     except click.ClickException:
         click.echo("[FAIL] Could not sign in for Google Cloud")
         raise
