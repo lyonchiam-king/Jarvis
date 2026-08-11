@@ -1735,23 +1735,57 @@ def test_the_page_is_told_which_image_files_exist():
 def test_no_image_prompt_ever_asks_for_the_real_premises():
     """A generated interior of *their* salon, inside a pitch that says 'I
     looked at your business', is a fabricated depiction of a real place --
-    and the owner is the one person certain to know it is not their room."""
-    _report, _sheets, gen, _root = _generate(
-        __import__("pathlib").Path(_tmp()), [_good_page()], images_per_page=3
-    )
+    and the owner is the one person certain to know it is not their room.
 
-    # Assert something was actually asked for first. `generate_for_site`
-    # refuses a banned prompt before sending it, so a loop over "prompts that
-    # were sent" passes vacuously on an empty list -- which is exactly what a
-    # briefs list full of banned wording would produce.
-    assert len(gen.image_prompts) == 3, "no image prompts were sent at all"
+    The prompt now *names* those things in order to forbid them, so this
+    asserts on what is being asked for, not on the whole string. Asserting
+    on the string is how the guard ended up blocking its own prohibitions.
+    """
+    from outreach.images import image_briefs
+
+    briefs = image_briefs(SPEC, "Chulia Hair House", "hair salon", count=3)
+    assert briefs, "no briefs produced at all"
 
     banned = ("shopfront", "storefront", "interior of", "the owner", "the staff")
-    for prompt in gen.image_prompts:
-        low = prompt.casefold()
+    for brief in briefs:
+        low = brief.subject.casefold()
         for word in banned:
-            assert word not in low, f"image prompt asks for {word!r}: {prompt}"
-        assert "no people" in low or "not a person" in low
+            assert word not in low, f"asks for {word!r}: {brief.subject}"
+        # And every prompt must still carry the prohibitions.
+        assert "No people" in brief.prompt
+        assert "Not a room" in brief.prompt
+
+
+def test_the_images_are_about_what_the_business_actually_sells():
+    """The first version asked for 'an abstract evoking a {category}' and got
+    exactly that -- a wash that could belong to any business in the world.
+    Lyon's verdict on the first real page was 'not relevant, terrible'."""
+    from dataclasses import replace as dc_replace
+
+    from outreach.images import image_briefs
+
+    spec = dc_replace(
+        FULL_SPEC,
+        showcase_items=("Claypot chicken rice", "Sambal petai prawns"),
+    )
+    briefs = image_briefs(spec, "Sambal", "restaurant", count=2)
+
+    assert "Claypot chicken rice" in briefs[0].subject
+    assert "Sambal petai prawns" in briefs[1].subject
+    # The hero must lead on the dish, not on an adjective.
+    assert briefs[0].prompt.startswith("Claypot chicken rice")
+
+
+def test_a_thin_spec_still_gets_something_to_photograph():
+    """No showcase items is a thin spec, not a broken one -- it falls back to
+    the trade's own materials rather than producing nothing."""
+    from outreach.images import image_briefs
+
+    briefs = image_briefs(SPEC, "Sun Salon", "hair salon", count=2)
+
+    assert len(briefs) == 2
+    assert all(b.subject.strip() for b in briefs)
+
 
 
 def test_a_page_still_gets_built_when_images_fail():

@@ -58,6 +58,21 @@ _FORBIDDEN = re.compile(
 
 
 @dataclass(frozen=True)
+class ImageBrief:
+    """One image to ask for.
+
+    ``subject`` is kept apart from ``prompt`` because the guard checks what
+    we are asking *for*, and the prompt also contains the prohibitions --
+    "not a shopfront" would otherwise trip a check looking for "shopfront".
+    """
+
+    purpose: str
+    subject: str
+    prompt: str
+    alt: str
+
+
+@dataclass(frozen=True)
 class GeneratedImage:
     """One image, plus the alt text the page should use for it."""
 
@@ -77,44 +92,90 @@ def _forbidden(prompt: str) -> str | None:
     return found.group(0) if found else None
 
 
-def image_briefs(spec, business_name: str, category: str, *, count: int) -> list[tuple[str, str, str]]:
+def _subjects(spec, category: str) -> list[str]:
+    """What this business actually sells, in the words its own spec used.
+
+    The first version asked for "an abstract evoking a {category}" and got
+    exactly that: a generic wash that could have sat on any restaurant in
+    the world. The spec already names the dishes, the services and the
+    highlights -- ignoring all of it was the reason the images looked like
+    they belonged to nobody.
+    """
+    out: list[str] = []
+    for field in ("showcase_items", "highlights"):
+        for item in getattr(spec, field, ()) or ():
+            text = str(item).strip()
+            if text and text.lower() not in {s.lower() for s in out}:
+                out.append(text)
+    return out or [category or "the trade"]
+
+
+def image_briefs(spec, business_name: str, category: str, *, count: int) -> list[ImageBrief]:
     """Turn a site spec into ``(purpose, prompt, alt)`` triples.
 
-    Built from `visual_direction` and `palette` because those are the fields
-    the spec model is strongest at, and because they are decisions about this
-    business that were made from its actual reviews.
+    Built from what the business sells, not from its category, because a
+    category alone produces stock-abstract wallpaper. `visual_direction` and
+    `palette` set the look; `showcase_items` set the subject.
     """
     look = (getattr(spec, "visual_direction", "") or "").strip()
     palette = (getattr(spec, "palette", "") or "").strip()
-    style = (
-        f"Photographic, shallow depth of field, natural light. "
-        f"Colour palette: {palette}. Mood: {look}"
-    ).strip()
+    avoid = ", ".join(str(a) for a in (getattr(spec, "avoid", ()) or ()))
 
-    briefs: list[tuple[str, str, str]] = [
-        (
-            "the hero background, sits behind the headline so keep the centre uncluttered",
-            f"An atmospheric, abstract background image evoking a {category}. "
-            f"Texture and light only -- no building, no room, no people, no signage, "
-            f"no text. Generous empty space in the middle for a headline to sit over. "
-            f"{style}",
-            f"Atmospheric background evoking a {category}",
+    style = (
+        "Editorial photography, shallow depth of field, natural directional "
+        f"light, styled and deliberate. Palette: {palette}. Mood: {look}."
+    ).strip()
+    rules = (
+        " No text, no words, no lettering, no logos, no signage. No people, "
+        "no faces, no hands. Not a room, not a building, not a shopfront."
+    )
+    if avoid:
+        rules += f" Avoid: {avoid}."
+
+    subjects = _subjects(spec, category)
+    briefs: list[ImageBrief] = []
+
+    # The hero carries the whole first impression, so it gets the thing the
+    # business is best known for -- not an abstract.
+    hero = subjects[0]
+    briefs.append(ImageBrief(
+        purpose="the hero image, sits behind the headline so keep the middle calm",
+        subject=hero,
+        prompt=(
+            f"{hero}, photographed close and beautifully, for a {category} in "
+            f"Malaysia. Fill the frame with the subject; leave the centre "
+            f"uncluttered so a headline can sit over it. {style}{rules}"
         ),
-        (
-            "a texture band between sections, decorative only",
-            f"A close, tactile macro texture associated with a {category} -- "
-            f"a material or surface, not a place and not a person. No text, no logos. "
-            f"{style}",
-            "Texture detail",
-        ),
-        (
-            "an accent image beside the story section",
-            f"A quiet still-life of a single object associated with a {category}, "
-            f"on a plain surface. One object, no room around it, no people, no text. "
-            f"{style}",
-            "Still life detail",
-        ),
-    ]
+        alt=hero,
+    ))
+
+    # Then the next things it sells, so the page has real subjects rather
+    # than three variations on a mood board.
+    for subject in subjects[1:]:
+        briefs.append(ImageBrief(
+            purpose=f"a section image for {subject}",
+            subject=subject,
+            prompt=(
+                f"{subject}, photographed close and beautifully, for a "
+                f"{category} in Malaysia. One subject, clean background. "
+                f"{style}{rules}"
+            ),
+            alt=subject,
+        ))
+
+    # Only if the spec was thin do we fall back to texture, and even then it
+    # is the material of this trade rather than an abstract.
+    while len(briefs) < count:
+        briefs.append(ImageBrief(
+            purpose="a texture band between sections, decorative only",
+            subject=f"a material found in a {category}",
+            prompt=(
+                f"A close, tactile macro texture of a material found in a "
+                f"{category} -- a surface, a grain, a weave. {style}{rules}"
+            ),
+            alt="Texture detail",
+        ))
+
     return briefs[: max(0, count)]
 
 
@@ -210,10 +271,14 @@ def generate_for_site(
             return []
 
     images: list[GeneratedImage] = []
-    for index, (purpose, prompt, alt) in enumerate(
+    for index, brief in enumerate(
         image_briefs(spec, business_name, category, count=count), start=1
     ):
-        banned = _forbidden(prompt)
+        purpose, prompt, alt = brief.purpose, brief.prompt, brief.alt
+        # The subject, not the whole prompt: the prompt carries the
+        # prohibitions too, and "not a shopfront" must not trip a guard
+        # looking for "shopfront".
+        banned = _forbidden(brief.subject)
         if banned:
             # Belt and braces: the briefs above are ours, so this only fires
             # if someone edits one into a claim about the real business.
@@ -282,7 +347,8 @@ def load_existing(folder, spec, business_name: str, category: str, *, count: int
 
     briefs = image_briefs(spec, business_name, category, count=count)
     found: list[GeneratedImage] = []
-    for index, (purpose, _prompt, alt) in enumerate(briefs, start=1):
+    for index, brief in enumerate(briefs, start=1):
+        purpose, alt = brief.purpose, brief.alt
         matches = sorted(folder.glob(f"image-{index}.*"))
         if not matches:
             continue
