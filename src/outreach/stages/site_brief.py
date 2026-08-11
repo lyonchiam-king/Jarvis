@@ -503,7 +503,12 @@ def generate_sites(
     """
     from pathlib import Path
 
-    from ..images import ImageBudget, generate_for_site, manifest_lines
+    from ..images import (
+        ImageBudget,
+        generate_for_site,
+        load_existing,
+        manifest_lines,
+    )
     from ..providers.sitegen import SiteGenError
     from ..sitecheck import check_site, repair_instruction
     from ..slug import site_slug
@@ -580,7 +585,17 @@ def generate_sites(
             # Images first: the page has to be told which files exist before
             # it can reference them, and a page written against images that
             # were never generated would ship broken <img> tags.
-            images = generate_for_site(
+            # Anything a previous attempt already paid for.
+            images = load_existing(
+                path.parent,
+                spec,
+                business_name=name,
+                category=lead.get("Category", ""),
+                count=config.build.images_per_page,
+            )
+            if images:
+                log.info("  %d image(s) already on disk -- not re-bought.", len(images))
+            images = images or generate_for_site(
                 generator,
                 spec,
                 business_name=name,
@@ -589,7 +604,18 @@ def generate_sites(
                 budget=image_budget,
             )
             if images:
-                log.info("  %d image(s) generated.", len(images))
+                # Written now, not after the page validates. Images are paid
+                # for the moment they are generated, and the page call after
+                # this one can fail on a rate limit -- which would throw away
+                # something already bought. On disk they are also picked up
+                # free by the next run.
+                path.parent.mkdir(parents=True, exist_ok=True)
+                for image in images:
+                    # Empty data means it came off disk already -- see
+                    # images.load_existing. Nothing to rewrite.
+                    if image.data:
+                        (path.parent / image.filename).write_bytes(image.data)
+                log.info("  %d image(s) generated and saved.", len(images))
 
             prompt = render_lovable_prompt(
                 business_name=name,
@@ -643,8 +669,6 @@ def generate_sites(
                 )
 
             path.parent.mkdir(parents=True, exist_ok=True)
-            for image in images:
-                (path.parent / image.filename).write_bytes(image.data)
             path.write_text(html, encoding="utf-8")
             report.generated += 1
             report.paths.append(str(path.resolve()))

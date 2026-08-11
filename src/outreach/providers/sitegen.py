@@ -250,6 +250,15 @@ class SiteGenerator:
         written, and on a sixty-lead run a brief spike would take out most of
         the batch.
         """
+        # When a Vertex client is wired in, the page goes through it too. The
+        # AI Studio free tier rate-limits text separately from images, so a
+        # run could buy its images and then fail every page -- paying for
+        # half a job. One provider for both keeps the whole run on credits.
+        if self._image_client is not None and hasattr(self._image_client, "generate_text"):
+            return self._image_client.generate_text(
+                prompt, max_output_tokens=self.max_output_tokens
+            )
+
         return self._text_from(
             self._call_with_retry(
                 self.model,

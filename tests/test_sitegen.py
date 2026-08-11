@@ -522,3 +522,40 @@ def test_with_no_image_client_generate_image_still_goes_through_gemini():
     assert (data, mime) == (b"hello", "image/png")
     assert session.posts, "the image call should have gone to Gemini"
     assert "generativelanguage.googleapis.com" in session.posts[0]["url"]
+
+
+def test_the_page_goes_through_vertex_too_when_one_is_wired_in():
+    """The free tier rate-limits text separately from images, so a run could
+    buy every image and then fail every page -- paying for half a job. That
+    is exactly what happened on the first real batch."""
+    class Vertex:
+        def __init__(self):
+            self.text_prompts = []
+
+        def generate_image(self, prompt):
+            return b"png", "image/png"
+
+        def generate_text(self, prompt, *, max_output_tokens):
+            self.text_prompts.append((prompt, max_output_tokens))
+            return VALID_HTML
+
+    vertex = Vertex()
+    g = generator(image_client=vertex, max_output_tokens=32000)
+
+    assert g.generate("build me a page") == VALID_HTML
+    assert vertex.text_prompts == [("build me a page", 32000)]
+    # Nothing may reach the AI Studio endpoint.
+    assert g._session.posts == []
+
+
+def test_a_client_without_generate_text_leaves_the_page_call_alone():
+    """The image-only client shape must keep working -- images move without
+    dragging the page call with them."""
+    class ImagesOnly:
+        def generate_image(self, prompt):
+            return b"png", "image/png"
+
+    g = generator(candidate_response(VALID_HTML), image_client=ImagesOnly())
+
+    assert g.generate("prompt") == VALID_HTML
+    assert len(g._session.posts) == 1, "the page still goes to the Developer API"

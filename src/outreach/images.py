@@ -265,3 +265,33 @@ def manifest_lines(images: list[GeneratedImage]) -> str:
     if not images:
         return ""
     return "\n".join(image.line() for image in images)
+
+
+def load_existing(folder, spec, business_name: str, category: str, *, count: int) -> list[GeneratedImage]:
+    """Images already on disk for this lead, so a re-run never re-buys them.
+
+    A page whose generation failed leaves its images behind on purpose --
+    they are paid for, and the only thing that failed was the text call
+    after them. Finding them here is what makes the retry free.
+    """
+    from pathlib import Path
+
+    folder = Path(folder)
+    if not folder.is_dir():
+        return []
+
+    briefs = image_briefs(spec, business_name, category, count=count)
+    found: list[GeneratedImage] = []
+    for index, (purpose, _prompt, alt) in enumerate(briefs, start=1):
+        matches = sorted(folder.glob(f"image-{index}.*"))
+        if not matches:
+            continue
+        found.append(
+            GeneratedImage(
+                filename=matches[0].name,
+                data=b"",  # already on disk; nothing to write again
+                alt=alt,
+                purpose=purpose,
+            )
+        )
+    return found

@@ -32,7 +32,7 @@ from typing import Callable
 import requests
 
 from ..images import decode_inline
-from .sitegen import SiteGenError, _quota_details, _safety_category
+from .sitegen import SiteGenError, _quota_details, _safety_category, _strip_fences
 
 log = logging.getLogger("outreach")
 
@@ -114,7 +114,7 @@ class VertexImageClient:
         )
 
     def generate_image(self, prompt: str) -> tuple[bytes, str]:
-        payload = self._call_with_retry(prompt)
+        payload = self._call_with_retry(self._image_body(prompt))
         candidates = payload.get("candidates") or []
         if not candidates:
             raise SiteGenError(
@@ -139,6 +139,42 @@ class VertexImageClient:
             f"instead. Check build.vertex_image_model ({self.model!r}) is an "
             "image model; `outreach vertex-models` shows the ones your "
             "project has."
+        )
+
+    def generate_text(self, prompt: str, *, max_output_tokens: int) -> str:
+        """A text reply from the same endpoint, for the HTML page call.
+
+        Vertex serves the text models too, so routing pages here as well
+        takes the whole run off AI Studio's free tier -- which is the thing
+        that was rate-limiting a batch after the images had already been
+        paid for.
+        """
+        payload = self._call_with_retry(
+            {
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "maxOutputTokens": max_output_tokens,
+                    "temperature": 0.7,
+                },
+            }
+        )
+        candidates = payload.get("candidates") or []
+        if not candidates:
+            raise SiteGenError(
+                f"Vertex returned no candidates for {self.model} "
+                f"({payload.get('promptFeedback', 'no feedback')})."
+            )
+        candidate = candidates[0] or {}
+        if candidate.get("finishReason") == "MAX_TOKENS":
+            raise SiteGenError(
+                "Vertex cut the page off mid-document (MAX_TOKENS). Raise "
+                "build.max_output_tokens."
+            )
+        for part in candidate.get("content", {}).get("parts") or []:
+            if part.get("text"):
+                return _strip_fences(part["text"])
+        raise SiteGenError(
+            f"Vertex replied without any text for {self.model}."
         )
 
     def list_models(self) -> list[str]:
@@ -177,11 +213,11 @@ class VertexImageClient:
 
     # ------------------------------------------------------------------ retry
 
-    def _call_with_retry(self, prompt: str) -> dict:
+    def _call_with_retry(self, body: dict) -> dict:
         last: SiteGenError | None = None
         for attempt in range(self.max_attempts):
             try:
-                return self._post(prompt)
+                return self._post(body)
             except SiteGenError as exc:
                 if exc.status_code not in _TRANSIENT or attempt == self.max_attempts - 1:
                     raise
@@ -196,18 +232,20 @@ class VertexImageClient:
                 self._sleep(wait)
         raise last  # unreachable; the loop either returns or raises
 
-    def _post(self, prompt: str) -> dict:
-        self.call_count += 1
-
+    def _image_body(self, prompt: str) -> dict:
         generation_config: dict = {"responseModalities": ["TEXT", "IMAGE"]}
         if self.image_size:
             # Only sent when set -- an imageConfig block on a model that does
             # not recognise the field is a 400, not a silent ignore.
             generation_config["imageConfig"] = {"imageSize": self.image_size}
-        body = {
+        return {
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": generation_config,
         }
+
+    def _post(self, body: dict) -> dict:
+        self.call_count += 1
+
         headers = {
             "Authorization": f"Bearer {self._token_provider()}",
             "Content-Type": "application/json",
