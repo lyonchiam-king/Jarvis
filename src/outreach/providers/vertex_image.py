@@ -81,12 +81,22 @@ class VertexImageClient:
         model: str,
         image_size: str = "",
         api_version: str = "v1beta1",
+        min_interval_seconds: float = 2.0,
         session: requests.Session | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
         max_attempts: int = 3,
         timeout: float = 180.0,
     ) -> None:
         self._token_provider = token_provider
+        # Vertex has its own per-minute limits, separate from AI Studio's.
+        # I shipped this with no pacing on the assumption that credits meant
+        # no rate limit; the first real batch proved otherwise on the second
+        # lead. Two seconds is enough to space a spec, an image and a page
+        # without making a sixty-lead run noticeably longer.
+        self.min_interval_seconds = min_interval_seconds
+        self._clock = clock
+        self._last_call = 0.0
         self.api_version = api_version
         self.project = project
         self.region = region
@@ -243,7 +253,17 @@ class VertexImageClient:
             "generationConfig": generation_config,
         }
 
+    def _pace(self) -> None:
+        if self.min_interval_seconds <= 0 or not self._last_call:
+            self._last_call = self._clock()
+            return
+        remaining = self.min_interval_seconds - (self._clock() - self._last_call)
+        if remaining > 0:
+            self._sleep(remaining)
+        self._last_call = self._clock()
+
     def _post(self, body: dict) -> dict:
+        self._pace()
         self.call_count += 1
 
         headers = {

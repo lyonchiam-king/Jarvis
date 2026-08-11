@@ -89,6 +89,9 @@ def client(*replies, token="tok", sleep=None, **kwargs):
         model=kwargs.pop("model", "imagen-4"),
         session=FakeSession(*replies),
         sleep=sleep if sleep is not None else (lambda s: None),
+        # Frozen by default so pacing never adds a sleep to a test that is
+        # asserting on retry waits. Tests about pacing pass their own.
+        clock=kwargs.pop("clock", lambda: 0.0),
         **kwargs,
     )
 
@@ -485,3 +488,34 @@ def test_the_api_version_can_be_overridden():
     )
 
     assert "/v1/projects/" in client.endpoint
+
+
+def test_vertex_calls_are_paced_apart():
+    """Shipped with no pacing, on the assumption that paying for credits meant
+    no rate limit. The first real batch hit a Vertex per-minute 429 on its
+    second lead -- a spec, an image and a page fired back to back."""
+    slept = []
+    now = [100.0]
+
+    c = client(
+        image_response(),
+        image_response(),
+        sleep=lambda s: (slept.append(s), now.__setitem__(0, now[0] + s)),
+        clock=lambda: now[0],
+        min_interval_seconds=2.0,
+    )
+
+    c.generate_image("one")
+    c.generate_image("two")
+
+    assert slept == [2.0], f"expected one 2s gap between calls, got {slept}"
+
+
+def test_pacing_can_be_switched_off():
+    slept = []
+    c = client(image_response(), image_response(), sleep=slept.append, min_interval_seconds=0)
+
+    c.generate_image("one")
+    c.generate_image("two")
+
+    assert slept == []
