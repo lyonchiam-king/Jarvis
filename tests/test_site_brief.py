@@ -1981,21 +1981,23 @@ def test_the_page_asks_for_as_many_images_as_it_has_things_to_show():
     assert len(image_briefs(one, "B", "restaurant", count=0)) == 1
 
 
-def test_a_runaway_spec_cannot_buy_unlimited_images():
-    """The subject list is model output. A spec listing twenty highlights
-    would otherwise buy twenty images for one demo nobody asked for."""
+def test_no_ceiling_by_default_so_every_subject_gets_an_image():
+    """Lyon's call, made after being shown what a runaway spec would cost.
+    `build.max_images_per_page` puts a ceiling back if he wants one, and the
+    run-level cap still bounds an overnight batch either way."""
     from dataclasses import replace as dc_replace
 
     from outreach.images import MAX_PER_PAGE, image_briefs
 
-    huge = dc_replace(
+    assert MAX_PER_PAGE == 0, "0 means no per-page ceiling"
+
+    many = dc_replace(
         FULL_SPEC,
-        showcase_items=tuple(f"dish {i}" for i in range(40)),
+        showcase_items=tuple(f"dish {i}" for i in range(12)),
         highlights=(),
     )
 
-    assert len(image_briefs(huge, "B", "restaurant", count=0)) == MAX_PER_PAGE
-    assert MAX_PER_PAGE <= 10, "a demo page, not a gallery"
+    assert len(image_briefs(many, "B", "restaurant", count=0)) == 12
 
 
 def test_a_pinned_count_still_wins():
@@ -2008,3 +2010,21 @@ def test_a_pinned_count_still_wins():
     five = dc_replace(FULL_SPEC, showcase_items=("a", "b", "c", "d", "e"), highlights=())
 
     assert len(image_briefs(five, "B", "restaurant", count=2)) == 2
+
+
+def test_badges_are_not_treated_as_things_to_photograph():
+    """`highlights` are the badge strip -- "Halal", "Open till 2am". They are
+    facts, not subjects. Asking for a photograph of "Open till 2am" buys
+    something worse than no image at the same price."""
+    from dataclasses import replace as dc_replace
+
+    from outreach.images import image_briefs
+
+    spec = dc_replace(
+        FULL_SPEC,
+        showcase_items=("Claypot chicken rice",),
+        highlights=("Halal", "Open till 2am"),
+    )
+    subjects = [b.subject for b in image_briefs(spec, "B", "restaurant", count=0)]
+
+    assert subjects == ["Claypot chicken rice"]

@@ -101,19 +101,23 @@ def _subjects(spec, category: str) -> list[str]:
     highlights -- ignoring all of it was the reason the images looked like
     they belonged to nobody.
     """
+    # showcase_items only. `highlights` are the badge strip -- "Halal",
+    # "Open till 2am", "Pork-Free" -- which are facts, not things anyone
+    # photographs. Including them bought an image of the words "Open till
+    # 2am", which is worse than no image and costs the same.
     out: list[str] = []
-    for field in ("showcase_items", "highlights"):
-        for item in getattr(spec, field, ()) or ():
-            text = str(item).strip()
-            if text and text.lower() not in {s.lower() for s in out}:
-                out.append(text)
+    for item in getattr(spec, "showcase_items", ()) or ():
+        text = str(item).strip()
+        if text and text.lower() not in {s.lower() for s in out}:
+            out.append(text)
     return out or [category or "the trade"]
 
 
-# A ceiling on what "as many as the page needs" can mean. The subject list
-# comes from model output, so a spec that lists twenty highlights would
-# otherwise buy twenty images for one demo nobody has asked for yet.
-MAX_PER_PAGE = 8
+# No ceiling by default -- Lyon's call, made after being shown the cost of a
+# runaway spec. `build.max_images_per_page` puts one back if he ever wants
+# it. The run-level cap in ImageBudget still applies either way, so an
+# overnight batch cannot spend without bound even with this off.
+MAX_PER_PAGE = 0
 
 
 def image_briefs(spec, business_name: str, category: str, *, count: int) -> list[ImageBrief]:
@@ -144,7 +148,12 @@ def image_briefs(spec, business_name: str, category: str, *, count: int) -> list
         rules += f" Avoid: {avoid}."
 
     subjects = _subjects(spec, category)
-    wanted = min(len(subjects), MAX_PER_PAGE) if count == 0 else count
+    if count:
+        wanted = count
+    elif MAX_PER_PAGE:
+        wanted = min(len(subjects), MAX_PER_PAGE)
+    else:
+        wanted = len(subjects)
     briefs: list[ImageBrief] = []
 
     # The hero carries the whole first impression, so it gets the thing the

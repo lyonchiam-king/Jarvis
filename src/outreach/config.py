@@ -216,7 +216,10 @@ class BuildSettings:
     # page is not: reusing that cap is the direct cause of a half-written
     # <body> with a truncated final tag, which is worse than no page at all
     # because it can still pass a naive "did it produce output" check.
-    max_output_tokens: int = 32000
+    # 64k, not 32k. A page with an image per dish, real sections and the
+    # motion floor is a big document, and the first real run came back
+    # `truncated` -- which is a whole page thrown away, not a small one.
+    max_output_tokens: int = 64000
     min_interval_seconds: float = 6.5
     output_dir: str = "sites"
     url_context: bool = False
@@ -496,7 +499,7 @@ def load_config(
         image_model=str(b.get("image_model", "")),
         images_per_page=int(b.get("images_per_page", 0)),
         base_url=str(b.get("base_url", "")),
-        max_output_tokens=int(b.get("max_output_tokens", 32000)),
+        max_output_tokens=int(b.get("max_output_tokens", 64000)),
         min_interval_seconds=float(b.get("min_interval_seconds", 6.5)),
         # Resolved relative to CWD, not to this file. Both Dashboard.bat and
         # run.bat do `cd /d "%~dp0"` before invoking Python, so CWD is the

@@ -72,7 +72,7 @@ def test_build_defaults_are_pinned():
     config = load_config(PENANG, env_file=None)
     assert config.build.provider == "gemini"
     assert config.build.model == "gemini-3.6-flash"
-    assert config.build.max_output_tokens == 32000
+    assert config.build.max_output_tokens == 64000
     assert config.build.min_interval_seconds == 6.5
     assert config.build.output_dir == "sites"
     assert config.build.url_context is False
