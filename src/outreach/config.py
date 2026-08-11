@@ -205,11 +205,11 @@ class BuildSettings:
     # before it was worth admitting the API already knows. Set it to pin a
     # specific model and skip the lookup.
     image_model: str = ""
-    # Three again. One was a workaround for the AI Studio free tier's
-    # per-minute image budget; on Vertex that constraint is gone, and one
-    # image made a page look unfinished -- which was Lyon's verdict on the
-    # first real one.
-    images_per_page: int = 3
+    # 0 means "as many as this page needs" -- one per dish, service or
+    # highlight the spec named, capped by images.MAX_PER_PAGE. A fixed
+    # number was always the wrong shape: it left dishes unillustrated on a
+    # rich spec and padded a thin one with filler. Set a number to pin it.
+    images_per_page: int = 0
     base_url: str = ""
     # The JSON writers (briefs, specs, outreach copy) cap output at 6000
     # tokens because their replies are a handful of short fields. A full HTML
@@ -494,7 +494,7 @@ def load_config(
         provider=str(b.get("provider", "gemini")),
         model=str(b.get("model", "gemini-3.6-flash")),
         image_model=str(b.get("image_model", "")),
-        images_per_page=int(b.get("images_per_page", 3)),
+        images_per_page=int(b.get("images_per_page", 0)),
         base_url=str(b.get("base_url", "")),
         max_output_tokens=int(b.get("max_output_tokens", 32000)),
         min_interval_seconds=float(b.get("min_interval_seconds", 6.5)),

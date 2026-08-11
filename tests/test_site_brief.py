@@ -1964,3 +1964,47 @@ def test_an_unlimited_cap_is_the_default_behaviour():
         budget.spent()
 
     assert budget.open, "limit=0 must never close the budget"
+
+
+def test_the_page_asks_for_as_many_images_as_it_has_things_to_show():
+    """A fixed count is the wrong shape. Five dishes and a cap of three
+    leaves two unillustrated; one service and a cap of three pads the page
+    with filler texture."""
+    from dataclasses import replace as dc_replace
+
+    from outreach.images import image_briefs
+
+    five = dc_replace(FULL_SPEC, showcase_items=("a", "b", "c", "d", "e"), highlights=())
+    one = dc_replace(FULL_SPEC, showcase_items=("only this",), highlights=())
+
+    assert len(image_briefs(five, "B", "restaurant", count=0)) == 5
+    assert len(image_briefs(one, "B", "restaurant", count=0)) == 1
+
+
+def test_a_runaway_spec_cannot_buy_unlimited_images():
+    """The subject list is model output. A spec listing twenty highlights
+    would otherwise buy twenty images for one demo nobody asked for."""
+    from dataclasses import replace as dc_replace
+
+    from outreach.images import MAX_PER_PAGE, image_briefs
+
+    huge = dc_replace(
+        FULL_SPEC,
+        showcase_items=tuple(f"dish {i}" for i in range(40)),
+        highlights=(),
+    )
+
+    assert len(image_briefs(huge, "B", "restaurant", count=0)) == MAX_PER_PAGE
+    assert MAX_PER_PAGE <= 10, "a demo page, not a gallery"
+
+
+def test_a_pinned_count_still_wins():
+    """Auto is the default, not a mandate -- a number in the campaign file
+    must still be obeyed."""
+    from dataclasses import replace as dc_replace
+
+    from outreach.images import image_briefs
+
+    five = dc_replace(FULL_SPEC, showcase_items=("a", "b", "c", "d", "e"), highlights=())
+
+    assert len(image_briefs(five, "B", "restaurant", count=2)) == 2

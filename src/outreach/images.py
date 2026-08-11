@@ -110,12 +110,23 @@ def _subjects(spec, category: str) -> list[str]:
     return out or [category or "the trade"]
 
 
+# A ceiling on what "as many as the page needs" can mean. The subject list
+# comes from model output, so a spec that lists twenty highlights would
+# otherwise buy twenty images for one demo nobody has asked for yet.
+MAX_PER_PAGE = 8
+
+
 def image_briefs(spec, business_name: str, category: str, *, count: int) -> list[ImageBrief]:
-    """Turn a site spec into ``(purpose, prompt, alt)`` triples.
+    """Turn a site spec into the images this page needs.
 
     Built from what the business sells, not from its category, because a
     category alone produces stock-abstract wallpaper. `visual_direction` and
     `palette` set the look; `showcase_items` set the subject.
+
+    ``count`` of 0 means "one per thing this business sells", capped at
+    MAX_PER_PAGE. A fixed number is the wrong shape: five dishes and a cap
+    of three leaves two dishes with no image, while one service and a cap of
+    three pads the page with filler texture.
     """
     look = (getattr(spec, "visual_direction", "") or "").strip()
     palette = (getattr(spec, "palette", "") or "").strip()
@@ -133,6 +144,7 @@ def image_briefs(spec, business_name: str, category: str, *, count: int) -> list
         rules += f" Avoid: {avoid}."
 
     subjects = _subjects(spec, category)
+    wanted = min(len(subjects), MAX_PER_PAGE) if count == 0 else count
     briefs: list[ImageBrief] = []
 
     # The hero carries the whole first impression, so it gets the thing the
@@ -165,7 +177,7 @@ def image_briefs(spec, business_name: str, category: str, *, count: int) -> list
 
     # Only if the spec was thin do we fall back to texture, and even then it
     # is the material of this trade rather than an abstract.
-    while len(briefs) < count:
+    while len(briefs) < wanted:
         briefs.append(ImageBrief(
             purpose="a texture band between sections, decorative only",
             subject=f"a material found in a {category}",
@@ -176,7 +188,7 @@ def image_briefs(spec, business_name: str, category: str, *, count: int) -> list
             alt="Texture detail",
         ))
 
-    return briefs[: max(0, count)]
+    return briefs[: max(0, wanted)]
 
 
 # A quota that refills on its own clock, versus one that is gone for the day.
