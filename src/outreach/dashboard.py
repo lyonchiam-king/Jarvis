@@ -407,7 +407,7 @@ def create_app(config: Config) -> Flask:
 
     @app.route("/")
     def index():
-        return render_template_string(PAGE, campaign=current().campaign)
+        return render_template_string(PAGE, campaign=current().campaign, build=current().build)
 
     @app.route("/guide")
     def guide():
@@ -1122,7 +1122,7 @@ PAGE = """<!doctype html>
 
   <h2><span class="stepno">3</span> Build
       <span class="sub" style="text-transform:none;letter-spacing:0">
-      &mdash; approved, waiting for you to paste into Lovable</span>
+      &mdash; approved, waiting for you to paste into {{ build.site_builder_name }}</span>
       <a class="sub" href="/guide#3-build-the-ones-you-approved" target="_blank" rel="noopener">What is this?</a></h2>
   <div class="row" style="margin-bottom:10px">
     <button data-run="site-generate">Generate pages with Gemini</button>
@@ -1149,6 +1149,13 @@ PAGE = """<!doctype html>
 </div>
 <script>
 const $ = s => document.querySelector(s);
+// Poured in server-side by Jinja. |tojson JSON-encodes the string and escapes
+// <, >, & so a value can never break out of this <script> block -- a bare
+// Jinja interpolation inside JS would HTML-escape and produce garbage, the
+// exact bug CLAUDE.md warns about. These are campaign-level craft constants,
+// not per-business fields, so they live here rather than on each queue card.
+const SITE_BUILDER = {{ build.site_builder_name|tojson }};
+const SITE_BUILDER_URL = {{ build.site_builder_url|tojson }};
 
 function card(n, label, note) {
   return `<div class="card">
@@ -1664,8 +1671,9 @@ async function loadQueue() {
       <textarea id="p${i}" readonly>${q.prompt.replace(/</g,'&lt;')}</textarea>
       <div class="row" style="margin-top:10px">
         <button onclick="copyPrompt(${i})">Copy prompt</button>
-        <a href="https://lovable.dev" target="_blank" rel="noopener">
-          <button>Open Lovable</button></a>
+        ${SITE_BUILDER_URL
+          ? `<a href="${SITE_BUILDER_URL}" target="_blank" rel="noopener"><button>Open ${SITE_BUILDER}</button></a>`
+          : `<button>Open ${SITE_BUILDER}</button>`}
         <span class="sub" id="c${i}"></span>
       </div>
       <div class="row" style="margin-top:10px">
@@ -1681,7 +1689,7 @@ async function copyPrompt(i) {
   t.select();
   try { await navigator.clipboard.writeText(t.value); }
   catch { document.execCommand('copy'); }
-  document.getElementById('c' + i).textContent = 'Copied. Paste it into Lovable.';
+  document.getElementById('c' + i).textContent = `Copied. Paste it into ${SITE_BUILDER}.`;
 }
 
 async function saveBuilt(leadId, i) {

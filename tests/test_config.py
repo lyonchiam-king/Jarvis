@@ -80,6 +80,8 @@ def test_build_defaults_are_pinned():
     assert config.build.max_versions == 5
     assert config.build.min_bytes == 4000
     assert config.build.max_bytes == 400000
+    assert config.build.site_builder_name == "Google AI Studio"
+    assert config.build.site_builder_url == "https://aistudio.google.com/"
 
 
 def test_build_max_output_tokens_is_not_the_json_writer_cap():
@@ -87,6 +89,56 @@ def test_build_max_output_tokens_is_not_the_json_writer_cap():
     full HTML page mid-document. See the comment in config.py for why."""
     config = load_config(PENANG, env_file=None)
     assert config.build.max_output_tokens != 6000
+
+
+def test_build_site_builder_defaults_pin_google_ai_studio():
+    """An untouched campaign shows the tool Lyon actually pastes prompts
+    into today, so the live YAML never has to name it."""
+    config = load_config(PENANG, env_file=None)
+    assert config.build.site_builder_name == "Google AI Studio"
+    assert config.build.site_builder_url == "https://aistudio.google.com/"
+
+
+def test_build_site_builder_name_can_be_overridden(tmp_path):
+    src = open(PENANG).read().replace(
+        "  target: lovable\n", "  target: lovable\n  site_builder_name: Bolt.new\n", 1
+    )
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
+    config = load_config(path, env_file=None)
+    assert config.build.site_builder_name == "Bolt.new"
+
+
+def test_build_site_builder_url_can_be_overridden(tmp_path):
+    src = open(PENANG).read().replace(
+        "  target: lovable\n",
+        "  target: lovable\n  site_builder_url: https://bolt.new/\n",
+        1,
+    )
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
+    config = load_config(path, env_file=None)
+    assert config.build.site_builder_url == "https://bolt.new/"
+
+
+def test_build_site_builder_name_empty_is_rejected(tmp_path):
+    src = open(PENANG).read().replace(
+        "  target: lovable\n", "  target: lovable\n  site_builder_name: ''\n", 1
+    )
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
+    with pytest.raises(ConfigError, match="site_builder_name is empty"):
+        load_config(path, env_file=None)
+
+
+def test_build_site_builder_url_must_be_http(tmp_path):
+    src = open(PENANG).read().replace(
+        "  target: lovable\n", "  target: lovable\n  site_builder_url: bolt.new\n", 1
+    )
+    path = tmp_path / "c.yaml"
+    path.write_text(src)
+    with pytest.raises(ConfigError, match=r"must be a full http\(s\) URL"):
+        load_config(path, env_file=None)
 
 
 def test_build_target_rejects_an_unknown_value(tmp_path):

@@ -7,7 +7,7 @@ the order you actually work:
 |---|---|---|
 | **1** | **Gather** | One button. Finds a fresh batch, researches them, writes their briefs |
 | **2** | **Review** | One business at a time. Approve or Skip |
-| **3** | **Build** | The approved ones, ready to paste into Lovable |
+| **3** | **Build** | The approved ones, ready to paste into your site builder |
 | **4** | **Send** | Drafts waiting in Gmail, WhatsApp messages to copy |
 
 At the top, **What you're hunting** (what you're targeting right now, and a
@@ -126,8 +126,9 @@ this, so if it reads thin, say so and we'll tune it before you scale up.
 In step 2, read one brief properly. **Approve** just that one, **Decide later**
 on the rest.
 
-In step 3, **Copy prompt** → **Open Lovable** → paste → let it build. Then
-paste the URL back and press **Mark as built**.
+In step 3, **Copy prompt** → **Open your site builder** (Google AI Studio by
+default) → paste → let it build. Then paste the URL back and press **Mark as
+built**.
 
 **Open the finished site on your phone.** This is the moment of truth — it's
 what a business owner will see. Is the name right? Does the phone number work?
@@ -198,7 +199,7 @@ building the sites and sending the messages — wait for you. So a fresh lead
 found this morning gets its demo built by you today and its message drafted by
 the run tomorrow. Nothing stalls; it just runs a day behind, permanently.
 
-It never sends and never spends Lovable credits. Logs land in `logs\`.
+It never sends and never builds anything. Logs land in `logs\`.
 
 To change the cap or the time:
 
@@ -348,11 +349,10 @@ answer is no, Skip — a bad demo is worse than no demo.
 
 **This is the day's real work.** The card reads *sites to build*.
 
-Lovable can't be driven from here — it only supports OAuth sign-in, so there's
-no key a program on your laptop could use. The dashboard gets you as close as
-possible. For each row in step 3:
+The site builder is a separate tool — the dashboard can't drive it directly, so
+it gets you as close as possible. For each row in step 3:
 
-1. **Copy prompt** → **Open Lovable** → paste → let it build
+1. **Copy prompt** → **Open your site builder** (Google AI Studio by default) → paste → let it build
 2. Paste the finished site URL back into the box and press **Mark as built**
 
 **Marking it built is not bookkeeping.** That URL is what goes in the email,
@@ -559,12 +559,13 @@ plausibly search online first. Skip anything where the buyer never Googles.
 | Rewrite existing briefs | ~2 cents per lead, same as Write briefs |
 | Draft messages | ~2 cents per lead |
 | **Review (step 2)** | **Free — and Skip here saves the expensive part** |
-| **Build (step 3)** | **Lovable credits — by far the largest line** |
+| **Build (step 3)** | **Your site builder's credits — by far the largest line** |
 | Previews, Check setup | Free or near it |
 
 A batch of 60 through everything *except* the build is roughly **six dollars**.
-The builds are the number that matters, and they're charged by Lovable, not by
-this tool — check your plan's credit allowance before you approve a large batch.
+The builds are the number that matters, and they're charged by your site
+builder, not by this tool — check your plan's credit allowance before you
+approve a large batch.
 
 That's the trade you chose: a demo costs real money, and it's the reason the
 message lands at all. If the volume gets expensive, cut the number of leads —

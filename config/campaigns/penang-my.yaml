@@ -177,6 +177,11 @@ build:
   # vertex_region: global
   # vertex_image_size: ""
   # max_images_per_run: 60
+  # The dashboard's Build panel names the tool you paste prompts into from
+  # these two -- defaults to Google AI Studio. Change both if you switch
+  # builders (e.g. back to Lovable). Sheet columns are unaffected.
+  # site_builder_name: Google AI Studio
+  # site_builder_url: https://aistudio.google.com/
 
 compliance:
   # ISO 3166-1 alpha-2. Drives the outreach-law gate in compliance.py.

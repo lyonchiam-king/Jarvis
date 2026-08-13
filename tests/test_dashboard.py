@@ -268,11 +268,59 @@ def test_build_queue_is_empty_without_a_sheet(client):
     assert client.get("/api/build-queue").get_json() == {"queue": []}
 
 
-def test_page_offers_the_copy_and_open_lovable_flow(client):
+def test_page_offers_the_copy_and_open_builder_flow(client):
     body = client.get("/").data
     assert b"Copy prompt" in body
-    assert b"lovable.dev" in body
+    # The "Open [tool]" button target now comes from config, not a hardcoded
+    # Lovable URL -- the default config pins Google AI Studio.
+    assert b"aistudio.google.com" in body
     assert b"Mark as built" in body
+
+
+def _client_with_build(**build_overrides):
+    """A test client whose build settings are patched, without touching the
+    live campaign file. Same replace() pattern as the config tests."""
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, build=replace(config.build, **build_overrides))
+    return create_app(config).test_client()
+
+
+def test_build_panel_uses_config_site_builder():
+    """The Build panel labels the paste target from config, not a hardcoded
+    string -- so the h2 subtitle and the queue-card button both read the
+    campaign's site builder."""
+    client = _client_with_build(
+        site_builder_name="Acme Builder", site_builder_url="https://acme.example/"
+    )
+    body = client.get("/").data.decode()
+    # h2 subtitle is server-rendered HTML.
+    assert "paste into Acme Builder" in body
+    # The const the queue-card button reads from, server-rendered by Jinja.
+    assert 'const SITE_BUILDER = "Acme Builder"' in body
+    assert 'const SITE_BUILDER_URL = "https://acme.example/"' in body
+
+
+def test_build_panel_defaults_render_google_ai_studio():
+    """The untouched campaign shows Google AI Studio -- pins the default-render
+    contract so a silent default change is caught."""
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    client = create_app(config).test_client()
+    body = client.get("/").data.decode()
+    assert "paste into Google AI Studio" in body
+    assert 'const SITE_BUILDER = "Google AI Studio"' in body
+    assert 'const SITE_BUILDER_URL = "https://aistudio.google.com/"' in body
+
+
+def test_build_panel_open_button_when_url_blank():
+    """A blank URL must not render a dead link. We chose to omit the anchor and
+    render a bare button -- assert that choice so the edge stays handled."""
+    client = _client_with_build(site_builder_name="Acme Builder", site_builder_url="")
+    body = client.get("/").data.decode()
+    assert 'const SITE_BUILDER_URL = ""' in body
+    # The queue-card template literal renders a bare button when the URL is
+    # blank -- no anchor wrapping it, and never a placeholder href.
+    assert "`<button>Open ${SITE_BUILDER}</button>`" in body
+    assert "href=\"#\"" not in body
 
 
 def test_page_lays_the_morning_out_in_order(client):
@@ -1360,20 +1408,37 @@ def test_the_page_javascript_actually_parses():
     it sits in. Every other escape in this file is written `\\\\n` for exactly
     that reason.
 
+    The page is rendered through Jinja before parsing. PAGE now carries
+    `|tojson` consts inside <script>, and the raw `{{ }}` they sit in is not
+    valid JS -- so the *rendered* page is what the browser actually runs, and
+    that is what this check must parse. Rendering first is strictly the
+    stronger guard: it also fails on a Jinja error, not only a JS one.
+
     Skipped where node is absent rather than approximated in Python -- a
     half-check that passes on a broken page is worse than no check.
     """
     import re
     import shutil
     import subprocess
+    from flask import Flask, render_template_string
 
+    from outreach.config import load_config
     from outreach.dashboard import PAGE
 
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not available to parse the page script")
 
-    blocks = re.findall(r"<script>(.*?)</script>", PAGE, re.S)
+    # Render with the real default config so the tojson consts substitute into
+    # real JSON string literals, exactly as a request would.
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    app = Flask(__name__)
+    with app.app_context():
+        page = render_template_string(
+            PAGE, campaign=config.campaign, build=config.build
+        )
+
+    blocks = re.findall(r"<script>(.*?)</script>", page, re.S)
     assert blocks, "the page has no script block -- did the markup change?"
 
     for i, js in enumerate(blocks):

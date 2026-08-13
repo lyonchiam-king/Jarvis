@@ -193,6 +193,12 @@ class BuildSettings:
     """
 
     target: str = "lovable"          # "lovable" | "firebase"
+    # The display label + button target for whatever tool Lyon pastes prompts
+    # into. A campaign-level craft constant, not a per-business schema field
+    # (per CLAUDE.md: craft rules are template text). Defaults match the tool
+    # he actually uses today so the live campaign file never has to name it.
+    site_builder_name: str = "Google AI Studio"
+    site_builder_url: str = "https://aistudio.google.com/"
     enabled: bool = False            # separate from lovable.enabled -- never default true
     provider: str = "gemini"
     model: str = "gemini-3.6-flash"
@@ -453,6 +459,24 @@ def load_config(
             f"build.target must be one of {sorted(BUILD_TARGETS)}, got "
             f"{build_target!r}"
         )
+    # Display label + button target for the site-builder tool. The name is
+    # required (a blank button label is a broken UI); the URL is allowed to be
+    # blank, in which case the dashboard simply omits the "Open [tool]" button
+    # rather than rendering a dead link.
+    site_builder_name = str(b.get("site_builder_name", "Google AI Studio")).strip()
+    if not site_builder_name:
+        raise ConfigError(
+            "build.site_builder_name is empty. Set it to the tool name you "
+            "paste prompts into (e.g. 'Google AI Studio'), or remove the line "
+            "to use the default."
+        )
+    site_builder_url = str(b.get("site_builder_url", "https://aistudio.google.com/")).strip()
+    if site_builder_url and not site_builder_url.startswith(("http://", "https://")):
+        raise ConfigError(
+            f"build.site_builder_url must be a full http(s) URL, got "
+            f"{site_builder_url!r}. It's the button that opens your site "
+            "builder, e.g. 'https://aistudio.google.com/'."
+        )
     if build_target == "firebase" and not os.getenv("FIREBASE_SITE_ID"):
         raise ConfigError(
             "build.target is 'firebase', so FIREBASE_SITE_ID must be set in "
@@ -493,6 +517,8 @@ def load_config(
 
     build = BuildSettings(
         target=build_target,
+        site_builder_name=site_builder_name,
+        site_builder_url=site_builder_url,
         enabled=bool(b.get("enabled", False)),
         provider=str(b.get("provider", "gemini")),
         model=str(b.get("model", "gemini-3.6-flash")),

@@ -377,7 +377,7 @@ one job, pages, real hero copy, sections in scroll order, proof points, palette
 with hex values, named typefaces, a per-business *avoid* list, and the
 interaction design: one signature moment, a motion language in milliseconds and
 easing curves, and named micro-interactions. A deterministic function renders
-that spec into the prompt you paste into Lovable.
+that spec into the prompt you paste into your site builder.
 
 The rendered brief opens by pointing the builder at the business's **Google
 Business Profile and every social profile** and telling it to study them before
@@ -436,8 +436,8 @@ matter how the approval column was seeded.
 
 With the Lovable connector absent, `site-build` tells you how to connect it
 rather than failing obscurely. Until then the workflow is: read the prompt in
-the Sheet, paste it into Lovable yourself. The prompt is the deliverable; the
-API call is convenience.
+the Sheet, paste it into your site builder yourself. The prompt is the
+deliverable; the API call is convenience.
 
 ---
 
