@@ -1195,9 +1195,10 @@ PAGE = """<!doctype html>
                  margin-bottom:10px; }
   .wa-msg-card .wa-name { font-weight:600; font-size:15px; }
   .wa-msg-card .wa-phone { font-size:13px; color:var(--muted); margin-bottom:6px; }
-  .wa-msg-card .wa-text { font-size:13px; white-space:pre-wrap; max-height:80px;
-                          overflow-y:auto; background:var(--bg); padding:8px 10px;
-                          border-radius:6px; margin-bottom:10px; line-height:1.45; }
+  .wa-msg-card .wa-edit { width:100%; font:inherit; font-size:13px; line-height:1.45;
+                           padding:8px 10px; border-radius:6px; margin-bottom:10px;
+                           border:1px solid var(--line); background:var(--bg); color:var(--ink);
+                           resize:vertical; min-height:60px; box-sizing:border-box; }
   .wa-msg-card .wa-row { display:flex; justify-content:space-between; align-items:center;
                          gap:10px; }
   .wa-msg-card .wa-state { font-size:13px; }
@@ -1400,16 +1401,12 @@ async function refresh() {
     <div class="sub">Read each one, check the demo link opens, press send</div></div>
     <a href="https://mail.google.com/mail/u/0/#drafts" target="_blank" rel="noopener">
       <button>Open Gmail drafts</button></a></div>`);
-  if (d.whatsapp_waiting) send.push(`<div class="sendrow">
-    <div><b>${d.whatsapp_waiting}</b> WhatsApp message${d.whatsapp_waiting > 1 ? 's' : ''}
-    <div class="sub">Use the send panel below</div></div></div>`);
-  // The WhatsApp panel is always in the DOM when enabled, so the QR code and
-  // connection status are visible even when the queue is empty.
-  const waPanel = WA_ENABLED ? '<div class="wa-panel" id="wa-panel"></div>' : '';
-  $('#send').innerHTML = (send.length ? send.join('') : '') + waPanel
+  // WhatsApp messages are fetched and rendered inline — no separate panel.
+  if (WA_ENABLED) send.push('<div id="wa-inline"></div>');
+  $('#send').innerHTML = (send.length ? send.join('') : '')
     || '<div class="what">Nothing to send yet.</div>' +
        '<div class="sub">Messages are written once a lead\\u2019s demo site is built.</div>';
-  if (WA_ENABLED) loadWhatsAppPanel();
+  if (WA_ENABLED) loadWhatsAppInline();
 }
 
 // --------------------------------------------------------------- WhatsApp
@@ -1417,9 +1414,9 @@ async function refresh() {
 let waState = null;  // last /api/whatsapp/status response
 let waQueue = [];    // last /api/whatsapp/queue response
 
-async function loadWhatsAppPanel() {
-  const el = $('#wa-panel');
-  if (!el || !WA_ENABLED) return;
+async function loadWhatsAppInline() {
+  const el = $('#wa-inline');
+  if (!el) return;
 
   // --- status
   try { waState = await (await fetch('/api/whatsapp/status')).json(); }
@@ -1451,28 +1448,29 @@ async function loadWhatsAppPanel() {
     } catch {}
   }
 
-  // Message cards
+  // Message cards — each has an editable textarea and a Send button
   if (waQueue.length) {
     html += waQueue.map((m, i) => {
-      const preview = esc(m.message || '').slice(0, 200);
+      const msgText = esc(m.message || '');
       const sending = m._sending;
       const sent = m._sent;
       const failed = m._failed;
-      let row = '';
+      let actions = '';
       if (sending) {
-        row = `<span class="wa-state"><span class="wa-spin"></span>Sending\\u2026</span>`;
+        actions = `<span class="wa-state"><span class="wa-spin"></span>Sending\\u2026</span>`;
       } else if (sent) {
-        row = `<span class="wa-state ok">Sent \\u2714</span>`;
+        actions = `<span class="wa-state ok">Sent \\u2714</span>`;
       } else if (failed) {
-        row = `<span class="wa-state err">${esc(m._error || 'Failed')}</span>`;
+        actions = `<span class="wa-state err">${esc(m._error || 'Failed')}</span>
+          <button class="wa-send" onclick="retryWhatsApp(${i})">Retry</button>`;
       } else {
-        row = `<button class="wa-send" onclick="sendWhatsApp(${i}, '${esc(m.lead_id)}', '${esc(m.phone)}')">Send</button>`;
+        actions = `<button class="wa-send" onclick="sendWhatsApp(${i}, '${esc(m.lead_id)}', '${esc(m.phone)}')">Send</button>`;
       }
       return `<div class="wa-msg-card" id="wa-msg-${i}">
         <div class="wa-name">${esc(m.name)}</div>
         <div class="wa-phone">${esc(m.phone)}</div>
-        <div class="wa-text">${preview}</div>
-        <div class="wa-row">${row}</div>
+        <textarea class="wa-edit" id="wa-text-${i}" rows="4">${msgText}</textarea>
+        <div class="wa-row">${actions}</div>
       </div>`;
     }).join('');
   } else if (waState.connected) {
@@ -1488,42 +1486,58 @@ function sendWhatsApp(idx, leadId, phone) {
   const msg = waQueue[idx];
   if (!msg) return;
 
+  // Read the current text from the textarea (user may have edited it)
+  const textarea = $(`#wa-text-${idx}`);
+  const message = textarea ? textarea.value : msg.message;
+
   // First click: confirm
   if (!msg._confirming) {
     msg._confirming = true;
     const row = card.querySelector('.wa-row');
     row.innerHTML = `<span class="wa-state">Send to ${esc(phone)}?</span>
-      <button class="wa-send confirm" onclick="sendWhatsApp(${idx}, '${esc(leadId)}', '${esc(phone)}')">Yes, send</button>`;
+      <button class="wa-send confirm" onclick="sendWhatsApp(${idx}, '${esc(leadId)}', '${esc(phone)}')">Yes, send</button>
+      <button onclick="cancelSend(${idx})">Cancel</button>`;
     return;
   }
 
   // Second click: send
   msg._confirming = false;
   msg._sending = true;
-  loadWhatsAppPanel();
+  loadWhatsAppInline();
 
   fetch('/api/whatsapp/send', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({lead_id: leadId, phone: phone, message: msg.message}),
+    body: JSON.stringify({lead_id: leadId, phone: phone, message: message}),
   }).then(r => r.json()).then(d => {
     msg._sending = false;
     if (d.error) { msg._failed = true; msg._error = d.error; }
     else { msg._sent = true; }
-    loadWhatsAppPanel();
+    loadWhatsAppInline();
     refresh();  // update counts
   }).catch(e => {
     msg._sending = false;
     msg._failed = true;
     msg._error = e.message || 'Network error';
-    loadWhatsAppPanel();
+    loadWhatsAppInline();
   });
+}
+
+function cancelSend(idx) {
+  waQueue[idx]._confirming = false;
+  loadWhatsAppInline();
+}
+
+function retryWhatsApp(idx) {
+  waQueue[idx]._failed = false;
+  waQueue[idx]._error = null;
+  loadWhatsAppInline();
 }
 
 // Poll WhatsApp state every 30 seconds
 if (WA_ENABLED) {
-  loadWhatsAppPanel();
-  setInterval(loadWhatsAppPanel, 30000);
+  loadWhatsAppInline();
+  setInterval(loadWhatsAppInline, 30000);
 }
 
 async function poll() {
