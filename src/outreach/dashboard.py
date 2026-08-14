@@ -1402,11 +1402,13 @@ async function refresh() {
       <button>Open Gmail drafts</button></a></div>`);
   if (d.whatsapp_waiting) send.push(`<div class="sendrow">
     <div><b>${d.whatsapp_waiting}</b> WhatsApp message${d.whatsapp_waiting > 1 ? 's' : ''}
-    <div class="sub">Use the send panel below</div></div></div>
-    <div class="wa-panel" id="wa-panel"></div>`);
-  $('#send').innerHTML = send.length ? send.join('')
-    : '<div class="what">Nothing to send yet.</div>' +
-      '<div class="sub">Messages are written once a lead\\u2019s demo site is built.</div>';
+    <div class="sub">Use the send panel below</div></div></div>`);
+  // The WhatsApp panel is always in the DOM when enabled, so the QR code and
+  // connection status are visible even when the queue is empty.
+  const waPanel = WA_ENABLED ? '<div class="wa-panel" id="wa-panel"></div>' : '';
+  $('#send').innerHTML = (send.length ? send.join('') : '') + waPanel
+    || '<div class="what">Nothing to send yet.</div>' +
+       '<div class="sub">Messages are written once a lead\\u2019s demo site is built.</div>';
   if (WA_ENABLED) loadWhatsAppPanel();
 }
 
