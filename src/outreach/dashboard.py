@@ -922,7 +922,7 @@ def create_app(config: Config) -> Flask:
             # Only leads whose channel is WhatsApp and status is "Drafted" (not yet sent).
             channel = (row.get("Channel") or "").strip().casefold()
             status = (row.get("Status") or "").strip().casefold()
-            if channel != "whatsapp" and status != "drafted":
+            if channel != "whatsapp" or status != "drafted":
                 continue
             # Skip if already sent via the dashboard.
             wa_status = (row.get("WhatsApp Status") or "").strip().casefold()
