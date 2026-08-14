@@ -188,7 +188,7 @@ build:
 # scans a QR code once; after that, the computer sends independently.
 whatsapp:
   # Set to true to show the WhatsApp Send panel in the dashboard.
-  enabled: false
+  enabled: true
   # Port the relay listens on. Must match the port in Dashboard.bat.
   relay_port: 4099
   # Safety cap — WhatsApp's unofficial safe zone for personal accounts.
