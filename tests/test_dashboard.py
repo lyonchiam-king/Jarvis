@@ -1435,7 +1435,10 @@ def test_the_page_javascript_actually_parses():
     app = Flask(__name__)
     with app.app_context():
         page = render_template_string(
-            PAGE, campaign=config.campaign, build=config.build
+            PAGE,
+            campaign=config.campaign,
+            build=config.build,
+            whatsapp_enabled=config.outreach.whatsapp_enabled,
         )
 
     blocks = re.findall(r"<script>(.*?)</script>", page, re.S)

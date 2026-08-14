@@ -183,6 +183,19 @@ build:
   # site_builder_name: Google AI Studio
   # site_builder_url: https://aistudio.google.com/
 
+# WhatsApp sending via the Baileys sidecar relay. The relay is a small Node.js
+# process that Dashboard.bat starts alongside the Flask dashboard. Your phone
+# scans a QR code once; after that, the computer sends independently.
+whatsapp:
+  # Set to true to show the WhatsApp Send panel in the dashboard.
+  enabled: false
+  # Port the relay listens on. Must match the port in Dashboard.bat.
+  relay_port: 4099
+  # Safety cap — WhatsApp's unofficial safe zone for personal accounts.
+  max_per_day: 30
+  # Minimum seconds between sends. 15-45 is human-like; don't go below 10.
+  min_interval_seconds: 15
+
 compliance:
   # ISO 3166-1 alpha-2. Drives the outreach-law gate in compliance.py.
   country_code: MY

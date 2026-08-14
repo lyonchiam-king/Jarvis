@@ -27,3 +27,7 @@ config/campaigns/*.local.yaml
 # Generated demo pages. Build output, never edited by hand, and CLAUDE.md
 # forbids runtime writes to tracked files.
 sites/
+
+# WhatsApp session credentials -- the relay persists auth state here so a
+# restart does not require re-pairing the phone. Never commit.
+.whatsapp-session/

@@ -107,8 +107,33 @@ echo   ^>^> LEAVE THIS WINDOW OPEN while you work. ^<^<
 echo      Closing it stops the dashboard.
 echo.
 
+REM ------------------------------------------------------- WhatsApp relay
+REM Start the Baileys relay in its own window. It speaks WhatsApp's protocol
+REM so the dashboard can send messages through your phone.
+set "RELAY_PORT=4099"
+set "RELAY_DIR=whatsapp-relay"
+
+REM Check for Node.js -- needed for the relay, not for the dashboard itself.
+where node >nul 2>&1
+if "%ERRORLEVEL%"=="0" (
+    if exist "%RELAY_DIR%\node_modules" (
+        echo   WhatsApp relay: starting on port %RELAY_PORT%...
+        start "WhatsApp Relay" /MIN cmd /c "node %RELAY_DIR%/server.js"
+    ) else (
+        echo   WhatsApp relay: node_modules not found. Run:
+        echo     cd %RELAY_DIR% ^&^& npm install
+    )
+) else (
+    echo   WhatsApp relay: Node.js not found -- install it from nodejs.org
+    echo   to send WhatsApp messages from the dashboard.
+)
+
+echo.
 "%APP%" dashboard
 set "EXITCODE=%ERRORLEVEL%"
+
+REM Clean up the relay when the dashboard stops.
+taskkill /fi "WINDOWTITLE eq WhatsApp Relay" /f >nul 2>&1
 
 echo.
 if not "%EXITCODE%"=="0" (

@@ -1,0 +1,16 @@
+{
+  "name": "jarvis-whatsapp-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Baileys sidecar relay for Jarvis outreach — speaks WhatsApp's multi-device protocol so the Python dashboard can send messages through the user's own WhatsApp account.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.0",
+    "express": "^4.21.0",
+    "qrcode": "^1.5.4",
+    "pino": "^9.4.0"
+  }
+}

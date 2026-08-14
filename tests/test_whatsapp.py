@@ -1,0 +1,559 @@
+"""Tests for the WhatsApp provider and dashboard endpoints."""
+
+import json
+
+import pytest
+import requests
+import responses
+
+from outreach.config import load_config
+from outreach.dashboard import create_app
+from outreach.providers.whatsapp import SendResult, WhatsAppClient, WhatsAppError
+
+
+# ------------------------------------------------------------------ client
+
+
+class TestWhatsAppClient:
+    def test_is_connected_true_when_relay_reports_connected(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                "http://127.0.0.1:4099/status",
+                json={"connected": True, "paired": True, "daily_sent": 5},
+            )
+            client = WhatsAppClient()
+            assert client.is_connected() is True
+
+    def test_is_connected_false_on_connection_error(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                "http://127.0.0.1:4099/status",
+                body=requests.ConnectionError("refused"),
+            )
+            client = WhatsAppClient()
+            assert client.is_connected() is False
+
+    def test_is_connected_false_when_relay_says_disconnected(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                "http://127.0.0.1:4099/status",
+                json={"connected": False},
+            )
+            client = WhatsAppClient()
+            assert client.is_connected() is False
+
+    def test_get_status_returns_full_blob(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                "http://127.0.0.1:4099/status",
+                json={
+                    "connected": True,
+                    "paired": True,
+                    "daily_sent": 12,
+                    "daily_cap": 30,
+                },
+            )
+            client = WhatsAppClient()
+            status = client.get_status()
+            assert status["connected"] is True
+            assert status["daily_sent"] == 12
+
+    def test_get_status_returns_error_dict_on_failure(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                "http://127.0.0.1:4099/status",
+                body=requests.ConnectionError("refused"),
+            )
+            client = WhatsAppClient()
+            status = client.get_status()
+            assert status["connected"] is False
+            assert "error" in status
+
+    def test_get_qr_returns_data_url_when_unpaired(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                "http://127.0.0.1:4099/qr",
+                json={"qr": "data:image/png;base64,iVBORw0KGgo="},
+            )
+            client = WhatsAppClient()
+            assert client.get_qr() == "data:image/png;base64,iVBORw0KGgo="
+
+    def test_get_qr_returns_none_when_paired(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                "http://127.0.0.1:4099/qr",
+                json={"qr": None},
+            )
+            client = WhatsAppClient()
+            assert client.get_qr() is None
+
+    def test_get_qr_returns_none_on_error(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                "http://127.0.0.1:4099/qr",
+                body=requests.ConnectionError("refused"),
+            )
+            client = WhatsAppClient()
+            assert client.get_qr() is None
+
+    def test_custom_port_is_respected(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                "http://127.0.0.1:5000/status",
+                json={"connected": True},
+            )
+            client = WhatsAppClient(port=5000)
+            assert client.is_connected() is True
+
+
+class TestSendMessage:
+    def test_send_returns_result_on_success(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                "http://127.0.0.1:4099/send",
+                json={
+                    "status": "sent",
+                    "message_id": "msg-abc-123",
+                    "timestamp": "2026-08-14T10:30:00Z",
+                },
+            )
+            client = WhatsAppClient()
+            result = client.send_message("+60123456789", "Hello from COAI")
+            assert isinstance(result, SendResult)
+            assert result.status == "sent"
+            assert result.message_id == "msg-abc-123"
+
+    def test_send_raises_on_empty_phone(self):
+        client = WhatsAppClient()
+        with pytest.raises(WhatsAppError, match="phone is required"):
+            client.send_message("", "Hello")
+
+    def test_send_raises_on_whitespace_phone(self):
+        client = WhatsAppClient()
+        with pytest.raises(WhatsAppError, match="phone is required"):
+            client.send_message("   ", "Hello")
+
+    def test_send_raises_on_empty_message(self):
+        client = WhatsAppClient()
+        with pytest.raises(WhatsAppError, match="message text is required"):
+            client.send_message("+60123456789", "")
+
+    def test_send_raises_on_whitespace_message(self):
+        client = WhatsAppClient()
+        with pytest.raises(WhatsAppError, match="message text is required"):
+            client.send_message("+60123456789", "   ")
+
+    def test_send_raises_on_connection_error(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                "http://127.0.0.1:4099/send",
+                body=requests.ConnectionError("refused"),
+            )
+            client = WhatsAppClient()
+            with pytest.raises(WhatsAppError, match="relay is not running"):
+                client.send_message("+60123456789", "Hello")
+
+    def test_send_raises_on_daily_cap(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                "http://127.0.0.1:4099/send",
+                status=429,
+                json={"status": "failed", "error": "Daily cap reached"},
+            )
+            client = WhatsAppClient()
+            with pytest.raises(WhatsAppError, match="Daily cap reached"):
+                client.send_message("+60123456789", "Hello")
+
+    def test_send_raises_on_not_connected(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                "http://127.0.0.1:4099/send",
+                status=503,
+                json={"status": "failed", "error": "not connected"},
+            )
+            client = WhatsAppClient()
+            with pytest.raises(WhatsAppError, match="not connected"):
+                client.send_message("+60123456789", "Hello")
+
+    def test_send_raises_on_relay_reported_failure(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                "http://127.0.0.1:4099/send",
+                json={"status": "failed", "error": "Invalid phone number"},
+            )
+            client = WhatsAppClient()
+            with pytest.raises(WhatsAppError, match="Invalid phone number"):
+                client.send_message("+60123456789", "Hello")
+
+    def test_send_strips_phone_and_message_whitespace(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                "http://127.0.0.1:4099/send",
+                json={"status": "sent", "message_id": "x", "timestamp": "t"},
+            )
+            client = WhatsAppClient()
+            result = client.send_message("  +60123456789  ", "  Hello  ")
+            assert result.status == "sent"
+
+
+# ----------------------------------------------------------- dashboard API
+
+
+def _make_client(monkeypatch, *, sheets=None, whatsapp_enabled=True):
+    """Create a Flask test client with the outreach dashboard.
+
+    Uses the real penang-my config as a base, then overrides WhatsApp settings
+    and optionally patches the Sheets client.
+    """
+    from outreach import dashboard as dash
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    # OutreachSettings and Secrets are frozen dataclasses — use
+    # object.__setattr__ to bypass.
+    object.__setattr__(config.outreach, "whatsapp_enabled", whatsapp_enabled)
+    object.__setattr__(config.outreach, "whatsapp_relay_port", 4099)
+    # sheet_id comes from .env, not the YAML, so it is None when env_file=None.
+    # Set a fake one so the queue/send endpoints don't bail out early.
+    object.__setattr__(config.secrets, "sheet_id", "fake-sheet-id")
+
+    if sheets is not None:
+        monkeypatch.setattr(dash, "_sheets_client", lambda c: sheets)
+
+    return create_app(config).test_client()
+
+
+class TestWhatsAppStatusEndpoint:
+    def test_returns_disabled_when_not_enabled(self, monkeypatch):
+        client = _make_client(monkeypatch, whatsapp_enabled=False)
+        resp = client.get("/api/whatsapp/status")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data == {"enabled": False}
+
+    def test_returns_relay_status_when_enabled(self, monkeypatch):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                "http://127.0.0.1:4099/status",
+                json={"connected": True, "paired": True, "daily_sent": 3},
+            )
+            client = _make_client(monkeypatch)
+            resp = client.get("/api/whatsapp/status")
+            assert resp.status_code == 200
+            data = json.loads(resp.data)
+            assert data["enabled"] is True
+            assert data["connected"] is True
+
+    def test_returns_error_when_relay_unreachable(self, monkeypatch):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                "http://127.0.0.1:4099/status",
+                body=requests.ConnectionError("refused"),
+            )
+            client = _make_client(monkeypatch)
+            resp = client.get("/api/whatsapp/status")
+            assert resp.status_code == 200
+            data = json.loads(resp.data)
+            assert data["connected"] is False
+
+
+class TestWhatsAppQrEndpoint:
+    def test_returns_null_when_not_enabled(self, monkeypatch):
+        client = _make_client(monkeypatch, whatsapp_enabled=False)
+        resp = client.get("/api/whatsapp/qr")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data == {"qr": None}
+
+    def test_returns_qr_when_unpaired(self, monkeypatch):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                "http://127.0.0.1:4099/qr",
+                json={"qr": "data:image/png;base64,ABC123"},
+            )
+            client = _make_client(monkeypatch)
+            resp = client.get("/api/whatsapp/qr")
+            assert resp.status_code == 200
+            data = json.loads(resp.data)
+            assert data["qr"] == "data:image/png;base64,ABC123"
+
+    def test_returns_null_on_relay_error(self, monkeypatch):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                "http://127.0.0.1:4099/qr",
+                body=requests.ConnectionError("refused"),
+            )
+            client = _make_client(monkeypatch)
+            resp = client.get("/api/whatsapp/qr")
+            assert resp.status_code == 200
+            data = json.loads(resp.data)
+            assert data["qr"] is None
+
+
+class TestWhatsAppQueueEndpoint:
+    def test_returns_empty_when_no_sheet(self, monkeypatch):
+        config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+        object.__setattr__(config.outreach, "whatsapp_enabled", True)
+        object.__setattr__(config.secrets, "sheet_id", None)
+        client = create_app(config).test_client()
+        resp = client.get("/api/whatsapp/queue")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data == {"queue": []}
+
+    def test_returns_empty_when_sheet_has_no_whatsapp_rows(self, monkeypatch):
+        from outreach import schema
+
+        class FakeSheets:
+            def read_rows(self, tab):
+                if tab is schema.OUTREACH_LOG:
+                    return {}
+                if tab is schema.LEADS:
+                    return {}
+                return {}
+
+        client = _make_client(monkeypatch, sheets=FakeSheets())
+        resp = client.get("/api/whatsapp/queue")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data == {"queue": []}
+
+    def test_returns_whatsapp_drafts_with_phone(self, monkeypatch):
+        from outreach import schema
+
+        class FakeSheets:
+            def read_rows(self, tab):
+                if tab is schema.OUTREACH_LOG:
+                    return {
+                        "lead-1": (
+                            2,
+                            {
+                                "Lead ID": "lead-1",
+                                "Business Name": "Alice Salon",
+                                "Channel": "WhatsApp",
+                                "Status": "Drafted",
+                                "WhatsApp Message": "Hi Alice, we built you a site!",
+                                "WhatsApp Status": "",
+                            },
+                        ),
+                        "lead-2": (
+                            3,
+                            {
+                                "Lead ID": "lead-2",
+                                "Business Name": "Bob Cuts",
+                                "Channel": "Email",
+                                "Status": "Drafted",
+                                "WhatsApp Message": "Should not appear",
+                            },
+                        ),
+                    }
+                if tab is schema.LEADS:
+                    return {
+                        "lead-1": (
+                            2,
+                            {
+                                "Lead ID": "lead-1",
+                                "Business Name": "Alice Salon",
+                                "Phone": "+6012-3456789",
+                            },
+                        ),
+                    }
+                return {}
+
+        client = _make_client(monkeypatch, sheets=FakeSheets())
+        resp = client.get("/api/whatsapp/queue")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert len(data["queue"]) == 1
+        assert data["queue"][0]["lead_id"] == "lead-1"
+        assert data["queue"][0]["name"] == "Alice Salon"
+        assert data["queue"][0]["phone"] == "+6012-3456789"
+        assert "we built you a site" in data["queue"][0]["message"]
+
+    def test_skips_already_sent_whatsapp(self, monkeypatch):
+        from outreach import schema
+
+        class FakeSheets:
+            def read_rows(self, tab):
+                if tab is schema.OUTREACH_LOG:
+                    return {
+                        "lead-1": (
+                            2,
+                            {
+                                "Lead ID": "lead-1",
+                                "Business Name": "Alice Salon",
+                                "Channel": "WhatsApp",
+                                "Status": "Drafted",
+                                "WhatsApp Message": "Hi Alice!",
+                                "WhatsApp Status": "sent",
+                            },
+                        ),
+                    }
+                if tab is schema.LEADS:
+                    return {
+                        "lead-1": (
+                            2,
+                            {"Lead ID": "lead-1", "Phone": "+60123456789"},
+                        ),
+                    }
+                return {}
+
+        client = _make_client(monkeypatch, sheets=FakeSheets())
+        resp = client.get("/api/whatsapp/queue")
+        data = json.loads(resp.data)
+        assert data["queue"] == []
+
+    def test_skips_leads_without_phone(self, monkeypatch):
+        from outreach import schema
+
+        class FakeSheets:
+            def read_rows(self, tab):
+                if tab is schema.OUTREACH_LOG:
+                    return {
+                        "lead-1": (
+                            2,
+                            {
+                                "Lead ID": "lead-1",
+                                "Business Name": "No Phone Salon",
+                                "Channel": "WhatsApp",
+                                "Status": "Drafted",
+                                "WhatsApp Message": "Hi!",
+                                "WhatsApp Status": "",
+                            },
+                        ),
+                    }
+                if tab is schema.LEADS:
+                    return {
+                        "lead-1": (
+                            2,
+                            {"Lead ID": "lead-1", "Phone": ""},
+                        ),
+                    }
+                return {}
+
+        client = _make_client(monkeypatch, sheets=FakeSheets())
+        resp = client.get("/api/whatsapp/queue")
+        data = json.loads(resp.data)
+        assert data["queue"] == []
+
+
+class TestWhatsAppSendEndpoint:
+    def test_returns_error_when_not_enabled(self, monkeypatch):
+        client = _make_client(monkeypatch, whatsapp_enabled=False)
+        resp = client.post(
+            "/api/whatsapp/send",
+            json={"lead_id": "x", "phone": "+60", "message": "Hi"},
+        )
+        assert resp.status_code == 400
+        data = json.loads(resp.data)
+        assert "not enabled" in data["error"]
+
+    def test_returns_error_when_lead_id_missing(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        resp = client.post(
+            "/api/whatsapp/send",
+            json={"phone": "+60", "message": "Hi"},
+        )
+        assert resp.status_code == 400
+        data = json.loads(resp.data)
+        assert "lead_id" in data["error"]
+
+    def test_returns_error_when_phone_missing(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        resp = client.post(
+            "/api/whatsapp/send",
+            json={"lead_id": "x", "message": "Hi"},
+        )
+        assert resp.status_code == 400
+        data = json.loads(resp.data)
+        assert "phone" in data["error"]
+
+    def test_returns_error_when_message_missing(self, monkeypatch):
+        client = _make_client(monkeypatch)
+        resp = client.post(
+            "/api/whatsapp/send",
+            json={"lead_id": "x", "phone": "+60"},
+        )
+        assert resp.status_code == 400
+        data = json.loads(resp.data)
+        assert "message" in data["error"]
+
+    def test_sends_and_records_success(self, monkeypatch):
+        updates = {}
+
+        class FakeSheets:
+            def update_column(self, tab, col, mapping):
+                updates[col] = mapping
+
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                "http://127.0.0.1:4099/send",
+                json={
+                    "status": "sent",
+                    "message_id": "msg-xyz",
+                    "timestamp": "2026-08-14T10:30:00Z",
+                },
+            )
+            client = _make_client(monkeypatch, sheets=FakeSheets())
+            resp = client.post(
+                "/api/whatsapp/send",
+                json={
+                    "lead_id": "lead-1",
+                    "phone": "+60123456789",
+                    "message": "Hello!",
+                },
+            )
+            assert resp.status_code == 200
+            data = json.loads(resp.data)
+            assert data.get("status") == "sent"
+            assert updates.get("WhatsApp Status") == {"lead-1": "sent"}
+            assert updates.get("WhatsApp Sent At") == {
+                "lead-1": "2026-08-14T10:30:00Z"
+            }
+
+    def test_records_failure_in_sheet(self, monkeypatch):
+        updates = {}
+
+        class FakeSheets:
+            def update_column(self, tab, col, mapping):
+                updates[col] = mapping
+
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                "http://127.0.0.1:4099/send",
+                status=429,
+                json={"status": "failed", "error": "Daily cap reached"},
+            )
+            client = _make_client(monkeypatch, sheets=FakeSheets())
+            resp = client.post(
+                "/api/whatsapp/send",
+                json={
+                    "lead_id": "lead-1",
+                    "phone": "+60123456789",
+                    "message": "Hello!",
+                },
+            )
+            assert resp.status_code == 200
+            data = json.loads(resp.data)
+            assert "Daily cap" in data["error"]
+            assert updates.get("WhatsApp Status") == {"lead-1": "failed"}

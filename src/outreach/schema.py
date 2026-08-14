@@ -133,6 +133,10 @@ OUTREACH_LOG = Tab(
         Column("Gmail Draft Link"),
         Column("WhatsApp Message"),
         Column("Drafted At"),
+        # Append-only — these two are written by the dashboard when the user
+        # presses Send, never by a stage.
+        Column("WhatsApp Sent At", note="ISO timestamp set by the dashboard"),
+        Column("WhatsApp Status", note="pending | sent | delivered | read | failed"),
         # --- yours below this line ---
         Column("Status", manual=True, note="Drafted | Sent | Replied | Bounced"),
         Column("Sent At", manual=True),

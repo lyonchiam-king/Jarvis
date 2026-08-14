@@ -407,7 +407,12 @@ def create_app(config: Config) -> Flask:
 
     @app.route("/")
     def index():
-        return render_template_string(PAGE, campaign=current().campaign, build=current().build)
+        return render_template_string(
+            PAGE,
+            campaign=current().campaign,
+            build=current().build,
+            whatsapp_enabled=current().outreach.whatsapp_enabled,
+        )
 
     @app.route("/guide")
     def guide():
@@ -869,6 +874,146 @@ def create_app(config: Config) -> Flask:
     def api_log():
         return jsonify({"running": runner.running, "lines": list(runner.lines)})
 
+    # -------------------------------------------------------------- WhatsApp
+
+    @app.route("/api/whatsapp/status")
+    def api_whatsapp_status():
+        """Relay connection state + daily counters."""
+        c = current()
+        if not c.outreach.whatsapp_enabled:
+            return jsonify({"enabled": False})
+        try:
+            from .providers.whatsapp import WhatsAppClient
+
+            client = WhatsAppClient(port=c.outreach.whatsapp_relay_port)
+            return jsonify({"enabled": True, **client.get_status()})
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"enabled": True, "connected": False, "error": str(exc)})
+
+    @app.route("/api/whatsapp/qr")
+    def api_whatsapp_qr():
+        """Base64 PNG of the pairing QR, or null if already paired."""
+        c = current()
+        if not c.outreach.whatsapp_enabled:
+            return jsonify({"qr": None})
+        try:
+            from .providers.whatsapp import WhatsAppClient
+
+            client = WhatsAppClient(port=c.outreach.whatsapp_relay_port)
+            return jsonify({"qr": client.get_qr()})
+        except Exception:
+            return jsonify({"qr": None})
+
+    @app.route("/api/whatsapp/queue")
+    def api_whatsapp_queue():
+        """Leads waiting for WhatsApp send, with phone + message text."""
+        c = current()
+        if not c.secrets.sheet_id:
+            return jsonify({"queue": []})
+        try:
+            sheets = _sheets_client(c)
+            outreach = sheets.read_rows(schema.OUTREACH_LOG)
+            leads = sheets.read_rows(schema.LEADS)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+
+        queue: list[dict[str, str]] = []
+        for lead_id, (_n, row) in outreach.items():
+            # Only leads whose channel is WhatsApp and status is "Drafted" (not yet sent).
+            channel = (row.get("Channel") or "").strip().casefold()
+            status = (row.get("Status") or "").strip().casefold()
+            if channel != "whatsapp" and status != "drafted":
+                continue
+            # Skip if already sent via the dashboard.
+            wa_status = (row.get("WhatsApp Status") or "").strip().casefold()
+            if wa_status in ("sent", "delivered", "read"):
+                continue
+
+            lead = leads.get(lead_id, (0, {}))[1]
+            phone = lead.get("Phone", "").strip()
+            if not phone:
+                continue
+
+            queue.append(
+                {
+                    "lead_id": lead_id,
+                    "name": row.get("Business Name") or lead.get("Business Name", ""),
+                    "phone": phone,
+                    "message": row.get("WhatsApp Message", ""),
+                }
+            )
+
+        return jsonify({"queue": queue})
+
+    @app.route("/api/whatsapp/send", methods=["POST"])
+    def api_whatsapp_send():
+        """Send one WhatsApp message and record the result in the Sheet."""
+        c = current()
+        if not c.outreach.whatsapp_enabled:
+            return jsonify({"error": "WhatsApp sending is not enabled"}), 400
+
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        phone = (payload.get("phone") or "").strip()
+        message = (payload.get("message") or "").strip()
+
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+        if not phone:
+            return jsonify({"error": "phone is required"}), 400
+        if not message:
+            return jsonify({"error": "message is required"}), 400
+
+        from .providers.whatsapp import WhatsAppClient, WhatsAppError
+
+        try:
+            client = WhatsAppClient(port=c.outreach.whatsapp_relay_port)
+            result = client.send_message(phone, message)
+        except WhatsAppError as exc:
+            # Record the failure so the user sees it in the Sheet.
+            try:
+                sheets = _sheets_client(c)
+                sheets.update_column(
+                    schema.OUTREACH_LOG,
+                    "WhatsApp Status",
+                    {lead_id: "failed"},
+                )
+            except Exception:
+                pass
+            return jsonify({"error": str(exc)}), 200
+
+        # Record success in the Sheet.
+        try:
+            sheets = _sheets_client(c)
+            sheets.update_column(
+                schema.OUTREACH_LOG,
+                "WhatsApp Status",
+                {lead_id: result.status},
+            )
+            sheets.update_column(
+                schema.OUTREACH_LOG,
+                "WhatsApp Sent At",
+                {lead_id: result.timestamp},
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(
+                {
+                    "error": (
+                        f"Message sent but could not update Sheet: {exc}. "
+                        "The message was delivered — mark it manually."
+                    )
+                }
+            ), 200
+
+        return jsonify(
+            {
+                "ok": True,
+                "message_id": result.message_id,
+                "status": result.status,
+                "timestamp": result.timestamp,
+            }
+        )
+
     return app
 
 
@@ -1035,6 +1180,37 @@ PAGE = """<!doctype html>
   .sendrow { display:flex; justify-content:space-between; align-items:center;
              gap:12px; padding:9px 0; border-bottom:1px solid var(--line); }
   .sendrow:last-child { border-bottom:0; }
+  /* ---- WhatsApp panel ---- */
+  .wa-panel { margin-top:12px; }
+  .wa-status { display:flex; align-items:center; gap:8px; margin-bottom:12px;
+               font-size:14px; }
+  .wa-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+  .wa-dot.on { background:var(--ok); }
+  .wa-dot.off { background:var(--accent); }
+  .wa-dot.wait { background:var(--warn); }
+  .wa-qr-wrap { text-align:center; margin:12px 0; }
+  .wa-qr-wrap img { max-width:220px; border-radius:8px; border:1px solid var(--line); }
+  .wa-qr-wrap .sub { margin-top:6px; }
+  .wa-msg-card { border:1px solid var(--line); border-radius:8px; padding:12px;
+                 margin-bottom:10px; }
+  .wa-msg-card .wa-name { font-weight:600; font-size:15px; }
+  .wa-msg-card .wa-phone { font-size:13px; color:var(--muted); margin-bottom:6px; }
+  .wa-msg-card .wa-text { font-size:13px; white-space:pre-wrap; max-height:80px;
+                          overflow-y:auto; background:var(--bg); padding:8px 10px;
+                          border-radius:6px; margin-bottom:10px; line-height:1.45; }
+  .wa-msg-card .wa-row { display:flex; justify-content:space-between; align-items:center;
+                         gap:10px; }
+  .wa-msg-card .wa-state { font-size:13px; }
+  .wa-msg-card .wa-state.ok { color:var(--ok); }
+  .wa-msg-card .wa-state.err { color:var(--accent); }
+  button.wa-send { background:var(--ok); border-color:var(--ok); color:#fff; }
+  button.wa-send:hover:not(:disabled) { opacity:.9; color:#fff; }
+  button.wa-send.confirm { background:var(--accent); border-color:var(--accent); }
+  .wa-spin { display:inline-block; width:14px; height:14px; border:2px solid transparent;
+             border-top-color:currentColor; border-radius:50%;
+             animation:wa-spin .6s linear infinite; vertical-align:-2px;
+             margin-right:4px; }
+  @keyframes wa-spin { to { transform:rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -1156,6 +1332,7 @@ const $ = s => document.querySelector(s);
 // not per-business fields, so they live here rather than on each queue card.
 const SITE_BUILDER = {{ build.site_builder_name|tojson }};
 const SITE_BUILDER_URL = {{ build.site_builder_url|tojson }};
+const WA_ENABLED = {{ whatsapp_enabled|tojson }};
 
 function card(n, label, note) {
   return `<div class="card">
@@ -1201,7 +1378,7 @@ async function refresh() {
   if (d.emails_waiting) todo.push(card(d.emails_waiting, 'emails to send',
     'Open Gmail drafts, read, press send'));
   if (d.whatsapp_waiting) todo.push(card(d.whatsapp_waiting, 'WhatsApp to send',
-    'Copy from the Outreach Log tab'));
+    'Send panel below'));
   if (d.to_research) todo.push(card(d.to_research, 'leads to research',
     'About 6&cent; each'));
   if (d.to_brief) todo.push(card(d.to_brief, 'need briefs written', 'Free to generate'));
@@ -1225,12 +1402,126 @@ async function refresh() {
       <button>Open Gmail drafts</button></a></div>`);
   if (d.whatsapp_waiting) send.push(`<div class="sendrow">
     <div><b>${d.whatsapp_waiting}</b> WhatsApp message${d.whatsapp_waiting > 1 ? 's' : ''}
-    <div class="sub">Copy each from the Outreach Log tab, then mark it Sent</div></div>
-    <a href="${d.sheet_url}" target="_blank" rel="noopener">
-      <button>Open Sheet</button></a></div>`);
+    <div class="sub">Use the send panel below</div></div></div>
+    <div class="wa-panel" id="wa-panel"></div>`);
   $('#send').innerHTML = send.length ? send.join('')
     : '<div class="what">Nothing to send yet.</div>' +
       '<div class="sub">Messages are written once a lead\\u2019s demo site is built.</div>';
+  if (WA_ENABLED) loadWhatsAppPanel();
+}
+
+// --------------------------------------------------------------- WhatsApp
+
+let waState = null;  // last /api/whatsapp/status response
+let waQueue = [];    // last /api/whatsapp/queue response
+
+async function loadWhatsAppPanel() {
+  const el = $('#wa-panel');
+  if (!el || !WA_ENABLED) return;
+
+  // --- status
+  try { waState = await (await fetch('/api/whatsapp/status')).json(); }
+  catch { waState = {connected: false, error: 'Could not reach relay'}; }
+
+  // --- queue
+  try { waQueue = (await (await fetch('/api/whatsapp/queue')).json()).queue || []; }
+  catch { waQueue = []; }
+
+  let html = '';
+
+  // Connection indicator
+  const dot = waState.connected ? 'on' : waState.paired === false ? 'wait' : 'off';
+  const label = waState.connected
+    ? `Connected \\u2014 ${waState.daily_sent || 0} / ${waState.daily_cap || 30} sent today`
+    : waState.error || 'Relay not running';
+  html += `<div class="wa-status"><span class="wa-dot ${dot}"></span>${esc(label)}</div>`;
+
+  // QR when unpaired
+  if (!waState.connected && !waState.paired) {
+    try {
+      const qr = await (await fetch('/api/whatsapp/qr')).json();
+      if (qr.qr) {
+        html += `<div class="wa-qr-wrap">
+          <img src="${qr.qr}" alt="WhatsApp pairing QR">
+          <div class="sub">Open WhatsApp on your phone \\u2192 Linked Devices \\u2192 Link a Device, then scan this code.</div>
+        </div>`;
+      }
+    } catch {}
+  }
+
+  // Message cards
+  if (waQueue.length) {
+    html += waQueue.map((m, i) => {
+      const preview = esc(m.message || '').slice(0, 200);
+      const sending = m._sending;
+      const sent = m._sent;
+      const failed = m._failed;
+      let row = '';
+      if (sending) {
+        row = `<span class="wa-state"><span class="wa-spin"></span>Sending\\u2026</span>`;
+      } else if (sent) {
+        row = `<span class="wa-state ok">Sent \\u2714</span>`;
+      } else if (failed) {
+        row = `<span class="wa-state err">${esc(m._error || 'Failed')}</span>`;
+      } else {
+        row = `<button class="wa-send" onclick="sendWhatsApp(${i}, '${esc(m.lead_id)}', '${esc(m.phone)}')">Send</button>`;
+      }
+      return `<div class="wa-msg-card" id="wa-msg-${i}">
+        <div class="wa-name">${esc(m.name)}</div>
+        <div class="wa-phone">${esc(m.phone)}</div>
+        <div class="wa-text">${preview}</div>
+        <div class="wa-row">${row}</div>
+      </div>`;
+    }).join('');
+  } else if (waState.connected) {
+    html += '<div class="sub">No messages waiting to send.</div>';
+  }
+
+  el.innerHTML = html;
+}
+
+function sendWhatsApp(idx, leadId, phone) {
+  const card = $(`#wa-msg-${idx}`);
+  if (!card) return;
+  const msg = waQueue[idx];
+  if (!msg) return;
+
+  // First click: confirm
+  if (!msg._confirming) {
+    msg._confirming = true;
+    const row = card.querySelector('.wa-row');
+    row.innerHTML = `<span class="wa-state">Send to ${esc(phone)}?</span>
+      <button class="wa-send confirm" onclick="sendWhatsApp(${idx}, '${esc(leadId)}', '${esc(phone)}')">Yes, send</button>`;
+    return;
+  }
+
+  // Second click: send
+  msg._confirming = false;
+  msg._sending = true;
+  loadWhatsAppPanel();
+
+  fetch('/api/whatsapp/send', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({lead_id: leadId, phone: phone, message: msg.message}),
+  }).then(r => r.json()).then(d => {
+    msg._sending = false;
+    if (d.error) { msg._failed = true; msg._error = d.error; }
+    else { msg._sent = true; }
+    loadWhatsAppPanel();
+    refresh();  // update counts
+  }).catch(e => {
+    msg._sending = false;
+    msg._failed = true;
+    msg._error = e.message || 'Network error';
+    loadWhatsAppPanel();
+  });
+}
+
+// Poll WhatsApp state every 30 seconds
+if (WA_ENABLED) {
+  loadWhatsAppPanel();
+  setInterval(loadWhatsAppPanel, 30000);
 }
 
 async function poll() {
@@ -1563,8 +1854,8 @@ function drawReview() {
     </div>
     <div class="facts">${facts.join('<span>&middot;</span>')}</div>
     ${notes.join('')}
-    <details>
-      <summary class="sub">Read the full brief before approving</summary>
+    <details open>
+      <summary class="sub">The full brief &mdash; read it before approving</summary>
       <textarea id="rp" readonly style="margin-top:9px">${esc(q.prompt)}</textarea>
     </details>
     <div class="row" style="margin-top:12px">
@@ -1575,28 +1866,56 @@ function drawReview() {
     </div>
     <div class="row" style="margin-top:10px">
       <button onclick="regen('')">Rewrite this brief</button>
-      <button onclick="regenAsk()">Rewrite with my notes&hellip;</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <input id="rn" placeholder="Notes for the rewrite &mdash; more upmarket, focus on weddings&hellip;"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();regenNotes()}">
+      <button onclick="regenNotes()">Rewrite with notes</button>
     </div>
     <p class="hint">Not happy with it? <b>Rewrite this brief</b> asks again from
       scratch &mdash; the model is not deterministic, so you get a different
-      take, not the same one back. <b>Rewrite with my notes</b> lets you say what
-      to change: &ldquo;more upmarket&rdquo;, &ldquo;focus on the wedding
-      packages&rdquo;, &ldquo;less formal, it is a family shop&rdquo;. One model
-      call either way, and your notes are used once, not remembered.</p>
-    <p class="hint">Approving queues it for step 3. Nothing is spent until you
+      take, not the same one back. Or type what to change in the box above
+      (&ldquo;more upmarket&rdquo;, &ldquo;focus on the wedding packages&rdquo;,
+      &ldquo;less formal, it is a family shop&rdquo;) and press <b>Rewrite with
+      notes</b>. One model call either way; your notes are used once, not
+      remembered.</p>
+    <p class="hint">Keys: <b>A</b> approve &middot; <b>S</b> skip &middot;
+      <b>&rarr;</b> decide later &middot; <b>R</b> rewrite &middot; <b>N</b> add
+      notes. Approving queues it for step 3. Nothing is spent until you
       build it there.</p>
   </div>`;
 }
 
-async function regenAsk() {
-  const notes = prompt('What should change about this brief?\\n\\ne.g. more upmarket, focus on the wedding packages, less formal');
-  if (notes === null) return;          // cancelled -- do nothing, spend nothing
-  if (!notes.trim()) return;
-  regen(notes.trim());
+function regenNotes() {
+  const el = document.getElementById('rn');
+  if (!el) return;
+  const notes = el.value.trim();
+  if (!notes) { el.focus(); return; }   // empty -- point him at the box, spend nothing
+  regen(notes);
 }
 
+// Single-key review. Skipped while he is typing in the notes box or selecting
+// text in the brief, and whenever a modifier key is held -- so Ctrl+S (save
+// page) and Ctrl+R (reload) keep their normal meaning.
+document.addEventListener('keydown', (e) => {
+  if (!review.length) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === 'a') { e.preventDefault(); decide('approved'); }
+  else if (k === 's') { e.preventDefault(); decide('skip'); }
+  else if (k === 'arrowright') { e.preventDefault(); move(1); }
+  else if (k === 'r') { e.preventDefault(); regen(''); }
+  else if (k === 'n') {
+    e.preventDefault();
+    const el = document.getElementById('rn');
+    if (el) el.focus();
+  }
+});
+
 async function regen(notes) {
-  const q = review[ri];
+  const q = review[at];
   if (!q) return;
   $('#rmsg').textContent = notes ? 'Rewriting with your notes\u2026' : 'Rewriting\u2026';
   let d;

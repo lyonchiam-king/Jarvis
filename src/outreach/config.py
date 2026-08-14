@@ -151,6 +151,17 @@ class OutreachSettings:
     # a link to theirs closes that gap in a way no sentence does. Leave this
     # false to send research-angle emails without a site.
     require_site: bool = False
+    # WhatsApp-specific settings. The dashboard's WhatsApp Send panel uses a
+    # separate LLM (default: local Ollama) to draft messages, independent of
+    # the research provider that writes email copy.
+    whatsapp_provider: str = "ollama"
+    whatsapp_model: str = ""            # blank = use whatever Ollama is running
+    whatsapp_daily_cap: int = 15        # max wa.me links per day
+    # WhatsApp sending via the Baileys sidecar relay.
+    whatsapp_enabled: bool = False
+    whatsapp_relay_port: int = 4099
+    whatsapp_max_per_day: int = 30
+    whatsapp_min_interval_seconds: int = 15
 
 
 @dataclass(frozen=True)
@@ -432,6 +443,7 @@ def load_config(
     )
 
     o = raw.get("outreach") or {}
+    wa = o.get("whatsapp") or {}
     outreach = OutreachSettings(
         sender_name=str(o.get("sender_name", "")),
         sender_title=str(o.get("sender_title", "")),
@@ -443,6 +455,13 @@ def load_config(
             o.get("opt_out_note")
             or OutreachSettings.opt_out_note
         ),
+        whatsapp_provider=str(wa.get("provider", "ollama")),
+        whatsapp_model=str(wa.get("model", "")),
+        whatsapp_daily_cap=int(wa.get("daily_cap", 15)),
+        whatsapp_enabled=bool(wa.get("enabled", False)),
+        whatsapp_relay_port=int(wa.get("relay_port", 4099)),
+        whatsapp_max_per_day=int(wa.get("max_per_day", 30)),
+        whatsapp_min_interval_seconds=int(wa.get("min_interval_seconds", 15)),
     )
 
     lv = raw.get("lovable") or {}
