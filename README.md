@@ -23,7 +23,7 @@ briefs, site build, outreach drafts. Nothing sends automatically.
   └───────┬───────┘      (automation never touches those columns)
           │
           ├─► Research tab      reviews + social → structured brief
-          ├─► Site Briefs tab   ready-to-paste Lovable prompt
+          ├─► Site Briefs tab   ready-to-paste site builder prompt
           ├─► Outreach Log tab  Gmail draft + WhatsApp text
           └─► Errors tab        anything that failed, per lead
 ```
@@ -102,7 +102,7 @@ outreach run discovery --dry-run   # see what you'd get, write nothing
 outreach run discovery             # write to the Sheet
 outreach run research --limit 5    # research five leads, read the briefs
 outreach run research              # then the full batch
-outreach run site-brief            # Lovable prompts into the Sheet
+outreach run site-brief            # site builder prompts into the Sheet
 outreach run outreach-draft --dry-run   # see the copy before spending
 outreach run outreach-draft        # drafts land in your Gmail
 ```
@@ -234,8 +234,8 @@ https://www.googleapis.com/auth/gmail.compose   create drafts
 | `outreach run discovery` | **Stage 1.** Finds no-website businesses, writes to `Leads`. |
 | `outreach run discovery --dry-run` | Searches and reports without touching the Sheet or needing Google credentials. |
 | `outreach run research` | **Stage 2.** Pulls reviews + social, writes a brief per lead to `Research`. |
-| `outreach run site-brief` | **Stage 4.** Writes a ready-to-paste Lovable prompt per researched lead. Free — no builds. |
-| `outreach run site-build` | **Stage 4b.** Builds the sites you marked `Approved`. Spends Lovable credits. |
+| `outreach run site-brief` | **Stage 4.** Writes a ready-to-paste site builder prompt per researched lead. Free — no builds. |
+| `outreach run site-build` | **Stage 4b.** Builds the sites you marked `Approved` via your site builder. |
 | `outreach run outreach-draft` | **Stage 5.** Creates Gmail **drafts** and WhatsApp text. Sends nothing. |
 | `--limit N` | On any stage: process fewer than the batch size. Good for a first trial. |
 | `--dry-run` | On `discovery` and `outreach-draft`: do the work, write nothing. |
@@ -315,7 +315,7 @@ it.
 ### Other tabs
 
 - **`Research`** — tone, services, price tier, customer praise/pain points, suggested website angle, social handle/bio/post, **`Social Profiles`** (every profile found, as `platform handle url`, one per line), email found and where it came from
-- **`Site Briefs`** — the Lovable prompt, plus a manual `Approval Status` column you set to `Approved` before anything is built
+- **`Site Briefs`** — the site builder prompt, plus a manual `Approval Status` column you set to `Approved` before anything is built
 - **`Outreach Log`** — Gmail draft ID and link, WhatsApp message text to copy, plus manual `Status` / `Sent At` / `Notes`
 - **`Errors`** — timestamp, stage, lead, error type, message, whether retrying could help
 
@@ -384,22 +384,23 @@ Business Profile and every social profile** and telling it to study them before
 designing — real photos, real colours, the words customers actually use — and
 to say so rather than invent if it cannot open one.
 
-Motion is specified in what Lovable can actually execute: Framer Motion ships
-with its stack. Transform and opacity only, IntersectionObserver reveals that
-leave content readable if they never fire, `prefers-reduced-motion` honoured,
-and an explicit refusal of scroll-jacking, load gates, cursor effects and
-WebGL. Those win galleries; they lose bookings from someone on 4G. The
-performance budget (LCP under 2.5s, no layout shift) is stated as outranking
-every visual idea in the brief. Same spec in, same
-prompt out — so the prompt is reviewable and testable rather than a one-off
-generation.
+Motion is specified in what a modern site builder can execute: transform and
+opacity only, IntersectionObserver reveals that leave content readable if they
+never fire, `prefers-reduced-motion` honoured, and an explicit refusal of
+scroll-jacking, load gates, cursor effects and WebGL. Those win galleries; they
+lose bookings from someone on 4G. The performance budget (LCP under 2.5s, no
+layout shift) is stated as outranking every visual idea in the brief. Same spec
+in, same prompt out — so the prompt is reviewable and testable rather than a
+one-off generation.
 
 The prompt lands in the `Site Briefs` tab with `Approval Status` seeded to
 `Pending`, or to `Approved` when `lovable.auto_approve: true` — the demo-first
 setting the Penang campaign ships with, since approving each lead one at a time
-is pure friction when the plan is to build for all of them. Either way
-**this command never spends Lovable credits**; a test asserts it even with
-auto-approve on. `Approved` means queued, not built.
+is pure friction when the plan is to build for all of them. (The config key is
+named `lovable.*` for legacy reasons; it controls the approval gate regardless
+of which builder you use.) Either way **this command costs nothing beyond the
+model call**; a test asserts it even with auto-approve on. `Approved` means
+queued, not built.
 
 The seed is written once on insert and never rewritten, so turning
 `auto_approve` on later cannot retroactively approve a lead you already
@@ -411,33 +412,51 @@ declined.
 outreach run site-brief --rewrite
 ```
 
-A normal `site-brief` run skips any lead that already has a row in the **Site Briefs** tab. When the prompt template itself improves, `--rewrite` regenerates those briefs from the new template. **The model is non-deterministic** — it writes a fresh brief from scratch rather than editing the old one, so a prompt you already read and approved will come back different and needs re-review.
+A normal `site-brief` run skips any lead that already has a row in the **Site
+Briefs** tab. When the prompt template itself improves, `--rewrite` regenerates
+those briefs from the new template. **The model is non-deterministic** — it
+writes a fresh brief from scratch rather than editing the old one, so a prompt
+you already read and approved will come back different and needs re-review.
 
-The command skips any row with a `Lovable Project ID` (a site already built), so it cannot orphan a live site. It costs the same as a normal brief — one model call per lead — and preserves `Approval Status`, the Preview URL, and the Created At timestamp.
+The command skips any row with a `Project ID` (a site already built), so it
+cannot orphan a live site. It costs the same as a normal brief — one model call
+per lead — and preserves `Approval Status`, the Preview URL, and the Created At
+timestamp.
 
-If interrupted midway through a batch, a re-run may regenerate a handful of leads twice, since there's no marker on the row for "already rewritten today". Use `--limit` the same way: test small first.
+If interrupted midway through a batch, a re-run may regenerate a handful of
+leads twice, since there's no marker on the row for "already rewritten today".
+Use `--limit` the same way: test small first.
 
 ### Stage 4b — actually building
 
-```bash
-outreach run site-build
-```
+The site builder is a separate tool — the pipeline can't drive it directly.
+The workflow is:
 
-Three independent gates stand in front of any spend:
+1. **Copy the prompt** from the `Site Briefs` tab
+2. **Paste it into your site builder** (Google AI Studio is the default)
+3. **Paste the finished site URL back** into the Sheet and mark it built
+
+**Marking it built is not bookkeeping.** That URL is what goes in the email,
+and marking it is what releases the lead for drafting — forget it and the
+message never gets written.
+
+The dashboard's step 3 handles this flow: **Copy prompt** → **Open your site
+builder** → paste → build → paste the URL back → **Mark as built**. One lead
+at a time, deliberate, with your eyes on every site before it reaches a
+stranger.
+
+Three gates stand in front of any build:
 
 1. `lovable.enabled: true` in the campaign config *(default: false)*
 2. `Approval Status` reads `Approved`. With `auto_approve` off this is your
    per-lead gate; with it on, the gate inverts — set a row to `Skip` and it is
    never built. Either way the column is yours to edit and nothing rewrites it.
-3. An interactive confirmation per project *(unless `require_confirmation: false`)*
+3. The build step itself is manual — you paste the prompt and you see the
+   result. No automation can skip this.
 
-Gate 3 is the one that never moves: no run spends credits without asking, no
-matter how the approval column was seeded.
-
-With the Lovable connector absent, `site-build` tells you how to connect it
-rather than failing obscurely. Until then the workflow is: read the prompt in
-the Sheet, paste it into your site builder yourself. The prompt is the
-deliverable; the API call is convenience.
+The prompt is the deliverable. The build is your hands on the keyboard, and
+that's by design — a site you haven't looked at should never reach a business
+owner.
 
 ---
 
@@ -668,7 +687,7 @@ src/outreach/
     social.py         best-effort Facebook / Instagram lookup
     llm.py            Claude Opus 5: research briefs, site specs, outreach copy
     gmail.py          draft creation -- contains no send call
-    lovable.py        Lovable adapter, disabled behind three gates
+    lovable.py        site builder adapter (legacy — builds are manual)
   stages/             one module per pipeline stage
 tests/
 ```
@@ -680,8 +699,6 @@ tests/
 The pipeline runs end to end. What remains is operational rather than
 structural:
 
-- **Connect Lovable** if you want `site-build` to work — otherwise paste prompts
-  by hand, which costs you nothing and gives you the same site.
 - **Auto-detecting replies** so `Status` moves from `Sent` to `Replied` without
   you editing the Sheet. Doable with a Gmail thread watch; deliberately not
   built yet because it needs a broader Gmail scope than `gmail.compose`, and

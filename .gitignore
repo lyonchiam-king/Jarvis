@@ -28,6 +28,9 @@ config/campaigns/*.local.yaml
 # forbids runtime writes to tracked files.
 sites/
 
+# Node
+node_modules/
+
 # WhatsApp session credentials -- the relay persists auth state here so a
 # restart does not require re-pairing the phone. Never commit.
 .whatsapp-session/
