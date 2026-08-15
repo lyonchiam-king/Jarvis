@@ -729,6 +729,31 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
         return jsonify({"ok": True, "prompt": prompt})
 
+    @app.route("/api/outreach/rewrite", methods=["POST"])
+    def api_outreach_rewrite():
+        """Rewrite one lead's outreach message. One model call.
+
+        The WhatsApp panel's Rewrite button. Re-rolls the copy for a lead whose
+        draft is already written -- generic, or missing the thing that sells
+        the business. Returns the new message so the panel can show it at once.
+        """
+        from .providers.llm import make_writer
+        from .stages.outreach_draft import regenerate_one
+
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+
+        try:
+            config = current()
+            sheets = _sheets_client(config)
+            copy = regenerate_one(config, sheets, make_writer(config), lead_id)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+        return jsonify({"ok": True, **copy})
+
     @app.route("/api/drop", methods=["POST"])
     def api_drop():
         """Take one lead out of every queue, for good.
@@ -1218,6 +1243,9 @@ PAGE = """<!doctype html>
   button.wa-send { background:var(--ok); border-color:var(--ok); color:#fff; }
   button.wa-send:hover:not(:disabled) { opacity:.9; color:#fff; }
   button.wa-send.confirm { background:var(--accent); border-color:var(--accent); }
+  .wa-actions { display:flex; gap:8px; }
+  button.wa-rewrite { background:transparent; border-color:var(--line); color:var(--ink); }
+  button.wa-rewrite:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
   .wa-spin { display:inline-block; width:14px; height:14px; border:2px solid transparent;
              border-top-color:currentColor; border-radius:50%;
              animation:wa-spin .6s linear infinite; vertical-align:-2px;
@@ -1475,7 +1503,10 @@ async function loadWhatsAppInline() {
         actions = `<span class="wa-state err">${esc(m._error || 'Failed')}</span>
           <button class="wa-send" onclick="retryWhatsApp(${i})">Retry</button>`;
       } else {
-        actions = `<button class="wa-send" onclick="sendWhatsApp(${i}, '${esc(m.lead_id)}', '${esc(m.phone)}')">Send</button>`;
+        actions = `<div class="wa-actions">
+          <button class="wa-rewrite" onclick="rewriteWhatsApp(${i}, '${esc(m.lead_id)}')">Rewrite</button>
+          <button class="wa-send" onclick="sendWhatsApp(${i}, '${esc(m.lead_id)}', '${esc(m.phone)}')">Send</button>
+        </div>`;
       }
       return `<div class="wa-msg-card" id="wa-msg-${i}">
         <div class="wa-name">${esc(m.name)}</div>
@@ -1543,6 +1574,29 @@ function retryWhatsApp(idx) {
   waQueue[idx]._failed = false;
   waQueue[idx]._error = null;
   loadWhatsAppInline();
+}
+
+function rewriteWhatsApp(idx, leadId) {
+  const card = $(`#wa-msg-${idx}`);
+  if (!card) return;
+  const btn = card.querySelector('.wa-rewrite');
+  if (btn) { btn.disabled = true; btn.textContent = 'Rewriting\\u2026'; }
+
+  fetch('/api/outreach/rewrite', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({lead_id: leadId}),
+  }).then(r => r.json()).then(d => {
+    if (d.error) {
+      const row = card.querySelector('.wa-row');
+      if (row) row.innerHTML = `<span class="wa-state err">${esc(d.error)}</span>`;
+      return;
+    }
+    loadWhatsAppInline();
+  }).catch(e => {
+    const row = card.querySelector('.wa-row');
+    if (row) row.innerHTML = `<span class="wa-state err">${esc(e.message || 'Network error')}</span>`;
+  });
 }
 
 // Poll WhatsApp state every 30 seconds

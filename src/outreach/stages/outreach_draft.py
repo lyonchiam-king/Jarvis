@@ -293,3 +293,87 @@ def run(
     report.errors = len(errors)
 
     return report
+
+
+def regenerate_one(
+    config: Config,
+    sheets: SheetsClient,
+    writer: BriefWriter,
+    lead_id: str,
+) -> dict[str, str]:
+    """Rewrite one lead's outreach message. One model call.
+
+    Exists for the moment you read a draft and it is wrong -- generic, or
+    missing the thing that actually sells this business. Re-rolling it costs
+    one call and about ten seconds, cheaper than sending a message you did
+    not believe.
+
+    Returns the new copy so the dashboard can show it immediately. Only the
+    copy columns are rewritten: ``Status``, ``Sent At`` and ``Notes`` are
+    manual and left alone, and a WhatsApp-only lead has no Gmail draft to
+    refresh (the dashboard's Rewrite button only appears on the WhatsApp
+    panel, which lists exactly those leads).
+    """
+    leads = sheets.read_rows(schema.LEADS)
+    research = sheets.read_rows(schema.RESEARCH)
+    site_briefs = sheets.read_rows(schema.SITE_BRIEFS)
+
+    lead_entry = leads.get(lead_id)
+    if lead_entry is None:
+        raise ValueError(f"No lead with ID {lead_id!r} on the Leads tab.")
+    _lrow, lead = lead_entry
+
+    research_entry = research.get(lead_id)
+    if research_entry is None:
+        raise ValueError(
+            f"{lead.get('Business Name', lead_id)} has no Research row -- "
+            "run Research for it before rewriting its message."
+        )
+    _rrow, research_row = research_entry
+
+    name = lead.get("Business Name", "") or lead_id
+
+    preview_url = ""
+    brief = site_briefs.get(lead_id)
+    if brief is not None:
+        preview_url = brief[1].get("Preview URL", "")
+
+    copy = writer.write_outreach_copy(
+        build_outreach_prompt(
+            name=name,
+            category=lead.get("Category", ""),
+            location=config.campaign.location,
+            tone=research_row.get("Tone", ""),
+            services=research_row.get("Services", ""),
+            praise=research_row.get("Customer Praise", ""),
+            pain_points=research_row.get("Customer Pain Points", ""),
+            angle=research_row.get("Suggested Website Angle", ""),
+            sender_name=config.outreach.sender_name,
+            sender_title=config.outreach.sender_title,
+            company=config.outreach.company,
+            preview_url=preview_url,
+        )
+    )
+
+    body = gmail_provider.compose_body(
+        body=copy.email_body,
+        sender_name=config.outreach.sender_name,
+        sender_title=config.outreach.sender_title,
+        company=config.outreach.company,
+        postal_address=config.outreach.postal_address,
+        opt_out_note=config.outreach.opt_out_note,
+    )
+
+    sheets.update_column(
+        schema.OUTREACH_LOG, "WhatsApp Message", {lead_id: copy.whatsapp_message}
+    )
+    sheets.update_column(schema.OUTREACH_LOG, "Subject", {lead_id: copy.subject})
+    sheets.update_column(
+        schema.OUTREACH_LOG, "Body Preview", {lead_id: body[:BODY_PREVIEW_CHARS]}
+    )
+
+    return {
+        "subject": copy.subject,
+        "email_body": copy.email_body,
+        "whatsapp_message": copy.whatsapp_message,
+    }
