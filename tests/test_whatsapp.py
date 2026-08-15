@@ -362,7 +362,7 @@ class TestWhatsAppQueueEndpoint:
         resp = client.get("/api/whatsapp/queue")
         assert resp.status_code == 200
         data = json.loads(resp.data)
-        assert data == {"queue": []}
+        assert data == {"queue": [], "excluded": []}
 
     def test_returns_empty_when_sheet_has_no_whatsapp_rows(self, monkeypatch):
         from outreach import schema
@@ -379,7 +379,7 @@ class TestWhatsAppQueueEndpoint:
         resp = client.get("/api/whatsapp/queue")
         assert resp.status_code == 200
         data = json.loads(resp.data)
-        assert data == {"queue": []}
+        assert data == {"queue": [], "excluded": []}
 
     def test_returns_whatsapp_drafts_with_phone(self, monkeypatch):
         from outreach import schema
@@ -547,6 +547,128 @@ class TestWhatsAppQueueEndpoint:
         data = json.loads(resp.data)
         assert len(data["queue"]) == 1
         assert data["queue"][0]["lead_id"] == "lead-1"
+        # The landline is dropped, but not silently -- it lands in `excluded`
+        # with the reason and the phone value the code actually saw.
+        assert len(data["excluded"]) == 1
+        assert data["excluded"][0]["lead_id"] == "lead-2"
+        assert data["excluded"][0]["reason"] == "phone_not_mobile"
+        assert data["excluded"][0]["phone"] == "04-1234567"
+
+    def test_excluded_lists_every_reason_a_drafted_lead_is_hidden(self, monkeypatch):
+        """A drafted WhatsApp lead can be hidden for four reasons. Each must
+        show up in `excluded` with a human reason, so section 4 is never blank
+        without explanation -- the 'my drafted message isn't showing' bug."""
+        from outreach import schema
+
+        class FakeSheets:
+            def read_rows(self, tab):
+                if tab is schema.OUTREACH_LOG:
+                    return {
+                        # Already sent -> already_sent.
+                        "lead-sent": (
+                            2,
+                            {
+                                "Lead ID": "lead-sent",
+                                "Business Name": "Sent Salon",
+                                "Channel": "WhatsApp",
+                                "Status": "Drafted",
+                                "WhatsApp Message": "Hi!",
+                                "WhatsApp Status": "sent",
+                            },
+                        ),
+                        # No phone in Leads -> phone_empty.
+                        "lead-nophone": (
+                            3,
+                            {
+                                "Lead ID": "lead-nophone",
+                                "Business Name": "No Phone Salon",
+                                "Channel": "WhatsApp",
+                                "Status": "Drafted",
+                                "WhatsApp Message": "Hi!",
+                                "WhatsApp Status": "",
+                            },
+                        ),
+                        # Landline -> phone_not_mobile.
+                        "lead-landline": (
+                            4,
+                            {
+                                "Lead ID": "lead-landline",
+                                "Business Name": "Landline Salon",
+                                "Channel": "WhatsApp",
+                                "Status": "Drafted",
+                                "WhatsApp Message": "Hi!",
+                                "WhatsApp Status": "",
+                            },
+                        ),
+                        # No matching row in Leads at all -> no_lead_row.
+                        "lead-orphan": (
+                            5,
+                            {
+                                "Lead ID": "lead-orphan",
+                                "Business Name": "Orphan Salon",
+                                "Channel": "WhatsApp",
+                                "Status": "Drafted",
+                                "WhatsApp Message": "Hi!",
+                                "WhatsApp Status": "",
+                            },
+                        ),
+                        # Mobile + drafted -> in the queue, not excluded.
+                        "lead-ok": (
+                            6,
+                            {
+                                "Lead ID": "lead-ok",
+                                "Business Name": "OK Salon",
+                                "Channel": "WhatsApp",
+                                "Status": "Drafted",
+                                "WhatsApp Message": "Hi mobile!",
+                                "WhatsApp Status": "",
+                            },
+                        ),
+                    }
+                if tab is schema.LEADS:
+                    return {
+                        "lead-sent": (2, {"Lead ID": "lead-sent", "Phone": "+60123456789"}),
+                        "lead-nophone": (3, {"Lead ID": "lead-nophone", "Phone": ""}),
+                        "lead-landline": (4, {"Lead ID": "lead-landline", "Phone": "04-1234567"}),
+                        # lead-orphan deliberately absent from Leads.
+                        "lead-ok": (6, {"Lead ID": "lead-ok", "Phone": "+6012-3456789"}),
+                    }
+                return {}
+
+        client = _make_client(monkeypatch, sheets=FakeSheets())
+        resp = client.get("/api/whatsapp/queue")
+        data = json.loads(resp.data)
+        # The one good lead is in the queue.
+        assert [q["lead_id"] for q in data["queue"]] == ["lead-ok"]
+        # Each hidden lead is in `excluded` with its reason.
+        by_id = {e["lead_id"]: e for e in data["excluded"]}
+        assert set(by_id) == {"lead-sent", "lead-nophone", "lead-landline", "lead-orphan"}
+        assert by_id["lead-sent"]["reason"] == "already_sent"
+        assert by_id["lead-nophone"]["reason"] == "phone_empty"
+        assert by_id["lead-landline"]["reason"] == "phone_not_mobile"
+        assert by_id["lead-orphan"]["reason"] == "no_lead_row"
+        # phone_not_mobile carries the phone so the user can see what was rejected.
+        assert by_id["lead-landline"]["phone"] == "04-1234567"
+
+    def test_sheet_read_error_is_returned_not_swallowed(self, monkeypatch):
+        """When the Sheet read itself throws, the endpoint must surface the
+        error so the dashboard can show it -- not an empty queue that looks
+        like 'nothing to send'. This is the silent-blank-section-4 case."""
+        from outreach import schema
+
+        class FakeSheets:
+            def read_rows(self, tab):
+                raise RuntimeError("boom: sheet unreachable")
+
+        client = _make_client(monkeypatch, sheets=FakeSheets())
+        resp = client.get("/api/whatsapp/queue")
+        # HTTP 200 by design (the JS treats non-200 as a network error);
+        # the body carries the error string the panel renders.
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert "error" in data
+        assert "boom" in data["error"]
+        assert data.get("queue") in (None, [])
 
 
 class TestWhatsAppSendEndpoint:

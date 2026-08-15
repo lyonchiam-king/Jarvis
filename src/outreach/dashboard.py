@@ -957,7 +957,7 @@ def create_app(config: Config) -> Flask:
 
         c = current()
         if not c.secrets.sheet_id:
-            return jsonify({"queue": []})
+            return jsonify({"queue": [], "excluded": []})
         try:
             sheets = _sheets_client(c)
             outreach = sheets.read_rows(schema.OUTREACH_LOG)
@@ -966,24 +966,62 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
 
         queue: list[dict[str, str]] = []
+        # A drafted WhatsApp lead that does not appear in the send list is a
+        # silent failure -- section 4 just goes empty and the user can't tell
+        # why. Capture each dropped lead with the reason so the dashboard can
+        # show "you drafted this, here's why it isn't in your send list" instead
+        # of a blank panel.
+        excluded: list[dict[str, str]] = []
         for lead_id, (_n, row) in outreach.items():
             # Only leads whose channel is WhatsApp and status is "Drafted" (not yet sent).
             channel = (row.get("Channel") or "").strip().casefold()
             status = (row.get("Status") or "").strip().casefold()
             if channel != "whatsapp" or status != "drafted":
                 continue
+
+            name = row.get("Business Name") or ""
+
             # Skip if already sent via the dashboard.
             wa_status = (row.get("WhatsApp Status") or "").strip().casefold()
             if wa_status in WA_SENT_STATUSES:
+                excluded.append(
+                    {
+                        "lead_id": lead_id,
+                        "name": name,
+                        "phone": "",
+                        "reason": "already_sent",
+                        "wa_status": wa_status,
+                    }
+                )
                 continue
 
             lead = leads.get(lead_id, (0, {}))[1]
             phone = lead.get("Phone", "").strip()
             if not phone:
+                # The lead row exists in Outreach Log but has no matching row in
+                # Leads, or the Phone cell is blank. Either way the message has
+                # nowhere to go -- say so instead of vanishing silently.
+                reason = "no_lead_row" if lead_id not in leads else "phone_empty"
+                excluded.append(
+                    {
+                        "lead_id": lead_id,
+                        "name": name,
+                        "phone": "",
+                        "reason": reason,
+                    }
+                )
                 continue
             # Landlines (03, 04...) can't receive WhatsApp — hide them so the
             # queue only shows leads we can actually reach.
             if not is_mobile_number(phone):
+                excluded.append(
+                    {
+                        "lead_id": lead_id,
+                        "name": name,
+                        "phone": phone,
+                        "reason": "phone_not_mobile",
+                    }
+                )
                 continue
 
             queue.append(
@@ -995,7 +1033,7 @@ def create_app(config: Config) -> Flask:
                 }
             )
 
-        return jsonify({"queue": queue})
+        return jsonify({"queue": queue, "excluded": excluded})
 
     @app.route("/api/whatsapp/send", methods=["POST"])
     def api_whatsapp_send():
@@ -1267,6 +1305,17 @@ PAGE = """<!doctype html>
              animation:wa-spin .6s linear infinite; vertical-align:-2px;
              margin-right:4px; }
   @keyframes wa-spin { to { transform:rotate(360deg); } }
+  /* Drafted-but-hidden leads, with the reason section 4 used to swallow. */
+  .wa-excl-wrap { margin-top:12px; border:1px dashed var(--line); border-radius:8px;
+                  padding:10px 12px; background:var(--bg); }
+  .wa-excl-head { font-size:13px; font-weight:600; color:var(--ink); margin-bottom:6px; }
+  .wa-excl { padding:6px 0; border-top:1px solid var(--line); }
+  .wa-excl:first-of-type { border-top:0; }
+  .wa-excl .wa-name { font-weight:600; font-size:14px; }
+  .wa-excl .sub { margin-top:2px; }
+  .wa-err { margin-top:8px; padding:8px 10px; border-radius:8px;
+            border:1px solid var(--accent); background:var(--bg);
+            color:var(--accent); font-size:13px; }
 </style>
 </head>
 <body>
@@ -1468,6 +1517,7 @@ async function refresh() {
 
 let waState = null;  // last /api/whatsapp/status response
 let waQueue = [];    // last /api/whatsapp/queue response
+let waExcluded = []; // drafted WhatsApp leads dropped from the queue, with reasons
 
 async function loadWhatsAppInline() {
   const el = $('#wa-inline');
@@ -1477,11 +1527,25 @@ async function loadWhatsAppInline() {
   try { waState = await (await fetch('/api/whatsapp/status')).json(); }
   catch { waState = {connected: false, error: 'Could not reach relay'}; }
 
-  // --- queue
-  try { waQueue = (await (await fetch('/api/whatsapp/queue')).json()).queue || []; }
-  catch { waQueue = []; }
+  // --- queue (+ excluded: drafted leads dropped from the send list, with why)
+  let waErr = null;
+  try {
+    const q = await (await fetch('/api/whatsapp/queue')).json();
+    waQueue = q.queue || [];
+    waExcluded = q.excluded || [];
+    // The endpoint returns {"error": "..."} (HTTP 200) when the Sheet read
+    // itself fails. Don't swallow that -- it's the difference between
+    // "nothing to send" and "the dashboard can't reach your Sheet".
+    if (q.error) waErr = q.error;
+  } catch { waQueue = []; waExcluded = []; waErr = 'Could not reach the dashboard'; }
 
   let html = '';
+
+  // A Sheet-read error blanks the queue silently. Show it up top so section 4
+  // is never empty without a reason.
+  if (waErr) {
+    html += `<div class="wa-err"><b>Couldn\\u2019t read your Sheet:</b> ${esc(waErr)}</div>`;
+  }
 
   // Connection indicator
   const dot = waState.connected ? 'on' : waState.paired === false ? 'wait' : 'off';
@@ -1533,6 +1597,29 @@ async function loadWhatsAppInline() {
     }).join('');
   } else if (waState.connected) {
     html += '<div class="sub">No messages waiting to send.</div>';
+  }
+
+  // Drafted WhatsApp leads that were dropped from the send list — show why
+  // instead of leaving section 4 blank. This is the "my drafted message isn't
+  // showing" answer, surfaced in the panel itself.
+  if (waExcluded.length) {
+    const reasons = {
+      already_sent: (x) => `Already sent \\u2014 WhatsApp Status is \\u2018${esc(x.wa_status || 'sent')}\\u2019, so this one is done. (If it didn\\u2019t actually deliver, clear the WhatsApp Status cell and it comes back.)`,
+      phone_empty: () => 'No phone number in the Leads tab. Add a Malaysian mobile (01\\u2026) and it will appear here.',
+      no_lead_row: () => 'No matching row in the Leads tab \\u2014 the Outreach Log has this lead but the Leads tab doesn\\u2019t.',
+      phone_not_mobile: (x) => `Phone \\u2018${esc(x.phone || '')}\\u2019 isn\\u2019t a Malaysian mobile (01\\u2026). Landlines (03/04/05\\u2026) and foreign numbers can\\u2019t receive WhatsApp.`,
+    };
+    const items = waExcluded.map((x) => {
+      const why = (reasons[x.reason] || (() => 'Hidden from the send list.'))(x);
+      return `<div class="wa-excl">
+        <div class="wa-name">${esc(x.name || x.lead_id)}</div>
+        <div class="sub">${why}</div>
+      </div>`;
+    }).join('');
+    html += `<div class="wa-excl-wrap">
+      <div class="wa-excl-head">${waExcluded.length} drafted message${waExcluded.length > 1 ? 's' : ''} not shown \\u2014 here\\u2019s why</div>
+      ${items}
+    </div>`;
   }
 
   el.innerHTML = html;
