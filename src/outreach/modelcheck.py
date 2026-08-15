@@ -103,6 +103,22 @@ def _missing_from(detail: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in detail.split(marker, 1)[1].split(","))
 
 
+def _outreach_prompt() -> str:
+    return llm.build_outreach_prompt(
+        name="Kedai Gunting Rambut Seri Mutiara",
+        category="barber shop",
+        location="George Town, Penang",
+        tone="old-school, unhurried",
+        services="cuts, hot towel shave",
+        praise="Uncle Lim never rushes",
+        pain_points="Nobody answers the phone",
+        angle="Bookings are being lost to an unanswered phone.",
+        sender_name="Lyon Chiam",
+        sender_title="Founder",
+        company="COAI",
+    )
+
+
 def _run(name: str, call) -> CheckResult:
     started = time.monotonic()
     try:
@@ -149,20 +165,6 @@ def run(config: Any, writer: Any | None = None) -> ModelReport:
         pain_points="Nobody answers the phone; long waits; cash only",
         angle="Reviews are full of people who could not get through by phone.",
     )
-    outreach_prompt = llm.build_outreach_prompt(
-        name="Kedai Gunting Rambut Seri Mutiara",
-        category="barber shop",
-        location="George Town, Penang",
-        tone="old-school, unhurried",
-        services="cuts, hot towel shave",
-        praise="Uncle Lim never rushes",
-        pain_points="Nobody answers the phone",
-        angle="Bookings are being lost to an unanswered phone.",
-        sender_name="Lyon Chiam",
-        sender_title="Founder",
-        company="COAI",
-    )
-
     report.checks.append(
         _run("Research brief (6 fields)", lambda: writer.write(SAMPLE_EVIDENCE))
     )
@@ -171,12 +173,32 @@ def run(config: Any, writer: Any | None = None) -> ModelReport:
         return report
 
     report.checks.append(
-        _run("Outreach copy (3 fields)", lambda: writer.write_outreach_copy(outreach_prompt))
+        _run("Outreach copy (3 fields)", lambda: writer.write_outreach_copy(_outreach_prompt()))
     )
     report.checks.append(
         _run(
             "Site spec (19 fields -- the hard one)",
             lambda: writer.write_site_spec(spec_prompt),
+        )
+    )
+    return report
+
+
+def run_outreach(config: Any, writer: Any) -> ModelReport:
+    """Exercise just the outreach-copy shape against the outreach model.
+
+    The outreach model only ever writes one shape -- subject, email body,
+    WhatsApp text -- so this is the one check that matters for it. Run it
+    whenever ``outreach.model`` is set to something smaller than the research
+    model, to prove the smaller model can still hold the shape.
+    """
+    report = ModelReport(
+        provider=config.research.provider, model=config.outreach.model
+    )
+    report.checks.append(
+        _run(
+            "Outreach copy (3 fields)",
+            lambda: writer.write_outreach_copy(_outreach_prompt()),
         )
     )
     return report

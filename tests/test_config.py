@@ -25,6 +25,23 @@ def test_region_swap_needs_no_code_change():
     assert uk.campaign.search_query == "barber shop in Manchester, United Kingdom"
 
 
+def test_outreach_model_defaults_to_blank():
+    """Blank means 'use research.model' -- the campaign file does not set it."""
+    config = load_config(PENANG, env_file=None)
+    assert config.outreach.model == ""
+
+
+def test_outreach_model_loads_from_yaml(tmp_path):
+    path = tmp_path / "small.yaml"
+    path.write_text(
+        "campaign:\n  name: x\n  category: y\n  location: z\n"
+        "compliance:\n  country_code: MY\n"
+        "outreach:\n  model: qwen3:cloud\n"
+    )
+    config = load_config(path, env_file=None)
+    assert config.outreach.model == "qwen3:cloud"
+
+
 def test_secrets_never_come_from_yaml(monkeypatch):
     monkeypatch.delenv("PLACES_API_KEY", raising=False)
     config = load_config(PENANG, env_file=None)

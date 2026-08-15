@@ -469,6 +469,7 @@ def create_app(config: Config) -> Flask:
             {
                 "provider": c.research.provider,
                 "model": c.research.model,
+                "outreach_model": c.outreach.model,
                 "base_url": c.research.base_url,
                 "providers": sorted(PROVIDER_DEFAULTS),
                 "key_env": env_name,
@@ -485,7 +486,7 @@ def create_app(config: Config) -> Flask:
         The key is write-only. It goes into .env and is never read back to the
         page -- the browser only ever learns whether one is set.
         """
-        from .campaign_edit import CampaignEditError, rewrite_research  # noqa: F401
+        from .campaign_edit import CampaignEditError, rewrite_outreach, rewrite_research  # noqa: F401
         from .config import PROVIDER_DEFAULTS, PROVIDER_KEY_ENV, ConfigError, load_config
         from .env_edit import EnvEditError, set_key
 
@@ -498,6 +499,11 @@ def create_app(config: Config) -> Flask:
             model = model.strip()
             if not model:
                 return jsonify({"error": "Model cannot be empty -- name the model to use."}), 200
+        # Blank is allowed here: it means "use the research model", so clearing
+        # the field is a legitimate way to go back to one model for everything.
+        outreach_model = payload.get("outreach_model")
+        if outreach_model is not None:
+            outreach_model = outreach_model.strip()
         base_url = payload.get("base_url")
         api_key = payload.get("api_key") or ""
 
@@ -525,6 +531,7 @@ def create_app(config: Config) -> Flask:
             updated = rewrite_research(
                 original, provider=provider, model=model, base_url=base_url
             )
+            updated = rewrite_outreach(updated, model=outreach_model)
             path.write_text(updated)
         except CampaignEditError as exc:
             return jsonify({"error": str(exc)}), 200
@@ -749,7 +756,8 @@ def create_app(config: Config) -> Flask:
         try:
             config = current()
             sheets = _sheets_client(config)
-            copy = regenerate_one(config, sheets, make_writer(config), lead_id)
+            writer = make_writer(config, model=config.outreach.model or None)
+            copy = regenerate_one(config, sheets, writer, lead_id)
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
         return jsonify({"ok": True, **copy})
@@ -1666,7 +1674,8 @@ function drawModel(editing) {
     el.innerHTML = `<div class="row" style="justify-content:space-between">
       <div>
         <div style="font-size:19px;font-weight:600">${esc(m.model)}</div>
-        <div class="sub">via ${esc(m.provider)} &middot; ${keyState}</div>
+        <div class="sub">research &amp; site brief &middot; via ${esc(m.provider)} &middot; ${keyState}</div>
+        <div class="sub">message: ${m.outreach_model ? esc(m.outreach_model) : 'same model'}</div>
       </div>
       <div class="row">
         <button data-run="test-model">Test it</button>
@@ -1698,6 +1707,12 @@ function drawModel(editing) {
       ollama-cloud, <code>moonshotai/kimi-k2-thinking</code> on openrouter,
       <code>gemini-2.5-flash</code> on gemini, <code>claude-opus-5</code> on
       anthropic.</p>
+    <label class="sub" for="m-omodel">Message model <span class="sub">(optional)</span></label>
+    <input id="m-omodel" style="width:100%;margin:5px 0 4px" value="${esc(m.outreach_model || '')}"
+           placeholder="blank = use the model above">
+    <p class="hint" style="margin:0 0 14px">A smaller model that only writes the
+      email + WhatsApp text. Blank means it uses the model above. Set this to
+      cut the token cost of drafting.</p>
     <label class="sub" for="m-key">API key <span id="m-keyenv"></span></label>
     <input id="m-key" type="password" autocomplete="off" style="width:100%;margin:5px 0 4px"
            placeholder="leave blank to keep the current one">
@@ -1720,6 +1735,7 @@ async function saveModel() {
   const body = {
     provider: $('#m-prov').value,
     model: $('#m-model').value,
+    outreach_model: $('#m-omodel').value,
     base_url: $('#m-url').value,
     api_key: $('#m-key').value,
   };

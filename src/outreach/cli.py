@@ -66,6 +66,14 @@ def _writer(config: Config):
         raise click.ClickException(str(exc)) from exc
 
 
+def _outreach_writer(config: Config):
+    """The model that writes outreach copy -- a smaller one, if configured."""
+    try:
+        return make_writer(config, model=config.outreach.model or None)
+    except LLMError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 def _image_client(config: Config, *, require_model: bool = True):
     """The Vertex client for `run site-generate`'s images, or None.
 
@@ -607,6 +615,15 @@ def test_model(ctx: click.Context) -> None:
     click.echo("")
     for line in report.lines():
         click.echo(line)
+
+    if config.outreach.model:
+        click.echo("")
+        outreach_report = modelcheck.run_outreach(config, _outreach_writer(config))
+        for line in outreach_report.lines():
+            click.echo(line)
+        if not outreach_report.ok:
+            raise SystemExit(1)
+
     if not report.ok:
         raise SystemExit(1)
 
@@ -967,7 +984,7 @@ def run_outreach_draft(
     gmail = None if dry_run else GmailClient(_credentials(config))
 
     report = outreach_stage.run(
-        config, sheets, _writer(config), gmail,
+        config, sheets, _outreach_writer(config), gmail,
         limit=limit, dry_run=dry_run, social_first=social_first,
     )
 

@@ -331,6 +331,26 @@ def test_ollama_cloud_builds_the_compatible_writer():
     assert made.model == "kimi-k2.6"
 
 
+def test_a_model_override_swaps_only_the_model():
+    """The outreach stage passes a smaller model; provider and key stay put."""
+    cfg = config(provider="ollama-cloud", base_url="https://ollama.com/v1",
+                 model="qwen3.5:cloud")
+    cfg = replace(cfg, secrets=replace(cfg.secrets, llm_api_key="k"))
+
+    made = make_writer(cfg, model="qwen3:cloud")
+    assert isinstance(made, OpenAICompatibleWriter)
+    assert made.model == "qwen3:cloud"
+
+
+def test_a_blank_model_override_falls_back_to_research_model():
+    cfg = config(provider="ollama-cloud", base_url="https://ollama.com/v1",
+                 model="qwen3.5:cloud")
+    cfg = replace(cfg, secrets=replace(cfg.secrets, llm_api_key="k"))
+
+    made = make_writer(cfg, model="")
+    assert made.model == "qwen3.5:cloud"
+
+
 def test_local_ollama_needs_no_key():
     cfg = config(provider="ollama", base_url="http://localhost:11434/v1",
                  model="llama3")

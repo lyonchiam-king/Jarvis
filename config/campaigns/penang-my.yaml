@@ -140,6 +140,11 @@ outreach:
   # no message is drafted until that lead's site exists -- the email is never
   # sent without the thing that makes it worth reading.
   require_site: true
+  # The model that writes the outreach copy (email + WhatsApp text). Blank
+  # means "use research.model". Set it to a smaller model to cut the token
+  # cost of drafting -- a short message does not need the big model that
+  # summarises reviews. Same provider as research; only the model changes.
+  # model: "qwen3:cloud"
   # WhatsApp sending via the Baileys sidecar relay. The relay is a small Node.js
   # process that Dashboard.bat starts alongside the Flask dashboard. Your phone
   # scans a QR code once; after that, the computer sends independently.

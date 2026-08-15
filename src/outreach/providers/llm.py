@@ -1694,17 +1694,20 @@ def _explain_http(status: int, body: str, url: str) -> str:
     return f"{url} returned HTTP {status}.\n{snippet}"
 
 
-def make_writer(config: Any) -> _Writer:
+def make_writer(config: Any, *, model: str | None = None) -> _Writer:
     """Build the writer this campaign asks for.
 
     One place decides, so every stage gets the same model without each of them
-    knowing which provider is in play.
+    knowing which provider is in play. Pass ``model`` to override the research
+    model for one stage -- the outreach draft uses a smaller model when the
+    campaign sets ``outreach.model``.
     """
     provider = config.research.provider
+    model = model or config.research.model
     if provider == "anthropic":
         return BriefWriter(
             config.secrets.anthropic_api_key,
-            model=config.research.model,
+            model=model,
             effort=config.research.effort,
         )
 
@@ -1717,7 +1720,7 @@ def make_writer(config: Any) -> _Writer:
             f"{PROVIDER_KEY_ENV.get(provider, 'the API key')} is not set in .env."
         )
     return OpenAICompatibleWriter(
-        key, base_url=config.research.base_url, model=config.research.model
+        key, base_url=config.research.base_url, model=model
     )
 
 

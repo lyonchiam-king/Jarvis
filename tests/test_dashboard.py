@@ -1068,6 +1068,34 @@ def test_switching_provider_and_model_rewrites_the_campaign(model_app):
     assert cfg.research.model == "moonshotai/kimi-k2-thinking"
 
 
+def test_the_model_endpoint_reports_the_outreach_model(model_app):
+    client, _campaign, _env = model_app
+    d = client.get("/api/model").get_json()
+    assert d["outreach_model"] == "", "blank means 'use the research model'"
+
+
+def test_setting_the_outreach_model_rewrites_the_campaign(model_app):
+    client, campaign, _env = model_app
+    d = client.post(
+        "/api/model",
+        json={"model": "claude-opus-5", "outreach_model": "qwen3:cloud"},
+    ).get_json()
+
+    assert d["ok"] is True
+    cfg = load_config(campaign, env_file=None)
+    assert cfg.outreach.model == "qwen3:cloud"
+    assert cfg.research.model == "claude-opus-5", "the research model is untouched"
+
+
+def test_clearing_the_outreach_model_goes_back_to_inherit(model_app):
+    client, campaign, _env = model_app
+    client.post("/api/model", json={"outreach_model": "qwen3:cloud"})
+    assert load_config(campaign, env_file=None).outreach.model == "qwen3:cloud"
+
+    client.post("/api/model", json={"outreach_model": ""})
+    assert load_config(campaign, env_file=None).outreach.model == ""
+
+
 def test_the_campaign_comments_survive_a_model_switch(model_app):
     client, campaign, _env = model_app
     before = campaign.with_name("campaign.yaml").read_text().count("#")

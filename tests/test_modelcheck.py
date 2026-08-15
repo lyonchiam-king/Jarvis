@@ -125,3 +125,18 @@ def test_modelcheck_never_puts_the_key_in_its_own_report():
     rendered = "\n".join(report.lines())
     assert cfg.secrets.llm_api_key not in rendered
     assert "gm-secret-value" not in rendered
+
+
+def test_run_outreach_checks_only_the_outreach_shape():
+    """The outreach model is tested for the one shape it writes, nothing else."""
+    cfg = gemini_config()
+    cfg = replace(cfg, outreach=replace(cfg.outreach, model="qwen3:cloud"))
+    writer = FakeWriter()
+
+    report = modelcheck.run_outreach(cfg, writer)
+
+    assert report.model == "qwen3:cloud"
+    assert report.ok is True
+    assert writer.calls == 1
+    assert len(report.checks) == 1
+    assert report.checks[0].name == "Outreach copy (3 fields)"

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from outreach.campaign_edit import CampaignEditError, rewrite_campaign
+from outreach.campaign_edit import CampaignEditError, rewrite_campaign, rewrite_outreach
 from outreach.config import load_config
 
 PENANG = Path("config/campaigns/penang-my.yaml")
@@ -250,6 +250,59 @@ def test_batch_size_and_target_can_change_together():
     assert loaded["campaign"]["category"] == "cafe"
     assert loaded["campaign"]["areas"] == ["Ipoh"]
     assert loaded["limits"]["batch_size"] == 30
+
+
+# ------------------------------------------------------- the outreach model
+
+
+OUTREACH = """\
+campaign:
+  name: test
+  category: "hair salon"
+  location: "Georgetown, Penang, Malaysia"
+
+outreach:
+  sender_name: "Yiu Ming"
+  require_site: true
+
+compliance:
+  country_code: MY
+"""
+
+
+def test_outreach_model_is_set():
+    out = rewrite_outreach(OUTREACH, model="qwen3:cloud")
+    assert yaml.safe_load(out)["outreach"]["model"] == "qwen3:cloud"
+
+
+def test_outreach_model_is_added_when_absent():
+    out = rewrite_outreach(OUTREACH, model="qwen3:cloud")
+    assert 'model: "qwen3:cloud"' in out
+
+
+def test_clearing_the_outreach_model_removes_the_line():
+    with_model = rewrite_outreach(OUTREACH, model="qwen3:cloud")
+    out = rewrite_outreach(with_model, model="")
+    assert "model" not in yaml.safe_load(out)["outreach"]
+
+
+def test_clearing_an_absent_outreach_model_is_a_no_op():
+    out = rewrite_outreach(OUTREACH, model="")
+    assert yaml.safe_load(out)["outreach"] == yaml.safe_load(OUTREACH)["outreach"]
+
+
+def test_the_outreach_model_round_trips_through_the_real_file(tmp_path):
+    out = rewrite_outreach(PENANG.read_text(), model="qwen3:cloud")
+    path = tmp_path / "c.yaml"
+    path.write_text(out)
+
+    cfg = load_config(path, env_file=None)
+    assert cfg.outreach.model == "qwen3:cloud"
+
+
+def test_a_file_with_no_outreach_section_says_so():
+    with pytest.raises(CampaignEditError, match="no top-level `outreach:`"):
+        rewrite_outreach(SIMPLE, model="qwen3:cloud")
 
 
 # ------------------- settings live beside the template, not inside it

@@ -89,6 +89,20 @@ def _replace_scalar(
     return False
 
 
+def _remove_scalar(lines: list[str], start: int, end: int, key: str) -> bool:
+    """Drop a ``  key: ...`` line. Returns whether one was removed.
+
+    A commented-out ``# key: ...`` is left alone -- it is documentation, not a
+    value, and the user may want it back.
+    """
+    pattern = re.compile(rf"^(\s+){re.escape(key)}\s*:")
+    for i in range(start, end):
+        if pattern.match(lines[i]):
+            del lines[i]
+            return True
+    return False
+
+
 def _set_batch_size(lines: list[str], size: int) -> None:
     """Set the one cap that governs every stage.
 
@@ -269,6 +283,37 @@ def rewrite_research(
         if not _replace_scalar(lines, start, end, "base_url", cleaned):
             if cleaned:
                 lines.insert(start, f"  base_url: {_scalar(cleaned)}")
+
+    result = "\n".join(lines)
+    if text.endswith("\n"):
+        result += "\n"
+    _validate(result)
+    return result
+
+
+def rewrite_outreach(text: str, *, model: str | None = None) -> str:
+    """Set ``outreach.model`` -- the smaller model that writes the message.
+
+    Unlike the research model, blank is meaningful here: it means "use the
+    research model", so clearing the field removes the line rather than
+    rejecting the edit.
+    """
+    lines = text.splitlines()
+    bounds = _section_bounds(lines, "outreach")
+    if bounds is None:
+        raise CampaignEditError(
+            "This campaign file has no top-level `outreach:` section."
+        )
+    start, end = bounds
+
+    if model is not None:
+        cleaned = model.strip()
+        if cleaned:
+            if not _replace_scalar(lines, start, end, "model", cleaned):
+                lines.insert(start, f"  model: {_scalar(cleaned)}")
+                start, end = _section_bounds(lines, "outreach")  # type: ignore[misc]
+        else:
+            _remove_scalar(lines, start, end, "model")
 
     result = "\n".join(lines)
     if text.endswith("\n"):
