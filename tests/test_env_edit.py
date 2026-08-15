@@ -1,5 +1,7 @@
 """Writing one key into .env without disturbing a working setup."""
 
+import sys
+
 import pytest
 
 from outreach.env_edit import EnvEditError, is_set, set_key
@@ -95,6 +97,10 @@ def test_a_nonsense_variable_name_is_refused(tmp_path):
         set_key(env(tmp_path), "rm -rf /", "x")
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX file permissions don't apply on Windows -- ACLs do",
+)
 def test_the_file_ends_up_owner_only(tmp_path):
     import os
     import stat

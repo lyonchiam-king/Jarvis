@@ -34,7 +34,7 @@ def test_no_send_call_exists_anywhere_in_the_source():
     """
     offenders = []
     for path in SRC.rglob("*.py"):
-        tree = ast.parse(path.read_text(), filename=str(path))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             # Any attribute named `send` -- called, aliased, or referenced.
             if isinstance(node, ast.Attribute) and node.attr == "send":
@@ -276,7 +276,11 @@ def cfg():
     a test that depends on it must say so. Only
     ``test_penang_campaign_is_configured_demo_first`` reads that file's value.
     """
-    return config(postal_address="12 Some Road, 10450 Penang", require_site=False)
+    return config(
+        postal_address="12 Some Road, 10450 Penang",
+        sender_name="Yiu Ming",
+        require_site=False,
+    )
 
 
 def test_lead_with_an_email_gets_a_gmail_draft():
@@ -344,7 +348,7 @@ def test_the_footer_reaches_the_actual_draft_body():
 
     _to, _subject, body = gmail.drafted[0]
     assert "12 Some Road" in body
-    assert "Lyon Chiam" in body
+    assert "Yiu Ming" in body
 
 
 def test_preview_url_is_offered_to_the_model_when_a_site_exists():

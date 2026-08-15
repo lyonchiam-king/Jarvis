@@ -433,14 +433,18 @@ OUTREACH_COPY_SCHEMA: dict[str, Any] = {
             "description": (
                 "The email itself, plain text, no signature block -- the "
                 "signature and compliance footer are appended separately. "
-                "Under 150 words."
+                "Short paragraphs separated by blank lines, never one wall of "
+                "text. Under 150 words."
             ),
         },
         "whatsapp_message": {
             "type": "string",
             "description": (
-                "A much shorter WhatsApp opener for the same business. Under 60 "
-                "words, conversational, no subject line, no formal signoff."
+                "A much shorter WhatsApp opener for the same business. Open "
+                "with 'Hi, [your name] here,'. Short lines separated by blank "
+                "lines, with the preview link on its own line as "
+                "'Website: <link>'. Under 60 words, conversational, no subject "
+                "line, no formal signoff."
             ),
         },
     },
@@ -458,7 +462,13 @@ prove you actually looked at their business. Reference something specific and \
 true from the research brief. Generic openers ("I hope this email finds you \
 well", "I came across your business") get deleted unread.
 
+Format the message in short paragraphs with a blank line between them -- never \
+one wall of text. When there is a preview site, put "Website: [the link]" on \
+its own line, with a blank line before and after it.
+
 Rules:
+- Open the WhatsApp message with "Hi, [your name] here," -- introduce yourself \
+by the name given in the Sender block, then get straight to the point.
 - Say the specific thing you noticed, then the specific thing you'd do about it.
 - One ask, and make it small -- a reply, not a meeting.
 - No hype, no superlatives, no "revolutionise", no exclamation marks.
