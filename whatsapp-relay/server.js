@@ -177,8 +177,17 @@ app.post("/send", async (req, res) => {
     }
 
     try {
-      // Baileys expects the JID format: <number>@s.whatsapp.net
-      const jid = phone.replace(/[^0-9]/g, "") + "@s.whatsapp.net";
+      // Baileys expects the JID in international format: <country><number>@s.whatsapp.net.
+      // Google Places returns Malaysian numbers both ways -- "010-386 5688"
+      // (local) and "+60 12-3456789" (international) -- so normalise to digits
+      // and make sure the 60 country code is present.
+      let digits = phone.replace(/[^0-9]/g, "");
+      if (digits.startsWith("0")) {
+        digits = "60" + digits.slice(1);
+      } else if (!digits.startsWith("60")) {
+        digits = "60" + digits;
+      }
+      const jid = digits + "@s.whatsapp.net";
       const result = await sock.sendMessage(jid, { text: message });
 
       lastSendTime = Date.now();
