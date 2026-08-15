@@ -142,12 +142,10 @@ def _is_drafted_outreach(row: dict[str, str]) -> bool:
     """Whether an Outreach Log row represents a drafted message.
 
     ``Status`` is a manual column the draft stage seeds to "Drafted" on
-    insert, so the normal test is ``Status == "drafted"``. But a 2026-08-14
-    schema change inserted two WhatsApp columns mid-tab, shifting pre-existing
-    rows: their Status value landed in the ``WhatsApp Sent At`` cell and the
-    Status cell came back empty. Such a row is still drafted -- it carries a
-    message and a ``Drafted At`` timestamp. Accepting it keeps the send queue
-    and the summary from silently dropping work the pipeline already did.
+    insert, so the normal test is ``Status == "drafted"``. A row whose Status
+    cell was cleared by hand still carries a message and a ``Drafted At``
+    timestamp, so accept it too -- otherwise the send queue and the summary
+    silently drop work the pipeline already did.
     """
     status = (row.get("Status") or "").strip().casefold()
     if status:

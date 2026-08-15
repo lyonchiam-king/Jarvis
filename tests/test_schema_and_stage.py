@@ -102,8 +102,8 @@ def test_column_order_is_append_only():
         "Outreach Log": [
             "Lead ID", "Business Name", "Channel", "Recipient", "Email Source",
             "Subject", "Body Preview", "Gmail Draft ID", "Gmail Draft Link",
-            "WhatsApp Message", "Drafted At", "WhatsApp Sent At",
-            "WhatsApp Status", "Status", "Sent At", "Notes",
+            "WhatsApp Message", "Drafted At", "Status", "Sent At", "Notes",
+            "WhatsApp Sent At", "WhatsApp Status",
         ],
         "Errors": [
             "Timestamp", "Stage", "Lead ID", "Business Name", "Error Type",

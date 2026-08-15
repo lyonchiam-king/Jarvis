@@ -130,10 +130,9 @@ def test_failed_whatsapp_still_counts_as_waiting():
 
 
 def test_whatsapp_row_with_empty_status_but_draft_markers_still_counts():
-    # A 2026-08-14 mid-schema insert shifted pre-existing rows by two columns:
-    # their Status value landed in WhatsApp Sent At and the Status cell came
-    # back empty. Such a row still carries a drafted message and timestamp, so
-    # the "WhatsApp to send" count must agree with section 4 and not drop it.
+    # A row whose Status cell was cleared by hand still carries a drafted
+    # message and timestamp, so the "WhatsApp to send" count must agree with
+    # section 4 and not drop it.
     outreach = {
         "b": (3, {
             "Channel": "WhatsApp",

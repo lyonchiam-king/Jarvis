@@ -434,11 +434,9 @@ class TestWhatsAppQueueEndpoint:
         assert "we built you a site" in data["queue"][0]["message"]
 
     def test_accepts_whatsapp_row_with_empty_status_but_draft_markers(self, monkeypatch):
-        # A 2026-08-14 mid-schema insert shifted pre-existing rows by two
-        # columns: their Status value landed in WhatsApp Sent At and the Status
-        # cell came back empty. The row still carries a drafted message and a
-        # timestamp, so section 4 must offer it to send rather than silently
-        # dropping the work the pipeline already did.
+        # A row whose Status cell was cleared by hand still carries a drafted
+        # message and a timestamp, so section 4 must offer it to send rather
+        # than silently dropping the work the pipeline already did.
         from outreach import schema
 
         class FakeSheets:
