@@ -31,6 +31,13 @@ def is_mobile_number(phone: str) -> bool:
     return digits.startswith("01")
 
 
+# WhatsApp Status values that mean a message has already gone out. Both the
+# send queue and the "WhatsApp to send" count check this set, so the two views
+# can never drift apart -- the bug that had the top count show a lead section 4
+# had correctly hidden, making a drafted message look like it never landed.
+WA_SENT_STATUSES = frozenset({"sent", "delivered", "read"})
+
+
 class WhatsAppError(Exception):
     """The relay could not send the message."""
 

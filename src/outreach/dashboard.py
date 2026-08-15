@@ -155,6 +155,7 @@ def summarise(
     is not "waiting to be drafted" until its demo exists, and a card saying
     otherwise would send you to press a button that does nothing.
     """
+    from .providers.whatsapp import WA_SENT_STATUSES
     from .stage import parse, rank
 
     summary = Summary()
@@ -209,6 +210,13 @@ def summarise(
             # waiting on WhatsApp either.
             continue
         else:
+            # A drafted WhatsApp lead whose WhatsApp Status says it has already
+            # gone out is not waiting on you -- the send queue hides it for the
+            # same reason (see /api/whatsapp/queue). Counting it here would put
+            # "WhatsApp to send" upstairs while section 4 stays empty.
+            wa_status = (row.get("WhatsApp Status") or "").strip().casefold()
+            if wa_status in WA_SENT_STATUSES:
+                continue
             summary.whatsapp_waiting += 1
 
     for _key, (_row, row) in errors.items():
@@ -945,7 +953,7 @@ def create_app(config: Config) -> Flask:
     @app.route("/api/whatsapp/queue")
     def api_whatsapp_queue():
         """Leads waiting for WhatsApp send, with phone + message text."""
-        from .providers.whatsapp import is_mobile_number
+        from .providers.whatsapp import WA_SENT_STATUSES, is_mobile_number
 
         c = current()
         if not c.secrets.sheet_id:
@@ -966,7 +974,7 @@ def create_app(config: Config) -> Flask:
                 continue
             # Skip if already sent via the dashboard.
             wa_status = (row.get("WhatsApp Status") or "").strip().casefold()
-            if wa_status in ("sent", "delivered", "read"):
+            if wa_status in WA_SENT_STATUSES:
                 continue
 
             lead = leads.get(lead_id, (0, {}))[1]

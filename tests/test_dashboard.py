@@ -96,6 +96,39 @@ def test_splits_waiting_messages_by_channel():
     assert s.whatsapp_waiting == 1, "already-sent rows must not be counted as waiting"
 
 
+def test_already_sent_whatsapp_is_not_counted_as_waiting():
+    # The send queue hides any drafted WhatsApp lead whose WhatsApp Status is
+    # sent/delivered/read -- it treats those as already gone. The top count
+    # must agree, or "WhatsApp to send" reads 1 while section 4 is empty: the
+    # bug that had a founder think their drafted message never landed.
+    for already in ("sent", "delivered", "read"):
+        outreach = {
+            "b": (3, {
+                "Channel": "WhatsApp",
+                "Status": "Drafted",
+                "WhatsApp Status": already,
+            }),
+        }
+        s = summarise({}, set(), set(), outreach, {})
+        assert s.whatsapp_waiting == 0, (
+            f"WhatsApp Status={already!r} is already sent -- must not count as waiting"
+        )
+
+
+def test_failed_whatsapp_still_counts_as_waiting():
+    # "failed" is not sent -- the queue still shows it for Retry, so the count
+    # must still include it. Guards the fix from over-excluding.
+    outreach = {
+        "b": (3, {
+            "Channel": "WhatsApp",
+            "Status": "Drafted",
+            "WhatsApp Status": "failed",
+        }),
+    }
+    s = summarise({}, set(), set(), outreach, {})
+    assert s.whatsapp_waiting == 1
+
+
 def test_unreachable_rows_are_not_counted_as_waiting():
     outreach = {
         "a": (2, {"Channel": "Unreachable", "Status": "Drafted"}),
