@@ -11,11 +11,24 @@ official WhatsApp Cloud API later without changing the dashboard or pipeline.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 import requests
 
 log = logging.getLogger("outreach")
+
+
+def is_mobile_number(phone: str) -> bool:
+    """True when a phone number is a Malaysian mobile (01X) that can receive WhatsApp.
+
+    Landlines (03, 04, 05...) and anything else return False. Handles the
+    formats Google Places returns: "+60 12-3456789", "60123456789", "012-3456789".
+    """
+    digits = re.sub(r"\D", "", phone or "")
+    if digits.startswith("60"):
+        digits = "0" + digits[2:]
+    return digits.startswith("01")
 
 
 class WhatsAppError(Exception):

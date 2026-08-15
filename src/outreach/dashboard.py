@@ -907,6 +907,8 @@ def create_app(config: Config) -> Flask:
     @app.route("/api/whatsapp/queue")
     def api_whatsapp_queue():
         """Leads waiting for WhatsApp send, with phone + message text."""
+        from .providers.whatsapp import is_mobile_number
+
         c = current()
         if not c.secrets.sheet_id:
             return jsonify({"queue": []})
@@ -932,6 +934,10 @@ def create_app(config: Config) -> Flask:
             lead = leads.get(lead_id, (0, {}))[1]
             phone = lead.get("Phone", "").strip()
             if not phone:
+                continue
+            # Landlines (03, 04...) can't receive WhatsApp — hide them so the
+            # queue only shows leads we can actually reach.
+            if not is_mobile_number(phone):
                 continue
 
             queue.append(

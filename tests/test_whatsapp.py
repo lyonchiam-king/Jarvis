@@ -8,7 +8,12 @@ import responses
 
 from outreach.config import load_config
 from outreach.dashboard import create_app
-from outreach.providers.whatsapp import SendResult, WhatsAppClient, WhatsAppError
+from outreach.providers.whatsapp import (
+    SendResult,
+    WhatsAppClient,
+    WhatsAppError,
+    is_mobile_number,
+)
 
 
 # ------------------------------------------------------------------ client
@@ -209,6 +214,46 @@ class TestSendMessage:
             client = WhatsAppClient()
             result = client.send_message("  +60123456789  ", "  Hello  ")
             assert result.status == "sent"
+
+
+# ------------------------------------------------------- phone classification
+
+
+class TestIsMobileNumber:
+    @pytest.mark.parametrize(
+        "phone",
+        [
+            "0123456789",
+            "0133456789",
+            "0143456789",
+            "0173456789",
+            "0193456789",
+            "0113456789",  # "01_ others" — any 01X prefix
+            "0183456789",
+            "+6012-3456789",
+            "60123456789",
+            "+60 12 345 6789",
+            "012-345 6789",
+        ],
+    )
+    def test_mobile_numbers_are_sendable(self, phone):
+        assert is_mobile_number(phone) is True
+
+    @pytest.mark.parametrize(
+        "phone",
+        [
+            "0345678901",  # landline
+            "0445678901",  # landline
+            "0545678901",  # landline
+            "+603-45678901",
+            "60445678901",
+            "",
+            "   ",
+            "not-a-number",
+        ],
+    )
+    def test_landlines_and_garbage_are_not_sendable(self, phone):
+        assert is_mobile_number(phone) is False
 
 
 # ----------------------------------------------------------- dashboard API
@@ -453,6 +498,55 @@ class TestWhatsAppQueueEndpoint:
         resp = client.get("/api/whatsapp/queue")
         data = json.loads(resp.data)
         assert data["queue"] == []
+
+    def test_hides_landline_numbers(self, monkeypatch):
+        from outreach import schema
+
+        class FakeSheets:
+            def read_rows(self, tab):
+                if tab is schema.OUTREACH_LOG:
+                    return {
+                        "lead-1": (
+                            2,
+                            {
+                                "Lead ID": "lead-1",
+                                "Business Name": "Mobile Salon",
+                                "Channel": "WhatsApp",
+                                "Status": "Drafted",
+                                "WhatsApp Message": "Hi mobile!",
+                                "WhatsApp Status": "",
+                            },
+                        ),
+                        "lead-2": (
+                            3,
+                            {
+                                "Lead ID": "lead-2",
+                                "Business Name": "Landline Salon",
+                                "Channel": "WhatsApp",
+                                "Status": "Drafted",
+                                "WhatsApp Message": "Hi landline!",
+                                "WhatsApp Status": "",
+                            },
+                        ),
+                    }
+                if tab is schema.LEADS:
+                    return {
+                        "lead-1": (
+                            2,
+                            {"Lead ID": "lead-1", "Phone": "+6012-3456789"},
+                        ),
+                        "lead-2": (
+                            3,
+                            {"Lead ID": "lead-2", "Phone": "04-1234567"},
+                        ),
+                    }
+                return {}
+
+        client = _make_client(monkeypatch, sheets=FakeSheets())
+        resp = client.get("/api/whatsapp/queue")
+        data = json.loads(resp.data)
+        assert len(data["queue"]) == 1
+        assert data["queue"][0]["lead_id"] == "lead-1"
 
 
 class TestWhatsAppSendEndpoint:
