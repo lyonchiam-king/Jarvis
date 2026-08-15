@@ -201,8 +201,13 @@ def summarise(
     for _lead_id, (_row, row) in outreach.items():
         if (row.get("Status") or "").strip().casefold() != "drafted":
             continue
-        if (row.get("Channel") or "").strip().casefold() == "email":
+        channel = (row.get("Channel") or "").strip().casefold()
+        if channel == "email":
             summary.emails_waiting += 1
+        elif channel == "unreachable":
+            # No email and a landline phone -- nothing to send, so it is not
+            # waiting on WhatsApp either.
+            continue
         else:
             summary.whatsapp_waiting += 1
 

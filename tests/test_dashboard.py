@@ -96,6 +96,17 @@ def test_splits_waiting_messages_by_channel():
     assert s.whatsapp_waiting == 1, "already-sent rows must not be counted as waiting"
 
 
+def test_unreachable_rows_are_not_counted_as_waiting():
+    outreach = {
+        "a": (2, {"Channel": "Unreachable", "Status": "Drafted"}),
+        "b": (3, {"Channel": "WhatsApp", "Status": "Drafted"}),
+    }
+    s = summarise({}, set(), set(), outreach, {})
+
+    assert s.emails_waiting == 0
+    assert s.whatsapp_waiting == 1, "unreachable leads have nothing to send"
+
+
 def test_counts_retryable_errors_separately():
     errors = {
         "1": (2, {"Retryable": "TRUE"}),

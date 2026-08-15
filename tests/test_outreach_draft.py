@@ -183,12 +183,13 @@ def test_preflight_blocks_an_unacknowledged_flagged_jurisdiction():
 # --------------------------------------------------------------------- run
 
 
-def lead(lead_id, stage="Researched"):
+def lead(lead_id, stage="Researched", phone="012-3456789"):
     return {
         "Lead ID": lead_id,
         "Stage": stage,
         "Business Name": f"Salon {lead_id}",
         "Category": "Hair salon",
+        "Phone": phone,
     }
 
 
@@ -304,6 +305,36 @@ def test_lead_without_an_email_still_gets_whatsapp_text():
     assert row["Channel"] == "WhatsApp"
     assert row["WhatsApp Message"].startswith("Hi!")
     assert row["Gmail Draft ID"] == ""
+
+
+def test_lead_without_email_and_landline_phone_is_unreachable():
+    sheets = FakeSheets(
+        index([lead("a", phone="04-1234567")]), index([research_row("a")])
+    )
+    gmail = FakeGmail()
+
+    report = outreach_draft.run(cfg(), sheets, FakeWriter(), gmail)
+
+    assert report.whatsapp_only == 0
+    assert gmail.drafted == []
+    row = sheets.upserts[0][1][0]
+    assert row["Channel"] == "Unreachable"
+    assert "landline" in row["Notes"]
+    assert row["Status"] == "Drafted"
+
+
+def test_lead_with_email_and_landline_phone_still_gets_email():
+    sheets = FakeSheets(
+        index([lead("a", phone="04-1234567")]),
+        index([research_row("a", "o@salon.my")]),
+    )
+    gmail = FakeGmail()
+
+    report = outreach_draft.run(cfg(), sheets, FakeWriter(), gmail)
+
+    assert report.drafts_created == 1
+    row = sheets.upserts[0][1][0]
+    assert row["Channel"] == "Email"
 
 
 def test_the_footer_reaches_the_actual_draft_body():

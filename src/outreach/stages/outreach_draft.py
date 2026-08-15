@@ -22,6 +22,7 @@ from ..errors import ErrorLog
 from ..models import utc_now
 from ..providers import gmail as gmail_provider
 from ..providers.llm import BriefWriter, build_outreach_prompt
+from ..providers.whatsapp import is_mobile_number
 from ..selection import ORDERS, select_pending
 from ..sheets import SheetsClient
 from ..stage import Stage, advance
@@ -218,6 +219,7 @@ def run(
             draft_id = ""
             draft_link = ""
             channel = "WhatsApp"
+            notes = ""
 
             if recipient and gmail is not None and not dry_run:
                 draft = gmail.create_draft(
@@ -228,8 +230,14 @@ def run(
                 report.drafts_created += 1
             elif recipient:
                 channel = "Email"
-            else:
+            elif is_mobile_number(lead.get("Phone", "")):
                 report.whatsapp_only += 1
+            else:
+                # No email and no mobile number -- a landline can't receive
+                # WhatsApp, so there is nothing to send. Mark it done so it is
+                # not re-selected, and say why in Notes.
+                channel = "Unreachable"
+                notes = "Unreachable: no email and landline phone"
 
             if dry_run:
                 log.info("  subject: %s", copy.subject)
@@ -254,7 +262,7 @@ def run(
                     # truth right now; you change it to Sent after you send.
                     "Status": "Drafted",
                     "Sent At": "",
-                    "Notes": "",
+                    "Notes": notes,
                 }
             )
             pending.stage_updates[lead_id] = advance(
