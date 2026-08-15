@@ -157,6 +157,54 @@ def test_unreachable_rows_are_not_counted_as_waiting():
     assert s.whatsapp_waiting == 1, "unreachable leads have nothing to send"
 
 
+def test_unreachable_leads_show_in_the_queue_as_excluded(monkeypatch):
+    """A landline-only lead is drafted as Channel=Unreachable. It can't be
+    sent, but it must still show at the bottom of section 4 with the reason --
+    hiding it is the bug that made a founder think the draft never saved."""
+    from outreach import dashboard as dash
+    from outreach import schema
+
+    outreach = {
+        "land": (2, {
+            "Lead ID": "land",
+            "Business Name": "Kedai Kopi",
+            "Channel": "Unreachable",
+            "Status": "Drafted",
+            "WhatsApp Message": "Hi, we built you a site!",
+            "Drafted At": "2026-08-16 10:00:00",
+        }),
+    }
+    leads = {
+        "land": (2, {
+            "Lead ID": "land",
+            "Business Name": "Kedai Kopi",
+            "Phone": "04-1234567",
+        }),
+    }
+
+    class FakeSheets:
+        url = "https://sheet"
+
+        def read_rows(self, tab):
+            if tab is schema.OUTREACH_LOG:
+                return outreach
+            if tab is schema.LEADS:
+                return leads
+            return {}
+
+    monkeypatch.setattr(dash, "_sheets_client", lambda config: FakeSheets())
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, sheet_id="s"))
+    client = create_app(config).test_client()
+
+    body = client.get("/api/whatsapp/queue").get_json()
+
+    assert body["queue"] == []
+    assert [e["reason"] for e in body["excluded"]] == ["unreachable"]
+    assert body["excluded"][0]["name"] == "Kedai Kopi"
+    assert body["excluded"][0]["phone"] == "04-1234567"
+
+
 def test_counts_retryable_errors_separately():
     errors = {
         "1": (2, {"Retryable": "TRUE"}),

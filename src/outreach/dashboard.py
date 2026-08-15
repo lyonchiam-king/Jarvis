@@ -995,16 +995,35 @@ def create_app(config: Config) -> Flask:
         # of a blank panel.
         excluded: list[dict[str, str]] = []
         for lead_id, (_n, row) in outreach.items():
-            # Only leads whose channel is WhatsApp and which are drafted (not
-            # yet sent). ``_is_drafted_outreach`` also accepts a WhatsApp row
-            # whose Status cell is empty but which carries a drafted message
-            # and timestamp -- the mark a 2026-08-14 column insert left on
-            # pre-existing rows. Without it those rows vanish from section 4.
-            channel = (row.get("Channel") or "").strip().casefold()
-            if channel != "whatsapp" or not _is_drafted_outreach(row):
+            # Only drafted (not yet sent) rows. ``_is_drafted_outreach`` also
+            # accepts a WhatsApp row whose Status cell is empty but which
+            # carries a drafted message and timestamp -- the mark a 2026-08-14
+            # column insert left on pre-existing rows. Without it those rows
+            # vanish from section 4.
+            if not _is_drafted_outreach(row):
                 continue
 
+            channel = (row.get("Channel") or "").strip().casefold()
             name = row.get("Business Name") or ""
+
+            # A landline-only lead (no email, no mobile) is drafted as
+            # "Unreachable". It can't receive WhatsApp, but it must still show
+            # at the bottom of section 4 with the reason -- hiding it made a
+            # founder think the draft never saved.
+            if channel == "unreachable":
+                lead = leads.get(lead_id, (0, {}))[1]
+                excluded.append(
+                    {
+                        "lead_id": lead_id,
+                        "name": name,
+                        "phone": lead.get("Phone", "").strip(),
+                        "reason": "unreachable",
+                    }
+                )
+                continue
+
+            if channel != "whatsapp":
+                continue
 
             # Skip if already sent via the dashboard.
             wa_status = (row.get("WhatsApp Status") or "").strip().casefold()
@@ -1633,6 +1652,7 @@ async function loadWhatsAppInline() {
       phone_empty: () => 'No phone number in the Leads tab. Add a Malaysian mobile (01\\u2026) and it will appear here.',
       no_lead_row: () => 'No matching row in the Leads tab \\u2014 the Outreach Log has this lead but the Leads tab doesn\\u2019t.',
       phone_not_mobile: (x) => `Phone \\u2018${esc(x.phone || '')}\\u2019 isn\\u2019t a Malaysian mobile (01\\u2026). Landlines (03/04/05\\u2026) and foreign numbers can\\u2019t receive WhatsApp.`,
+      unreachable: (x) => `No email and the phone \\u2018${esc(x.phone || '')}\\u2019 is a landline \\u2014 it can\\u2019t receive WhatsApp.`,
     };
     const items = waExcluded.map((x) => {
       const why = (reasons[x.reason] || (() => 'Hidden from the send list.'))(x);
