@@ -138,6 +138,28 @@ class Summary:
         )
 
 
+def _is_drafted_outreach(row: dict[str, str]) -> bool:
+    """Whether an Outreach Log row represents a drafted message.
+
+    ``Status`` is a manual column the draft stage seeds to "Drafted" on
+    insert, so the normal test is ``Status == "drafted"``. But a 2026-08-14
+    schema change inserted two WhatsApp columns mid-tab, shifting pre-existing
+    rows: their Status value landed in the ``WhatsApp Sent At`` cell and the
+    Status cell came back empty. Such a row is still drafted -- it carries a
+    message and a ``Drafted At`` timestamp. Accepting it keeps the send queue
+    and the summary from silently dropping work the pipeline already did.
+    """
+    status = (row.get("Status") or "").strip().casefold()
+    if status:
+        return status == "drafted"
+    # Empty Status: only accept rows that carry the draft's own markers, so a
+    # blank row is not mistaken for a draft.
+    return bool(
+        (row.get("WhatsApp Message") or "").strip()
+        and (row.get("Drafted At") or "").strip()
+    )
+
+
 def summarise(
     leads: dict[str, tuple[int, dict[str, str]]],
     research_ids: set[str],
@@ -200,7 +222,7 @@ def summarise(
                 summary.awaiting_approval += 1
 
     for _lead_id, (_row, row) in outreach.items():
-        if (row.get("Status") or "").strip().casefold() != "drafted":
+        if not _is_drafted_outreach(row):
             continue
         channel = (row.get("Channel") or "").strip().casefold()
         if channel == "email":
@@ -973,10 +995,13 @@ def create_app(config: Config) -> Flask:
         # of a blank panel.
         excluded: list[dict[str, str]] = []
         for lead_id, (_n, row) in outreach.items():
-            # Only leads whose channel is WhatsApp and status is "Drafted" (not yet sent).
+            # Only leads whose channel is WhatsApp and which are drafted (not
+            # yet sent). ``_is_drafted_outreach`` also accepts a WhatsApp row
+            # whose Status cell is empty but which carries a drafted message
+            # and timestamp -- the mark a 2026-08-14 column insert left on
+            # pre-existing rows. Without it those rows vanish from section 4.
             channel = (row.get("Channel") or "").strip().casefold()
-            status = (row.get("Status") or "").strip().casefold()
-            if channel != "whatsapp" or status != "drafted":
+            if channel != "whatsapp" or not _is_drafted_outreach(row):
                 continue
 
             name = row.get("Business Name") or ""

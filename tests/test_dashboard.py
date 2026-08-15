@@ -129,6 +129,23 @@ def test_failed_whatsapp_still_counts_as_waiting():
     assert s.whatsapp_waiting == 1
 
 
+def test_whatsapp_row_with_empty_status_but_draft_markers_still_counts():
+    # A 2026-08-14 mid-schema insert shifted pre-existing rows by two columns:
+    # their Status value landed in WhatsApp Sent At and the Status cell came
+    # back empty. Such a row still carries a drafted message and timestamp, so
+    # the "WhatsApp to send" count must agree with section 4 and not drop it.
+    outreach = {
+        "b": (3, {
+            "Channel": "WhatsApp",
+            "Status": "",
+            "WhatsApp Message": "Hi, we built you a site!",
+            "Drafted At": "2026-08-09 10:00:00",
+        }),
+    }
+    s = summarise({}, set(), set(), outreach, {})
+    assert s.whatsapp_waiting == 1
+
+
 def test_unreachable_rows_are_not_counted_as_waiting():
     outreach = {
         "a": (2, {"Channel": "Unreachable", "Status": "Drafted"}),

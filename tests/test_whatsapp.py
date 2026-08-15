@@ -433,6 +433,52 @@ class TestWhatsAppQueueEndpoint:
         assert data["queue"][0]["phone"] == "+6012-3456789"
         assert "we built you a site" in data["queue"][0]["message"]
 
+    def test_accepts_whatsapp_row_with_empty_status_but_draft_markers(self, monkeypatch):
+        # A 2026-08-14 mid-schema insert shifted pre-existing rows by two
+        # columns: their Status value landed in WhatsApp Sent At and the Status
+        # cell came back empty. The row still carries a drafted message and a
+        # timestamp, so section 4 must offer it to send rather than silently
+        # dropping the work the pipeline already did.
+        from outreach import schema
+
+        class FakeSheets:
+            def read_rows(self, tab):
+                if tab is schema.OUTREACH_LOG:
+                    return {
+                        "lead-1": (
+                            2,
+                            {
+                                "Lead ID": "lead-1",
+                                "Business Name": "Alice Salon",
+                                "Channel": "WhatsApp",
+                                "Status": "",
+                                "WhatsApp Message": "Hi Alice, we built you a site!",
+                                "WhatsApp Status": "",
+                                "Drafted At": "2026-08-09 10:00:00",
+                            },
+                        ),
+                    }
+                if tab is schema.LEADS:
+                    return {
+                        "lead-1": (
+                            2,
+                            {
+                                "Lead ID": "lead-1",
+                                "Business Name": "Alice Salon",
+                                "Phone": "+6012-3456789",
+                            },
+                        ),
+                    }
+                return {}
+
+        client = _make_client(monkeypatch, sheets=FakeSheets())
+        resp = client.get("/api/whatsapp/queue")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert len(data["queue"]) == 1
+        assert data["queue"][0]["lead_id"] == "lead-1"
+        assert "we built you a site" in data["queue"][0]["message"]
+
     def test_skips_already_sent_whatsapp(self, monkeypatch):
         from outreach import schema
 
