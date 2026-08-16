@@ -430,35 +430,57 @@ class _SharedSheets:
         self._ttl = ttl
         self._entries: dict[str, tuple[float, dict]] = {}
         self._lock = threading.Lock()
+        self._fetching: dict[str, threading.Lock] = {}
 
     def invalidate(self) -> None:
         with self._lock:
             self._entries.clear()
 
+    def _entry(self, title: str):
+        with self._lock:
+            return self._entries.get(title)
+
+    def _fetch_lock(self, title: str) -> threading.Lock:
+        with self._lock:
+            lock = self._fetching.get(title)
+            if lock is None:
+                lock = self._fetching[title] = threading.Lock()
+            return lock
+
     def read_rows(self, tab):
-        now = time.monotonic()
-        with self._lock:
-            hit = self._entries.get(tab.title)
-        if hit is not None and now - hit[0] < self._ttl:
-            return hit[1]
+        entry = self._entry(tab.title)
+        if entry is not None and time.monotonic() - entry[0] < self._ttl:
+            return entry[1]
 
-        try:
-            rows = self._inner.read_rows(tab)
-        except Exception:
-            # 'Read requests per minute' clears by waiting, so blanking the
-            # page over it is worse than showing the last good answer for one
-            # more tick. Only a read we have never done successfully is fatal.
-            if hit is not None:
-                log.warning(
-                    "Reading %s failed; serving the previous rows.",
-                    tab.title, exc_info=True,
-                )
-                return hit[1]
-            raise
+        # One fetch per tab, not one per caller. The panels refresh together,
+        # so on a cold cache every one of them misses at the same instant --
+        # without this they would each issue the same request and the cache
+        # would save nothing at exactly the moment the quota is tightest.
+        # Readers of other tabs are unaffected; only same-tab callers wait,
+        # and what they wait for is the answer they were about to ask for.
+        with self._fetch_lock(tab.title):
+            entry = self._entry(tab.title)
+            if entry is not None and time.monotonic() - entry[0] < self._ttl:
+                return entry[1]
 
-        with self._lock:
-            self._entries[tab.title] = (now, rows)
-        return rows
+            try:
+                rows = self._inner.read_rows(tab)
+            except Exception:
+                # 'Read requests per minute' clears by waiting, so blanking
+                # the page over it is worse than showing the last good answer
+                # for one more tick. Only a read we have never done
+                # successfully is fatal.
+                if entry is not None:
+                    log.warning(
+                        "Reading %s failed; serving the previous rows.",
+                        tab.title, exc_info=True,
+                    )
+                    return entry[1]
+                raise
+
+            with self._lock:
+                self._entries[tab.title] = (time.monotonic(), rows)
+            return rows
 
     # Writes go through untouched, but every one of them invalidates: a cached
     # read taken before an approval is exactly the stale answer that would make
@@ -485,17 +507,61 @@ class _SharedSheets:
         return getattr(self._inner, name)
 
 
+class _PerThreadClient:
+    """One SheetsClient per thread, because httplib2 is not thread-safe.
+
+    The Flask dev server handles each request on its own thread, and the panels
+    refresh together -- so a single shared client means several threads writing
+    to one TLS socket at once. The frames interleave and the read comes back as
+    ``SSLError: WRONG_VERSION_NUMBER``, which looks like a network fault and is
+    really a concurrency bug.
+
+    Only the HTTP transport has to be per-thread. The rows it returns are plain
+    dicts, so the cache in front of this can still be shared -- which is the
+    whole point, since that is what keeps the read quota down.
+    """
+
+    def __init__(self, key: tuple) -> None:
+        self._key = key
+        self._local = threading.local()
+        # Building credentials can refresh and rewrite the token file, so two
+        # threads arriving at once must not both do it.
+        self._build_lock = threading.Lock()
+
+    def _client(self):
+        existing = getattr(self._local, "client", None)
+        if existing is not None:
+            return existing
+        with self._build_lock:
+            from .auth import get_credentials
+            from .sheets import SheetsClient
+
+            # allow_consent=False: nobody is watching a terminal here. Consent
+            # opens a browser and blocks until it is completed, so an expired
+            # token would hang this request thread rather than fail it, and
+            # the page would just stop answering.
+            creds = get_credentials(
+                self._key[0], self._key[1], allow_consent=False
+            )
+            client = SheetsClient(creds, self._key[2])
+        self._local.client = client
+        return client
+
+    def __getattr__(self, name):
+        return getattr(self._client(), name)
+
+
 _shared_sheets: _SharedSheets | None = None
 _shared_sheets_key: tuple | None = None
 _shared_sheets_lock = threading.Lock()
 
 
 def _sheets_client(config: Config):
-    """The process-wide Sheets client, built once per credential set.
+    """The process-wide cached view of the Sheet.
 
-    Shared rather than per-request so the read cache above actually spans the
-    panels it exists to collapse. Rebuilt if the campaign is switched to a
-    different Sheet or token.
+    The cache is shared so it actually spans the panels it exists to collapse;
+    the transport underneath it is per-thread. Rebuilt if the campaign is
+    switched to a different Sheet or token.
     """
     global _shared_sheets, _shared_sheets_key
     key = (
@@ -505,11 +571,7 @@ def _sheets_client(config: Config):
     )
     with _shared_sheets_lock:
         if _shared_sheets is None or _shared_sheets_key != key:
-            from .auth import get_credentials
-            from .sheets import SheetsClient
-
-            creds = get_credentials(key[0], key[1])
-            _shared_sheets = _SharedSheets(SheetsClient(creds, key[2]))
+            _shared_sheets = _SharedSheets(_PerThreadClient(key))
             _shared_sheets_key = key
         return _shared_sheets
 

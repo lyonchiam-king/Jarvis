@@ -51,10 +51,19 @@ def get_credentials(
     token_file: Path,
     *,
     scopes: list[str] | None = None,
+    allow_consent: bool = True,
 ) -> Credentials:
     """Load cached credentials, refreshing or running consent as needed.
 
     The token file is written with owner-only permissions and is gitignored.
+
+    ``allow_consent=False`` is for callers with nobody watching a terminal.
+    Consent means ``run_local_server``, which opens a browser and then blocks
+    until someone completes the sign-in -- forever, if nobody does. That is
+    survivable in the CLI, where the user is already looking at the window,
+    and not survivable inside a dashboard request thread: the panel simply
+    stops answering, with no error to show and a log that looks healthy. Those
+    callers get an AuthError naming the one command that fixes it instead.
     """
     scopes = scopes or SCOPES
     creds: Credentials | None = None
@@ -70,13 +79,27 @@ def get_credentials(
     if creds and creds.valid:
         return creds
 
+    refresh_error: Exception | None = None
     if creds and creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
             _persist(creds, token_file)
             return creds
         except Exception as exc:  # noqa: BLE001 -- fall through to full consent
+            refresh_error = exc
             log.warning("Token refresh failed (%s); re-running consent.", exc)
+
+    if not allow_consent:
+        detail = f" ({type(refresh_error).__name__}: {refresh_error})" if refresh_error else ""
+        raise AuthError(
+            "Your Google sign-in has expired and could not be renewed"
+            f"{detail}.\n"
+            "Signing in again needs a browser, which this process cannot "
+            "open on your behalf.\n"
+            "Close the dashboard, run `outreach preflight` in a terminal, "
+            "finish the Google sign-in it opens, then start Dashboard.bat "
+            "again."
+        )
 
     if not client_file.exists():
         raise AuthError(

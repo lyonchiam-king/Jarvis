@@ -3,6 +3,7 @@
 from dataclasses import replace
 import ast
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -1736,3 +1737,89 @@ class _FakePopen:
 
     def wait(self):
         return 0
+
+
+class TestPerThreadTransport:
+    """httplib2 is not thread-safe, and the dev server is threaded.
+
+    Sharing one SheetsClient across request threads put several of them on one
+    TLS socket; the frames interleaved and Sheets reads came back as
+    ``SSLError: WRONG_VERSION_NUMBER``. The cache in front may be shared -- it
+    holds plain dicts -- but the transport underneath may not.
+    """
+
+    def test_each_thread_gets_its_own_client(self, monkeypatch):
+        built = []
+
+        class FakeClient:
+            def __init__(self, creds, sheet_id):
+                built.append(threading.current_thread().name)
+
+        monkeypatch.setattr("outreach.auth.get_credentials", lambda *a, **k: object())
+        monkeypatch.setattr("outreach.sheets.SheetsClient", FakeClient)
+
+        per_thread = dash._PerThreadClient(("client.json", "token.json", "sheet-1"))
+        # Hold the objects, not their id()s: a finished thread's client is
+        # freed and CPython hands the same address to the next one, which
+        # makes an id-based check pass or fail for reasons of its own.
+        seen = []
+
+        def use():
+            seen.append(per_thread._client())
+
+        threads = [threading.Thread(target=use, name=f"w{i}") for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(built) == 4, "each thread must build its own transport"
+        assert len({id(c) for c in seen}) == 4, "threads must not share a client"
+
+    def test_the_same_thread_reuses_its_client(self, monkeypatch):
+        built = []
+
+        class FakeClient:
+            def __init__(self, creds, sheet_id):
+                built.append(1)
+
+        monkeypatch.setattr("outreach.auth.get_credentials", lambda *a, **k: object())
+        monkeypatch.setattr("outreach.sheets.SheetsClient", FakeClient)
+
+        per_thread = dash._PerThreadClient(("client.json", "token.json", "sheet-1"))
+        first = per_thread._client()
+        assert per_thread._client() is first
+        assert len(built) == 1
+
+    def test_concurrent_reads_through_the_cache_stay_consistent(self, monkeypatch):
+        """The shared cache must survive parallel use without tearing."""
+        class Counting:
+            def __init__(self):
+                self.n = 0
+                self.lock = threading.Lock()
+
+            def read_rows(self, tab):
+                with self.lock:
+                    self.n += 1
+                time.sleep(0.005)  # widen the window for a race
+                return {"lead-1": (2, {"Lead ID": "lead-1"})}
+
+        inner = Counting()
+        shared = dash._SharedSheets(inner)
+        results = []
+
+        def read():
+            results.append(shared.read_rows(schema.LEADS))
+
+        threads = [threading.Thread(target=read) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(results) == 8
+        assert all(r == results[0] for r in results)
+        # Single-flight: eight simultaneous callers, one request. Without it
+        # every panel misses at the same instant on a cold cache and the cache
+        # saves nothing precisely when the quota is tightest.
+        assert inner.n == 1
