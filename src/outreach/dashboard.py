@@ -13,6 +13,7 @@ import logging
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from collections import deque
 import os
@@ -396,16 +397,128 @@ class Runner:
         finally:
             self.lines.append("")
             self.lines.append("Finished.")
+            # The stage wrote to the Sheet from a subprocess, so nothing in
+            # this process saw it happen. Drop the cached reads before the
+            # page asks again -- otherwise the messages just drafted would be
+            # served from a snapshot taken before they existed, which is the
+            # "I drafted them and section 4 didn't change" bug wearing a
+            # different hat.
+            _invalidate_sheets_cache()
             with self._lock:
                 self.running = None
 
 
-def _sheets_client(config: Config):
-    from .auth import get_credentials
-    from .sheets import SheetsClient
+class _SharedSheets:
+    """A short-lived read cache in front of one SheetsClient.
 
-    creds = get_credentials(config.secrets.oauth_client_file, config.secrets.token_file)
-    return SheetsClient(creds, config.secrets.sheet_id)
+    Four panels refresh on the same 30-second tick, and between them they read
+    the same five tabs thirteen times. Sheets allows sixty reads a minute per
+    user, so an idle dashboard spent close to half the budget and a drafting
+    run -- which reads the Sheet itself, from a subprocess, on the same quota
+    -- pushed it over. The panel then blanked with a 429 that had nothing to
+    do with the data in it.
+
+    Correctness comes from invalidating, not from the TTL being short: every
+    dashboard write clears the cache, and so does the end of a run. So the
+    window is only ever the few seconds between panels that are showing the
+    same snapshot anyway, and nothing the user just did is served from before
+    they did it.
+    """
+
+    def __init__(self, inner, ttl: float = 8.0) -> None:
+        self._inner = inner
+        self._ttl = ttl
+        self._entries: dict[str, tuple[float, dict]] = {}
+        self._lock = threading.Lock()
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+    def read_rows(self, tab):
+        now = time.monotonic()
+        with self._lock:
+            hit = self._entries.get(tab.title)
+        if hit is not None and now - hit[0] < self._ttl:
+            return hit[1]
+
+        try:
+            rows = self._inner.read_rows(tab)
+        except Exception:
+            # 'Read requests per minute' clears by waiting, so blanking the
+            # page over it is worse than showing the last good answer for one
+            # more tick. Only a read we have never done successfully is fatal.
+            if hit is not None:
+                log.warning(
+                    "Reading %s failed; serving the previous rows.",
+                    tab.title, exc_info=True,
+                )
+                return hit[1]
+            raise
+
+        with self._lock:
+            self._entries[tab.title] = (now, rows)
+        return rows
+
+    # Writes go through untouched, but every one of them invalidates: a cached
+    # read taken before an approval is exactly the stale answer that would make
+    # the button look broken.
+    def upsert(self, *args, **kwargs):
+        try:
+            return self._inner.upsert(*args, **kwargs)
+        finally:
+            self.invalidate()
+
+    def update_column(self, *args, **kwargs):
+        try:
+            return self._inner.update_column(*args, **kwargs)
+        finally:
+            self.invalidate()
+
+    def append(self, *args, **kwargs):
+        try:
+            return self._inner.append(*args, **kwargs)
+        finally:
+            self.invalidate()
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+_shared_sheets: _SharedSheets | None = None
+_shared_sheets_key: tuple | None = None
+_shared_sheets_lock = threading.Lock()
+
+
+def _sheets_client(config: Config):
+    """The process-wide Sheets client, built once per credential set.
+
+    Shared rather than per-request so the read cache above actually spans the
+    panels it exists to collapse. Rebuilt if the campaign is switched to a
+    different Sheet or token.
+    """
+    global _shared_sheets, _shared_sheets_key
+    key = (
+        config.secrets.oauth_client_file,
+        config.secrets.token_file,
+        config.secrets.sheet_id,
+    )
+    with _shared_sheets_lock:
+        if _shared_sheets is None or _shared_sheets_key != key:
+            from .auth import get_credentials
+            from .sheets import SheetsClient
+
+            creds = get_credentials(key[0], key[1])
+            _shared_sheets = _SharedSheets(SheetsClient(creds, key[2]))
+            _shared_sheets_key = key
+        return _shared_sheets
+
+
+def _invalidate_sheets_cache() -> None:
+    """Drop every cached read. Called when a run ends and on config changes."""
+    with _shared_sheets_lock:
+        if _shared_sheets is not None:
+            _shared_sheets.invalidate()
 
 
 def _load_summary(config: Config) -> Summary:

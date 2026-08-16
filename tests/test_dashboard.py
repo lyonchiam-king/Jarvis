@@ -3,10 +3,13 @@
 from dataclasses import replace
 import ast
 import re
+import time
 from pathlib import Path
 
 import pytest
 
+from outreach import schema
+from outreach import dashboard as dash
 from outreach.config import load_config
 from outreach.dashboard import (
     FULL_RUN,
@@ -1587,3 +1590,149 @@ def test_the_page_javascript_actually_parses():
         assert proc.returncode == 0, (
             f"script block {i} does not parse:\n{proc.stderr}"
         )
+
+
+class TestSharedSheetsCache:
+    """The dashboard reads the same five tabs from four panels on one tick.
+
+    Sheets allows 60 reads a minute per user. Before this cache an idle page
+    spent 26 of them, and a drafting run -- whose subprocess reads the Sheet
+    on the same quota -- pushed the total past the limit, blanking section 4
+    with a 429. These tests pin both halves: that reads are actually shared,
+    and that sharing never outlives a write.
+    """
+
+    class Counting:
+        """Stands in for SheetsClient, counting reads per tab."""
+
+        def __init__(self, fail=None):
+            self.reads = {}
+            self.fail = fail or {}
+            self.url = "https://sheet"
+
+        def read_rows(self, tab):
+            self.reads[tab.title] = self.reads.get(tab.title, 0) + 1
+            if tab.title in self.fail:
+                raise self.fail[tab.title]
+            return {"lead-1": (2, {"Lead ID": "lead-1", "Business Name": tab.title})}
+
+        def upsert(self, tab, rows, **kw):
+            return None
+
+        def update_column(self, tab, column, values, **kw):
+            return len(values)
+
+        def append(self, tab, rows):
+            return len(rows)
+
+    def test_repeated_reads_of_one_tab_hit_the_sheet_once(self):
+        inner = self.Counting()
+        shared = dash._SharedSheets(inner)
+
+        for _ in range(9):
+            shared.read_rows(schema.LEADS)
+
+        assert inner.reads["Leads"] == 1
+
+    def test_each_tab_is_cached_separately(self):
+        inner = self.Counting()
+        shared = dash._SharedSheets(inner)
+
+        for tab in (schema.LEADS, schema.RESEARCH, schema.LEADS, schema.RESEARCH):
+            shared.read_rows(tab)
+
+        assert inner.reads == {"Leads": 1, "Research": 1}
+
+    def test_an_expired_entry_is_read_again(self):
+        inner = self.Counting()
+        shared = dash._SharedSheets(inner, ttl=0)
+
+        shared.read_rows(schema.LEADS)
+        shared.read_rows(schema.LEADS)
+
+        assert inner.reads["Leads"] == 2
+
+    def test_a_write_invalidates_so_the_next_read_sees_it(self):
+        """The failure this guards: approve a brief, the panel re-reads, and
+        the cache hands back the snapshot from before the approval -- so the
+        button looks like it did nothing."""
+        inner = self.Counting()
+        shared = dash._SharedSheets(inner)
+
+        shared.read_rows(schema.SITE_BRIEFS)
+        shared.update_column(
+            schema.SITE_BRIEFS, "Approval Status", {"lead-1": "Approved"},
+            user_edit=True,
+        )
+        shared.read_rows(schema.SITE_BRIEFS)
+
+        assert inner.reads["Site Briefs"] == 2
+
+    def test_a_write_that_raises_still_invalidates(self):
+        class Boom(self.Counting):
+            def update_column(self, *a, **k):
+                raise RuntimeError("sheet write failed")
+
+        inner = Boom()
+        shared = dash._SharedSheets(inner)
+        shared.read_rows(schema.LEADS)
+
+        with pytest.raises(RuntimeError):
+            shared.update_column(schema.LEADS, "Stage", {"lead-1": "x"})
+
+        # A failed write may still have landed; assuming it didn't is how a
+        # stale panel outlives the thing that changed.
+        shared.read_rows(schema.LEADS)
+        assert inner.reads["Leads"] == 2
+
+    def test_a_read_failure_serves_the_previous_rows_not_a_blank_page(self):
+        """'Read requests per minute' clears by waiting. Dropping a whole
+        panel over a limit that heals in seconds is worse than being a few
+        seconds stale."""
+        inner = self.Counting()
+        shared = dash._SharedSheets(inner, ttl=0)
+        first = shared.read_rows(schema.OUTREACH_LOG)
+
+        inner.fail["Outreach Log"] = RuntimeError("HTTP 429: quota exceeded")
+        assert shared.read_rows(schema.OUTREACH_LOG) == first
+
+    def test_a_read_that_never_succeeded_still_raises(self):
+        inner = self.Counting(fail={"Errors": RuntimeError("HTTP 429")})
+        shared = dash._SharedSheets(inner)
+
+        with pytest.raises(RuntimeError):
+            shared.read_rows(schema.ERRORS)
+
+    def test_unknown_attributes_fall_through_to_the_real_client(self):
+        shared = dash._SharedSheets(self.Counting())
+        assert shared.url == "https://sheet"
+
+    def test_a_finished_run_invalidates_the_cache(self, monkeypatch):
+        """A stage writes from a subprocess, so this process never saw it.
+        Without this the page re-reads a snapshot taken before the run and the
+        freshly drafted messages are missing -- the original bug, again."""
+        cleared = []
+        monkeypatch.setattr(dash, "_invalidate_sheets_cache",
+                            lambda: cleared.append(True))
+        monkeypatch.setattr(dash.subprocess, "Popen", _FakePopen)
+
+        runner = dash.Runner()
+        runner.start("draft", ["outreach-draft"])
+        for _ in range(200):
+            if runner.running is None:
+                break
+            time.sleep(0.01)
+
+        assert runner.running is None, "run did not finish"
+        assert cleared, "a finished run must drop the cached reads"
+
+
+class _FakePopen:
+    """A subprocess that prints one line and exits cleanly."""
+
+    def __init__(self, *a, **k):
+        self.stdout = iter(["done\n"])
+        self.returncode = 0
+
+    def wait(self):
+        return 0
