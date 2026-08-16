@@ -31,6 +31,15 @@ class SheetsError(Exception):
     """A Sheets operation failed in a way the run cannot work around."""
 
 
+class SheetSchemaError(SheetsError):
+    """A tab's header row does not match the schema this code reads by.
+
+    Its own class because the fix is specific and always the same: run
+    ``outreach init-sheet`` to rewrite the header row. Callers that show
+    errors to a human should let this one through verbatim.
+    """
+
+
 def guard_manual_column(tab: Tab, column: str, *, user_edit: bool) -> None:
     """Refuse to write a manual column unless a human just asked for it.
 
@@ -305,6 +314,14 @@ class SheetsClient:
 
         Returns ``{key: (row_number, {header: value})}`` with 1-based row
         numbers, so callers can address a row directly for an update.
+
+        Reads from row 1 so the header can be checked before any value is
+        trusted. Rows are zipped against ``tab.headers`` by position, so a
+        Sheet whose header row is narrower or in a different order does not
+        fail -- it silently returns the wrong value under the right name. That
+        is how a mid-tab column insert once made every drafted message vanish
+        from the dashboard while the run log said success, so the mismatch is
+        an error now rather than a guess.
         """
         last = column_letter(len(tab.columns) - 1)
         result = _with_retry(
@@ -312,15 +329,22 @@ class SheetsClient:
             .values()
             .get(
                 spreadsheetId=self.spreadsheet_id,
-                range=f"'{tab.title}'!A2:{last}",
+                range=f"'{tab.title}'!A1:{last}",
             )
             .execute(),
             f"read {tab.title}",
         )
         values: list[list[str]] = result.get("values", [])  # type: ignore[union-attr]
+        if not values:
+            # No header and no data: a tab that exists but was never set up.
+            # ensure_tabs writes the header, so let the caller get an empty
+            # read rather than an error about a Sheet with nothing in it.
+            return {}
+
+        self._check_header(tab, values[0])
 
         rows: dict[str, tuple[int, dict[str, str]]] = {}
-        for offset, raw in enumerate(values):
+        for offset, raw in enumerate(values[1:]):
             key = (raw[0] if raw else "").strip()
             if not key:
                 continue
@@ -328,6 +352,39 @@ class SheetsClient:
             padded = list(raw) + [""] * (len(tab.columns) - len(raw))
             rows[key] = (offset + 2, dict(zip(tab.headers, padded)))
         return rows
+
+    @staticmethod
+    def _check_header(tab: Tab, header: list[str]) -> None:
+        """Raise unless the Sheet's header row matches the schema exactly."""
+        live = [h.strip() for h in header]
+        want = tab.headers
+        if live == want:
+            return
+
+        if len(live) < len(want) and live == want[: len(live)]:
+            missing = ", ".join(want[len(live):])
+            raise SheetSchemaError(
+                f"The '{tab.title}' tab is missing the column(s) {missing}. "
+                "Your Sheet predates a schema change, so rows are being read "
+                "against the wrong columns. Run `outreach init-sheet` to add "
+                "them -- it only rewrites row 1 and never touches your data."
+            )
+
+        differences = [
+            f"column {column_letter(i)}: Sheet has "
+            f"{(live[i] if i < len(live) else '(empty)')!r}, "
+            f"code expects {(want[i] if i < len(want) else '(nothing)')!r}"
+            for i in range(max(len(live), len(want)))
+            if (live[i] if i < len(live) else None) != (want[i] if i < len(want) else None)
+        ]
+        raise SheetSchemaError(
+            f"The '{tab.title}' tab's header row does not match the schema, so "
+            "every row would be read against the wrong columns:\n  "
+            + "\n  ".join(differences)
+            + "\nRun `outreach init-sheet` to rewrite row 1. If your data rows "
+            "are also in the old order, fix those first -- see "
+            "scripts/migrate_outreach_log.py."
+        )
 
     # ----------------------------------------------------------------- write
 

@@ -62,8 +62,14 @@ class FakeService:
 
 @pytest.fixture
 def client(monkeypatch):
-    def make(rows=None):
-        service = FakeService(rows or [])
+    def make(rows=None, tab=schema.LEADS, header=None):
+        # A real Sheet always carries its header row, and read_rows verifies it
+        # before trusting a single value -- so the fake grid has to carry one
+        # too, or the fake would be more permissive than the client it stands
+        # in for. Tests pass data rows; a test that wants a *stale* header says
+        # so explicitly with header=.
+        grid = [list(tab.headers if header is None else header)] + list(rows or [])
+        service = FakeService(grid)
         monkeypatch.setattr(sheets_mod, "build", lambda *a, **k: service)
         c = SheetsClient(credentials=None, spreadsheet_id="sheet-1")
         c._fake = service  # test handle
@@ -148,6 +154,58 @@ def test_blank_rows_are_ignored(client):
     c = client([["place-1"], [], ["", "junk"], ["place-2"]])
     rows = c.read_rows(schema.LEADS)
     assert set(rows) == {"place-1", "place-2"}
+
+
+def test_a_sheet_missing_a_new_column_is_an_error_not_a_silent_misread(client):
+    """The bug this guard exists for.
+
+    A Sheet created before ``WhatsApp Sent At`` and ``WhatsApp Status`` were
+    added still has the original 14 headers. Rows are zipped against the
+    schema by position, so reading one used to succeed and hand back the wrong
+    value under the right name -- every drafted message disappeared from the
+    dashboard while the run log said success. It has to fail loudly instead.
+    """
+    stale = schema.OUTREACH_LOG.headers[:-2]
+    c = client([["lead-1"] + [""] * 13], tab=schema.OUTREACH_LOG, header=stale)
+
+    with pytest.raises(sheets_mod.SheetSchemaError) as exc:
+        c.read_rows(schema.OUTREACH_LOG)
+
+    message = str(exc.value)
+    # Names the tab, the missing columns, and the command that fixes it --
+    # an error a non-programmer can act on without reading the source.
+    assert "Outreach Log" in message
+    assert "WhatsApp Sent At" in message
+    assert "WhatsApp Status" in message
+    assert "init-sheet" in message
+
+
+def test_a_reordered_header_names_the_columns_that_disagree(client):
+    swapped = list(schema.LEADS.headers)
+    swapped[1], swapped[2] = swapped[2], swapped[1]
+    c = client([], header=swapped)
+
+    with pytest.raises(sheets_mod.SheetSchemaError) as exc:
+        c.read_rows(schema.LEADS)
+
+    message = str(exc.value)
+    assert "column B" in message and "column C" in message
+
+
+def test_a_matching_header_reads_normally(client):
+    c = client([["place-1", "Discovered", "Salon A"]])
+    assert c.read_rows(schema.LEADS)["place-1"][1]["Business Name"] == "Salon A"
+
+
+def test_a_tab_with_no_header_and_no_data_reads_empty(client):
+    """A tab that exists but was never set up is not a schema error.
+
+    ensure_tabs writes the header; until it runs there is nothing to disagree
+    with, and an empty read is the honest answer.
+    """
+    c = client([])
+    c._fake._ss._values.rows = []  # no header row at all
+    assert c.read_rows(schema.LEADS) == {}
 
 
 def test_errors_tab_is_append_only(client):

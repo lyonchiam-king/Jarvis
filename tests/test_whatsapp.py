@@ -694,6 +694,81 @@ class TestWhatsAppQueueEndpoint:
         # phone_not_mobile carries the phone so the user can see what was rejected.
         assert by_id["lead-landline"]["phone"] == "04-1234567"
 
+    def test_every_drafted_row_is_either_queued_or_explained(self, monkeypatch):
+        """The invariant behind 'however many I drafted, I still see them all'.
+
+        Each row below used to fall through a bare ``continue``: an Email-
+        channel draft, a row whose Channel cell is something else entirely,
+        and a row carrying a message whose Status is not "Drafted" -- the mark
+        a stale column order leaves. None of them can be sent from section 4,
+        but all of them are work the pipeline did, so all of them have to be
+        accounted for on screen rather than silently dropped.
+        """
+        from outreach import schema
+
+        def row(n, lead_id, name, **over):
+            base = {
+                "Lead ID": lead_id,
+                "Business Name": name,
+                "Channel": "WhatsApp",
+                "Status": "Drafted",
+                "WhatsApp Message": "Hi!",
+                "Drafted At": "2026-08-15 08:00:00Z",
+                "WhatsApp Status": "",
+            }
+            base.update(over)
+            return (n, base)
+
+        drafted = {
+            "lead-email": row(2, "lead-email", "Email Salon",
+                              Channel="Email", Recipient="hi@salon.my"),
+            "lead-weird": row(3, "lead-weird", "Weird Salon", Channel="Carrier Pigeon"),
+            "lead-status": row(4, "lead-status", "Stale Salon",
+                               Status="2026-08-15T07:37:54.028Z"),
+            "lead-unreach": row(5, "lead-unreach", "Unreachable Salon",
+                                Channel="Unreachable"),
+            "lead-ok": row(6, "lead-ok", "OK Salon"),
+        }
+        # Carries neither a message nor a timestamp, so it is not drafted work
+        # and passing over it is not a silent drop.
+        drafted["lead-empty"] = (7, {"Lead ID": "lead-empty", "Business Name": "",
+                                     "Channel": "", "Status": "",
+                                     "WhatsApp Message": "", "Drafted At": ""})
+
+        class FakeSheets:
+            def read_rows(self, tab):
+                if tab is schema.OUTREACH_LOG:
+                    return drafted
+                if tab is schema.LEADS:
+                    return {
+                        "lead-email": (2, {"Phone": "+60123456789"}),
+                        "lead-weird": (3, {"Phone": "+60123456789"}),
+                        "lead-status": (4, {"Phone": "+60123456789"}),
+                        "lead-unreach": (5, {"Phone": "04-1234567"}),
+                        "lead-ok": (6, {"Phone": "+6012-3456789"}),
+                        "lead-empty": (7, {"Phone": ""}),
+                    }
+                return {}
+
+        client = _make_client(monkeypatch, sheets=FakeSheets())
+        data = json.loads(client.get("/api/whatsapp/queue").data)
+
+        assert [q["lead_id"] for q in data["queue"]] == ["lead-ok"]
+
+        by_id = {e["lead_id"]: e for e in data["excluded"]}
+        assert by_id["lead-email"]["reason"] == "email_channel"
+        assert by_id["lead-email"]["recipient"] == "hi@salon.my"
+        assert by_id["lead-weird"]["reason"] == "unknown_channel"
+        assert by_id["lead-weird"]["channel"] == "Carrier Pigeon"
+        assert by_id["lead-status"]["reason"] == "status_not_drafted"
+        assert by_id["lead-status"]["status"] == "2026-08-15T07:37:54.028Z"
+        assert by_id["lead-unreach"]["reason"] == "unreachable"
+        assert by_id["lead-unreach"]["phone"] == "04-1234567"
+
+        # The invariant itself: every row carrying drafted work is somewhere.
+        seen = {q["lead_id"] for q in data["queue"]} | set(by_id)
+        assert seen == set(drafted) - {"lead-empty"}
+
     def test_sheet_read_error_is_returned_not_swallowed(self, monkeypatch):
         """When the Sheet read itself throws, the endpoint must surface the
         error so the dashboard can show it -- not an empty queue that looks

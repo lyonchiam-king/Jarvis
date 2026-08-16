@@ -986,90 +986,87 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
 
         queue: list[dict[str, str]] = []
-        # A drafted WhatsApp lead that does not appear in the send list is a
-        # silent failure -- section 4 just goes empty and the user can't tell
-        # why. Capture each dropped lead with the reason so the dashboard can
-        # show "you drafted this, here's why it isn't in your send list" instead
-        # of a blank panel.
+        # Every message the pipeline drafted has to end up in one of these two
+        # lists. A drafted lead that appears in neither is a silent failure --
+        # section 4 goes quiet and the only way to find out why is to open the
+        # Sheet and read columns by eye. So the loop below never just skips a
+        # drafted row: it either queues it or records why not.
         excluded: list[dict[str, str]] = []
+
         for lead_id, (_n, row) in outreach.items():
-            # Only drafted (not yet sent) rows. ``_is_drafted_outreach`` also
-            # accepts a WhatsApp row whose Status cell is empty but which
-            # carries a drafted message and timestamp -- the mark a 2026-08-14
-            # column insert left on pre-existing rows. Without it those rows
-            # vanish from section 4.
-            if not _is_drafted_outreach(row):
+            name = row.get("Business Name") or ""
+            channel = (row.get("Channel") or "").strip().casefold()
+            message = (row.get("WhatsApp Message") or "").strip()
+            drafted_at = (row.get("Drafted At") or "").strip()
+            lead = leads.get(lead_id, (0, {}))[1]
+            phone = lead.get("Phone", "").strip()
+
+            def drop(reason: str, **extra: str) -> None:
+                entry = {
+                    "lead_id": lead_id,
+                    "name": name,
+                    "phone": phone,
+                    "reason": reason,
+                }
+                entry.update(extra)
+                excluded.append(entry)
+
+            # A row with neither a message nor a timestamp is not drafted work
+            # -- an empty row, or one of another channel's records. Passing
+            # over it is not a silent drop, because there is nothing to show.
+            if not message and not drafted_at:
                 continue
 
-            channel = (row.get("Channel") or "").strip().casefold()
-            name = row.get("Business Name") or ""
+            # Carries a draft but the Status cell says something else. That is
+            # either a hand-edit or a row written under an older column order,
+            # and it is exactly the case that used to vanish -- so surface it
+            # with the offending value rather than dropping it.
+            if not _is_drafted_outreach(row):
+                drop("status_not_drafted", status=(row.get("Status") or "").strip())
+                continue
 
             # A landline-only lead (no email, no mobile) is drafted as
             # "Unreachable". It can't receive WhatsApp, but it must still show
             # at the bottom of section 4 with the reason -- hiding it made a
             # founder think the draft never saved.
             if channel == "unreachable":
-                lead = leads.get(lead_id, (0, {}))[1]
-                excluded.append(
-                    {
-                        "lead_id": lead_id,
-                        "name": name,
-                        "phone": lead.get("Phone", "").strip(),
-                        "reason": "unreachable",
-                    }
-                )
+                drop("unreachable")
+                continue
+
+            # Drafted with an email address, so it went to Gmail drafts rather
+            # than here. Worth listing: the WhatsApp text exists on the row and
+            # its absence from the send list is otherwise unexplained.
+            if channel == "email":
+                drop("email_channel", recipient=(row.get("Recipient") or "").strip())
                 continue
 
             if channel != "whatsapp":
+                drop("unknown_channel", channel=(row.get("Channel") or "").strip())
                 continue
 
             # Skip if already sent via the dashboard.
             wa_status = (row.get("WhatsApp Status") or "").strip().casefold()
             if wa_status in WA_SENT_STATUSES:
-                excluded.append(
-                    {
-                        "lead_id": lead_id,
-                        "name": name,
-                        "phone": "",
-                        "reason": "already_sent",
-                        "wa_status": wa_status,
-                    }
-                )
+                drop("already_sent", wa_status=wa_status)
                 continue
 
-            lead = leads.get(lead_id, (0, {}))[1]
-            phone = lead.get("Phone", "").strip()
             if not phone:
                 # The lead row exists in Outreach Log but has no matching row in
                 # Leads, or the Phone cell is blank. Either way the message has
                 # nowhere to go -- say so instead of vanishing silently.
-                reason = "no_lead_row" if lead_id not in leads else "phone_empty"
-                excluded.append(
-                    {
-                        "lead_id": lead_id,
-                        "name": name,
-                        "phone": "",
-                        "reason": reason,
-                    }
-                )
+                drop("no_lead_row" if lead_id not in leads else "phone_empty")
                 continue
+
             # Landlines (03, 04...) can't receive WhatsApp — hide them so the
             # queue only shows leads we can actually reach.
             if not is_mobile_number(phone):
-                excluded.append(
-                    {
-                        "lead_id": lead_id,
-                        "name": name,
-                        "phone": phone,
-                        "reason": "phone_not_mobile",
-                    }
-                )
+                drop("phone_not_mobile")
                 continue
 
             queue.append(
                 {
                     "lead_id": lead_id,
-                    "name": row.get("Business Name") or lead.get("Business Name", ""),
+                    "name": name or lead.get("Business Name", ""),
                     "phone": phone,
                     "message": row.get("WhatsApp Message", ""),
                 }
@@ -1347,14 +1344,22 @@ PAGE = """<!doctype html>
              animation:wa-spin .6s linear infinite; vertical-align:-2px;
              margin-right:4px; }
   @keyframes wa-spin { to { transform:rotate(360deg); } }
-  /* Drafted-but-hidden leads, with the reason section 4 used to swallow. */
+  /* Drafted-but-hidden leads, with the reason section 4 used to swallow.
+     These are the ones you cannot act on, so they are laid out five across
+     and scroll inside a fixed height -- present and countable, but never
+     pushing the messages you *can* send off the screen. */
   .wa-excl-wrap { margin-top:12px; border:1px dashed var(--line); border-radius:8px;
                   padding:10px 12px; background:var(--bg); }
-  .wa-excl-head { font-size:13px; font-weight:600; color:var(--ink); margin-bottom:6px; }
-  .wa-excl { padding:6px 0; border-top:1px solid var(--line); }
-  .wa-excl:first-of-type { border-top:0; }
-  .wa-excl .wa-name { font-weight:600; font-size:14px; }
-  .wa-excl .sub { margin-top:2px; }
+  .wa-excl-head { font-size:13px; font-weight:600; color:var(--ink); margin-bottom:8px; }
+  .wa-excl-grid { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr));
+                  gap:8px; max-height:230px; overflow-y:auto; padding-right:4px; }
+  @media (max-width:900px) { .wa-excl-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+  .wa-excl { padding:7px 9px; border:1px solid var(--line); border-radius:6px;
+             background:var(--card); min-width:0; }
+  .wa-excl .wa-name { font-weight:600; font-size:13px; line-height:1.25;
+                      overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .wa-excl .wa-why { margin-top:3px; font-size:12px; color:var(--muted);
+                     overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .wa-err { margin-top:8px; padding:8px 10px; border-radius:8px;
             border:1px solid var(--accent); background:var(--bg);
             color:var(--accent); font-size:13px; }
@@ -1645,23 +1650,45 @@ async function loadWhatsAppInline() {
   // instead of leaving section 4 blank. This is the "my drafted message isn't
   // showing" answer, surfaced in the panel itself.
   if (waExcluded.length) {
+    // Two strings per reason: a short tag that fits a narrow grid cell, and
+    // the full sentence, which goes in the title attribute so hovering still
+    // explains it without the panel growing to fit the prose.
     const reasons = {
-      already_sent: (x) => `Already sent \\u2014 WhatsApp Status is \\u2018${esc(x.wa_status || 'sent')}\\u2019, so this one is done. (If it didn\\u2019t actually deliver, clear the WhatsApp Status cell and it comes back.)`,
-      phone_empty: () => 'No phone number in the Leads tab. Add a Malaysian mobile (01\\u2026) and it will appear here.',
-      no_lead_row: () => 'No matching row in the Leads tab \\u2014 the Outreach Log has this lead but the Leads tab doesn\\u2019t.',
-      phone_not_mobile: (x) => `Phone \\u2018${esc(x.phone || '')}\\u2019 isn\\u2019t a Malaysian mobile (01\\u2026). Landlines (03/04/05\\u2026) and foreign numbers can\\u2019t receive WhatsApp.`,
-      unreachable: (x) => `No email and the phone \\u2018${esc(x.phone || '')}\\u2019 is a landline \\u2014 it can\\u2019t receive WhatsApp.`,
+      already_sent: (x) => [
+        'Sent \\u2714',
+        `Already sent \\u2014 WhatsApp Status is \\u2018${x.wa_status || 'sent'}\\u2019, so this one is done. If it didn\\u2019t actually deliver, clear the WhatsApp Status cell and it comes back.`],
+      phone_empty: () => [
+        'No phone',
+        'No phone number in the Leads tab. Add a Malaysian mobile (01\\u2026) and it will appear here.'],
+      no_lead_row: () => [
+        'Not in Leads',
+        'No matching row in the Leads tab \\u2014 the Outreach Log has this lead but the Leads tab doesn\\u2019t.'],
+      phone_not_mobile: (x) => [
+        `Landline ${x.phone || ''}`,
+        `Phone \\u2018${x.phone || ''}\\u2019 isn\\u2019t a Malaysian mobile (01\\u2026). Landlines (03/04/05\\u2026) and foreign numbers can\\u2019t receive WhatsApp.`],
+      unreachable: (x) => [
+        `Landline ${x.phone || ''}`,
+        `No email and the phone \\u2018${x.phone || ''}\\u2019 is a landline \\u2014 it can\\u2019t receive WhatsApp.`],
+      email_channel: (x) => [
+        `Email \\u2014 ${x.recipient || 'drafted'}`,
+        `Drafted as an email to ${x.recipient || 'this lead'}, so it\\u2019s waiting in Gmail drafts rather than here.`],
+      unknown_channel: (x) => [
+        `Channel: ${x.channel || 'blank'}`,
+        `The Channel cell says \\u2018${x.channel || ''}\\u2019, which isn\\u2019t WhatsApp, Email or Unreachable. Fix it in the Sheet and this lead comes back.`],
+      status_not_drafted: (x) => [
+        `Status: ${x.status || 'blank'}`,
+        `This lead has a drafted message, but its Status cell says \\u2018${x.status || ''}\\u2019 rather than \\u2018Drafted\\u2019. Set it back to Drafted and it returns to the send list.`],
     };
     const items = waExcluded.map((x) => {
-      const why = (reasons[x.reason] || (() => 'Hidden from the send list.'))(x);
-      return `<div class="wa-excl">
+      const pair = (reasons[x.reason] || (() => ['Hidden', 'Hidden from the send list.']))(x);
+      return `<div class="wa-excl" title="${esc(x.name || x.lead_id)} \\u2014 ${esc(pair[1])}">
         <div class="wa-name">${esc(x.name || x.lead_id)}</div>
-        <div class="sub">${why}</div>
+        <div class="wa-why">${esc(pair[0])}</div>
       </div>`;
     }).join('');
     html += `<div class="wa-excl-wrap">
-      <div class="wa-excl-head">${waExcluded.length} drafted message${waExcluded.length > 1 ? 's' : ''} not shown \\u2014 here\\u2019s why</div>
-      ${items}
+      <div class="wa-excl-head">${waExcluded.length} drafted message${waExcluded.length > 1 ? 's' : ''} you can\\u2019t send from here \\u2014 hover any for the reason</div>
+      <div class="wa-excl-grid">${items}</div>
     </div>`;
   }
 
@@ -1759,8 +1786,16 @@ async function poll() {
   const busy = !!d.running;
   $('#running').textContent = busy ? `Running ${d.running}\\u2026` : '';
   document.querySelectorAll('button[data-run]').forEach(b => b.disabled = busy);
-  if (!busy && poll.wasBusy) loadModel();
-  if (!busy && poll.wasBusy) { refresh(); loadNextUp(); }
+  if (!busy && poll.wasBusy) {
+    loadModel();
+    loadNextUp();
+    loadQueue();
+    // Awaited, not fired and forgotten: refresh() rebuilds the #send panel
+    // and only then fills in the WhatsApp cards. Drafting finishes in step 1
+    // and the messages have to be on screen in step 4 without a manual
+    // reload, so the panel is rebuilt before anything else can race it.
+    await refresh();
+  }
   poll.wasBusy = busy;
 }
 
