@@ -177,6 +177,10 @@ def test_a_sheet_missing_a_new_column_is_an_error_not_a_silent_misread(client):
     assert "Outreach Log" in message
     assert "WhatsApp Sent At" in message
     assert "WhatsApp Status" in message
+    # The migration, not just init-sheet. A header this short means rows were
+    # very likely appended past the table as well, and init-sheet alone leaves
+    # those exactly as invisible as they were.
+    assert "migrate_outreach_log" in message
     assert "init-sheet" in message
 
 

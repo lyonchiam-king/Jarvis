@@ -363,11 +363,24 @@ class SheetsClient:
 
         if len(live) < len(want) and live == want[: len(live)]:
             missing = ", ".join(want[len(live):])
+            # Widening the header is necessary but rarely sufficient. A header
+            # narrower than the schema is also what makes appends land past the
+            # end of the table, so by the time this fires there are usually
+            # data rows sitting in the wrong columns too -- and init-sheet does
+            # not move those. Naming only init-sheet here sent a founder round
+            # the loop of "I ran the fix and the rows are still missing".
             raise SheetSchemaError(
-                f"The '{tab.title}' tab is missing the column(s) {missing}. "
-                "Your Sheet predates a schema change, so rows are being read "
-                "against the wrong columns. Run `outreach init-sheet` to add "
-                "them -- it only rewrites row 1 and never touches your data."
+                f"The '{tab.title}' tab is missing the column(s) {missing}, so "
+                "rows are being read against the wrong columns.\n"
+                "Check the data rows before you fix the header: a short header "
+                "also makes new rows get appended past the end of the table, "
+                "where nothing can see them.\n"
+                f"  - '{schema.OUTREACH_LOG.title}': run "
+                "`python scripts/migrate_outreach_log.py` (dry run, writes "
+                "nothing). It repairs the header and the rows together.\n"
+                "  - Otherwise, if the data rows are known to be in the right "
+                "columns, `outreach init-sheet` rewrites row 1 on its own and "
+                "never touches your data."
             )
 
         differences = [
