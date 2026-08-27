@@ -1179,6 +1179,7 @@ def create_app(config: Config) -> Flask:
     @app.route("/api/whatsapp/queue")
     def api_whatsapp_queue():
         """Leads waiting for WhatsApp send, with phone + message text."""
+        from . import phone as phone_lib
         from .providers.whatsapp import WA_SENT_STATUSES
         from .stages.reachability import can_whatsapp
 
@@ -1286,6 +1287,13 @@ def create_app(config: Config) -> Flask:
                     "lead_id": lead_id,
                     "name": name or lead.get("Business Name", ""),
                     "phone": phone,
+                    # Dialled form, resolved here where the lead's country is
+                    # in hand. The browser never works this out and the relay
+                    # must not guess it, so it is computed once, server-side,
+                    # and carried through the send.
+                    "phone_e164": phone_lib.normalise(
+                        phone, lead.get("Country", "") or c.compliance.country_code
+                    ),
                     "message": row.get("WhatsApp Message", ""),
                 }
             )
@@ -1301,7 +1309,9 @@ def create_app(config: Config) -> Flask:
 
         payload = request.json or {}
         lead_id = (payload.get("lead_id") or "").strip()
-        phone = (payload.get("phone") or "").strip()
+        # The queue computed this from the lead's country. Preferred over the
+        # display number, which carries no country and cannot be dialled.
+        phone = (payload.get("phone_e164") or payload.get("phone") or "").strip()
         message = (payload.get("message") or "").strip()
 
         if not lead_id:
@@ -1315,7 +1325,9 @@ def create_app(config: Config) -> Flask:
 
         try:
             client = WhatsAppClient(port=c.outreach.whatsapp_relay_port)
-            result = client.send_message(phone, message)
+            result = client.send_message(
+                phone, message, c.compliance.country_code
+            )
         except WhatsAppError as exc:
             # Record the failure so the user sees it in the Sheet.
             try:
@@ -1941,7 +1953,9 @@ function sendWhatsApp(idx, leadId, phone) {
   fetch('/api/whatsapp/send', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({lead_id: leadId, phone: phone, message: message}),
+    // phone is the display form; phone_e164 is what actually gets dialled.
+    body: JSON.stringify({lead_id: leadId, phone: phone,
+                          phone_e164: msg.phone_e164 || '', message: message}),
   }).then(r => r.json()).then(d => {
     msg._sending = false;
     if (d.error) { msg._failed = true; msg._error = d.error; }

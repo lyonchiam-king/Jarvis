@@ -96,8 +96,14 @@ class WhatsAppClient:
 
     # ------------------------------------------------------------------- send
 
-    def send_message(self, phone: str, text: str) -> SendResult:
+    def send_message(self, phone: str, text: str, country: str = "") -> SendResult:
         """Send a WhatsApp text message to a phone number.
+
+        The number is normalised to E.164 here, because this is the last place
+        that knows the lead's country -- the relay does not, and the one time
+        it tried to guess it turned a US number into a Malaysian stranger's.
+        A number that cannot be resolved to a country is refused rather than
+        sent somewhere plausible.
 
         The relay enforces the daily cap and the minimum interval between sends,
         so this call may block for up to ``min_interval_seconds``.
@@ -106,6 +112,15 @@ class WhatsAppClient:
             raise WhatsAppError("phone is required")
         if not text or not text.strip():
             raise WhatsAppError("message text is required")
+
+        e164 = phone_lib.normalise(phone, country)
+        if not e164 or e164.startswith("0"):
+            raise WhatsAppError(
+                f"Cannot tell which country {phone!r} belongs to, so there is "
+                "no safe way to dial it. Set the lead's Country cell, or use "
+                "the full international number."
+            )
+        phone = e164
 
         try:
             resp = requests.post(

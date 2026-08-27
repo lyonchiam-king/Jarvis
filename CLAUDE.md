@@ -42,7 +42,7 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             886 tests, pytest, no CI -- the suite is the only gate
+tests/             890 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -113,6 +113,9 @@ sent, addressed to 6015045550123, a real Malaysian stranger. `phone.py` owns
 this now: `line_type` returns **unknown** wherever a numbering plan genuinely
 cannot tell (the US and Canada assign no mobile range), and unknown means
 *ask WhatsApp*, never *give up*. Never infer a country code that was not given.
+Normalising to E.164 belongs in `WhatsAppClient.send_message`, the last place
+that knows the lead's country -- making the relay strict without doing that
+refused every national-format Malaysian number on the Sheet.
 
 **Reachability is answered before the site is built, not after.** Building is
 the most expensive thing here, and it used to happen before anyone knew the

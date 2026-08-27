@@ -892,3 +892,53 @@ class TestWhatsAppSendEndpoint:
             data = json.loads(resp.data)
             assert "Daily cap" in data["error"]
             assert updates.get("WhatsApp Status") == {"lead-1": "failed"}
+
+
+class TestTheNumberThatActuallyGetsDialled:
+    """The relay used to force a "60" onto any number without one, so a US
+    lead became a Malaysian stranger. It now refuses anything that is not
+    already international -- which only works if the caller normalises, and
+    for a while it did not: every Malaysian number on the Sheet is stored
+    national ("012-3456789") and would have been refused outright.
+    """
+
+    def _sent_body(self, rsps):
+        import json as _j
+        return _j.loads(rsps.calls[0].request.body)
+
+    def _ok(self, rsps):
+        rsps.add(
+            responses.POST,
+            "http://127.0.0.1:4099/send",
+            json={"status": "sent", "message_id": "m1", "timestamp": "t"},
+        )
+
+    def test_a_malaysian_national_number_is_dialled_internationally(self):
+        with responses.RequestsMock() as rsps:
+            self._ok(rsps)
+            WhatsAppClient().send_message("012-345 6789", "Hi", "MY")
+            assert self._sent_body(rsps)["phone"] == "60123456789"
+
+    def test_a_us_number_never_gains_a_malaysian_prefix(self):
+        """The exact number the old relay would have produced was
+        6015045550123 -- a real line belonging to someone who is not this
+        lead. Nothing may reintroduce that."""
+        with responses.RequestsMock() as rsps:
+            self._ok(rsps)
+            WhatsAppClient().send_message("+1 504-555-0123", "Hi", "US")
+            dialled = self._sent_body(rsps)["phone"]
+            assert dialled == "15045550123"
+            assert not dialled.startswith("60")
+
+    def test_an_already_international_number_is_left_alone(self):
+        with responses.RequestsMock() as rsps:
+            self._ok(rsps)
+            WhatsAppClient().send_message("+60 12-3456789", "Hi", "MY")
+            assert self._sent_body(rsps)["phone"] == "60123456789"
+
+    def test_a_number_with_no_resolvable_country_is_refused_not_guessed(self):
+        """A bare national number and no country: 012-3456789 is Malaysian,
+        British or neither depending on where you stand. Refusing costs one
+        lead; guessing messages a stranger."""
+        with pytest.raises(WhatsAppError, match="which country"):
+            WhatsAppClient().send_message("012-345 6789", "Hi")
