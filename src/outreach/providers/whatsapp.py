@@ -16,19 +16,26 @@ from dataclasses import dataclass
 
 import requests
 
+from .. import phone as phone_lib
+
 log = logging.getLogger("outreach")
 
 
-def is_mobile_number(phone: str) -> bool:
-    """True when a phone number is a Malaysian mobile (01X) that can receive WhatsApp.
+def is_mobile_number(phone: str, country: str = "") -> bool:
+    """True when the number's own numbering plan says it is a mobile.
 
-    Landlines (03, 04, 05...) and anything else return False. Handles the
-    formats Google Places returns: "+60 12-3456789", "60123456789", "012-3456789".
+    Country-aware, and deliberately conservative in the other direction from
+    how this started: it used to hardcode Malaysia's 01X rule, so the day the
+    campaign moved to New Orleans every US lead came back False and the queue
+    emptied. US and Canadian numbers carry nothing that separates mobile from
+    fixed line, so no offline function can answer for them.
+
+    A False here therefore means "the plan does not say it is a mobile", NOT
+    "unreachable". Callers that need the real answer ask WhatsApp through
+    `WhatsAppClient.check_numbers`; `phone.line_type` is the honest version of
+    this question and returns "unknown" where that is the truth.
     """
-    digits = re.sub(r"\D", "", phone or "")
-    if digits.startswith("60"):
-        digits = "0" + digits[2:]
-    return digits.startswith("01")
+    return phone_lib.line_type(phone, country) == "mobile"
 
 
 # WhatsApp Status values that mean a message has already gone out. Both the
@@ -134,6 +141,55 @@ class WhatsAppClient:
             status=status,
             timestamp=data.get("timestamp", ""),
         )
+
+    # ------------------------------------------------------------------ check
+
+    def check_numbers(self, phones: list[str]) -> dict[str, bool | None]:
+        """Ask WhatsApp which of these numbers are registered.
+
+        The one reliable answer for a country whose numbering plan cannot
+        separate mobile from landline. Numbers must already be E.164 digits --
+        `phone.normalise` does that with the lead's country, which this
+        process knows and the relay does not.
+
+        Returns number -> True (registered) / False (not) / None (the lookup
+        itself failed). None is not False on purpose: a network hiccup must
+        not permanently retire a lead, so callers store it as unknown and try
+        again another day.
+        """
+        wanted = [p.strip() for p in phones if p and p.strip()]
+        if not wanted:
+            return {}
+
+        try:
+            resp = requests.post(
+                f"{self._base}/check",
+                json={"phones": wanted},
+                # The relay paces lookups, so this waits by design.
+                timeout=self._timeout + 5.0 * len(wanted),
+            )
+            data = resp.json()
+        except requests.ConnectionError:
+            raise WhatsAppError(
+                "WhatsApp relay is not running. Start it with Dashboard.bat "
+                "or run: node whatsapp-relay/server.js"
+            )
+        except Exception as exc:
+            raise WhatsAppError(f"Relay request failed: {exc}")
+
+        if resp.status_code == 503:
+            raise WhatsAppError(
+                "WhatsApp is not connected. Scan the QR code in the dashboard "
+                "to pair your phone."
+            )
+        if resp.status_code >= 400:
+            raise WhatsAppError(data.get("error", "Relay refused the check"))
+
+        out: dict[str, bool | None] = {}
+        for number, result in (data.get("results") or {}).items():
+            registered = (result or {}).get("registered")
+            out[number] = registered if isinstance(registered, bool) else None
+        return out
 
     # ---------------------------------------------------------------- helpers
 

@@ -421,6 +421,57 @@ Every field you fill is an instruction someone will follow exactly. Write \
 nothing you would not defend in a review.
 """
 
+AREAS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "areas": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Search areas, each written the way someone would type it "
+                "into Google Maps: the district or suburb, then the "
+                "city/state, then the country. Ordered densest-first, "
+                "because discovery drinks the wells in order."
+            ),
+        }
+    },
+    "required": ["areas"],
+    "additionalProperties": False,
+}
+
+AREAS_SYSTEM = """\
+You list the districts, suburbs and neighbouring towns that make up a local \
+business market, so a lead-discovery run can work through them one at a time.
+
+Google's text search returns at most about 60 results for any one query, \
+however you paginate. That is the whole reason this list exists: one broad \
+query like "New Orleans" is a single 60-result well, while twenty named \
+neighbourhoods are twenty wells. So name real, distinct, adjacent places -- \
+never slice one place into invented sub-parts.
+
+Rules:
+- Write each area the way it would be typed into Google Maps, with enough \
+  administrative context to be unambiguous: "Bywater, New Orleans, LA, USA", \
+  not "Bywater".
+- Real places only. If you are unsure a neighbourhood exists under that name, \
+  leave it out. A made-up area returns nothing and wastes a run.
+- Cover the requested place properly before straying outside it, then include \
+  genuinely adjacent towns that share the same market.
+- Order by how many small businesses each is likely to hold, densest first.
+- No duplicates, and never repeat the parent location as its own area.
+"""
+
+
+def build_areas_prompt(location: str, count: int) -> str:
+    return (
+        f"List up to {count} search areas covering {location}.\n\n"
+        "These are for finding small local businesses -- salons, cafes, "
+        "workshops, clinics -- so favour the commercial and residential "
+        "districts where such businesses actually sit over industrial parks "
+        "or open country."
+    )
+
+
 OUTREACH_COPY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -1356,6 +1407,17 @@ class _Writer:
             motion_language=str(payload.get("motion_language", "")).strip(),
             micro_interactions=_as_tuple(payload.get("micro_interactions")),
         )
+
+    def suggest_areas(self, prompt: str) -> tuple[str, ...]:
+        """Sub-areas for a broad location -- the wells discovery drinks."""
+        payload = self._call(AREAS_SYSTEM, prompt, AREAS_SCHEMA)
+        seen, out = set(), []
+        for area in _as_tuple(payload.get("areas")):
+            key = area.strip().lower()
+            if key and key not in seen:
+                seen.add(key)
+                out.append(area.strip())
+        return tuple(out)
 
     def write_outreach_copy(self, prompt: str) -> OutreachCopy:
         """Stage 5 -- the email and the WhatsApp opener."""

@@ -44,6 +44,7 @@ FUNNEL = [
 STAGE_COMMANDS = {
     "discovery": ["run", "discovery"],
     "research": ["run", "research"],
+    "reachability": ["run", "reachability"],
     "site-brief": ["run", "site-brief"],
     "site-brief-rewrite": ["run", "site-brief", "--rewrite"],
     "site-build": ["run", "site-build"],
@@ -62,6 +63,7 @@ FULL_RUN = ["discovery", "research", "site-brief", "outreach-draft"]
 TAKES_LIMIT = {
     "discovery",
     "research",
+    "reachability",
     "site-brief",
     "site-brief-rewrite",
     "site-build",
@@ -1145,10 +1147,40 @@ def create_app(config: Config) -> Flask:
         except Exception:
             return jsonify({"qr": None})
 
+    @app.route("/api/suggest-areas", methods=["POST"])
+    def api_suggest_areas():
+        """Expand a broad location into the sub-areas discovery can drink.
+
+        One model call. Nothing is saved -- the list goes back into the
+        textarea for Lyon to edit and cut before he presses Save, because a
+        suggested area is a guess and some of them will be wrong.
+        """
+        from .providers.llm import build_areas_prompt, make_writer
+
+        payload = request.get_json(silent=True) or {}
+        location = str(payload.get("location") or "").strip()
+        if not location:
+            return jsonify({"error": "Type a location first."}), 400
+        try:
+            count = max(5, min(40, int(payload.get("count") or 20)))
+        except (TypeError, ValueError):
+            count = 20
+
+        c = current()
+        try:
+            areas = make_writer(c).suggest_areas(
+                build_areas_prompt(location, count)
+            )
+        except Exception as exc:  # noqa: BLE001 -- surfaced in the panel
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
+
+        return jsonify({"areas": list(areas), "location": location})
+
     @app.route("/api/whatsapp/queue")
     def api_whatsapp_queue():
         """Leads waiting for WhatsApp send, with phone + message text."""
-        from .providers.whatsapp import WA_SENT_STATUSES, is_mobile_number
+        from .providers.whatsapp import WA_SENT_STATUSES
+        from .stages.reachability import can_whatsapp
 
         c = current()
         if not c.secrets.sheet_id:
@@ -1157,6 +1189,10 @@ def create_app(config: Config) -> Flask:
             sheets = _sheets_client(c)
             outreach = sheets.read_rows(schema.OUTREACH_LOG)
             leads = sheets.read_rows(schema.LEADS)
+            # For the cached WhatsApp verdict. Worth the extra read: without
+            # it a US number falls back to the numbering-plan guess, which
+            # cannot tell mobile from landline there and hides the lead.
+            research = sheets.read_rows(schema.RESEARCH)
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
 
@@ -1232,9 +1268,16 @@ def create_app(config: Config) -> Flask:
                 drop("no_lead_row" if lead_id not in leads else "phone_empty")
                 continue
 
-            # Landlines (03, 04...) can't receive WhatsApp — hide them so the
-            # queue only shows leads we can actually reach.
-            if not is_mobile_number(phone):
+            # Hide anything that cannot receive WhatsApp, so the queue only
+            # shows leads we can actually reach. The cached verdict from the
+            # reachability check decides where there is one; the numbering
+            # plan is only a fallback for leads it has not reached yet.
+            research_row = research.get(lead_id)
+            if not can_whatsapp(
+                lead,
+                research_row[1] if research_row else None,
+                c.compliance.country_code,
+            ):
                 drop("phone_not_mobile")
                 continue
 
@@ -2206,9 +2249,18 @@ function drawTarget(editing) {
     <label class="sub" for="t-areas">Search areas &mdash; one per line</label>
     <textarea id="t-areas" style="height:190px;margin-top:5px"
       placeholder="Georgetown, Penang, Malaysia">${esc((target.areas || []).join('\\n'))}</textarea>
+    <div class="row" style="margin-top:6px">
+      <button onclick="suggestAreas()" id="suggest-btn">Suggest areas from the location</button>
+      <span class="hint" id="suggest-note" style="margin-left:8px"></span>
+    </div>
     <p class="hint">Google gives about 60 results per area and no more, so one area
       runs dry in a day or two. List several and each run moves down the list,
       skipping businesses you already have.</p>
+    <p class="hint"><b>Suggest</b> fills the box from whatever is in
+      <b>Main location</b> above &mdash; type <i>New Orleans, LA, USA</i> and it
+      writes out the neighbourhoods. They are suggestions, so read the list and
+      delete the ones you do not want before saving. Nothing is saved until you
+      press Save.</p>
     <label class="sub" for="t-batch">Most a single run may do</label>
     <input id="t-batch" type="number" min="1" max="200" style="width:110px;margin:5px 0 4px"
            value="${target.batch_size}">
@@ -2222,6 +2274,41 @@ function drawTarget(editing) {
     </div>
     <p class="hint">Changing this starts a fresh hunt. Nothing already on your
       Sheet is altered or lost.</p>`;
+}
+
+async function suggestAreas() {
+  const loc = $('#t-loc').value.trim();
+  const note = $('#suggest-note');
+  const btn = $('#suggest-btn');
+  if (!loc) { note.textContent = 'Type a main location first.'; return; }
+
+  btn.disabled = true;
+  note.textContent = 'Asking\u2026';
+  try {
+    const r = await fetch('/api/suggest-areas', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({location: loc, count: 20})
+    });
+    const d = await r.json();
+    if (!r.ok) { note.textContent = d.error || 'Could not suggest areas.'; return; }
+
+    const box = $('#t-areas');
+    // Merge, never overwrite: anything already typed is kept, and a
+    // suggestion that duplicates it is dropped. Losing a hand-written list
+    // to a button press would be the worst thing this could do.
+    const have = box.value.split('\\n').map(s => s.trim()).filter(Boolean);
+    const seen = new Set(have.map(s => s.toLowerCase()));
+    const added = (d.areas || []).filter(a => !seen.has(a.trim().toLowerCase()));
+    box.value = have.concat(added).join('\\n');
+    note.textContent = added.length
+      ? 'Added ' + added.length + ' \u2014 edit or delete any, then Save.'
+      : 'Nothing new to add.';
+  } catch (e) {
+    note.textContent = 'Could not reach the server.';
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function saveTarget() {

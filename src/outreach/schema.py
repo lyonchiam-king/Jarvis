@@ -103,6 +103,14 @@ RESEARCH = Tab(
             "Social Profiles",
             note="platform, handle and full URL -- one profile per line",
         ),
+        # Appended, like Social Profiles above and for the same reason.
+        # Answered once per lead and then cached: the value is what stops the
+        # pipeline spending a site build on someone who cannot be contacted.
+        Column(
+            "WhatsApp Reachable",
+            note="yes | no | unknown -- unknown means the check has not run yet",
+        ),
+        Column("WhatsApp Checked At", note="ISO timestamp; blank until checked"),
     ),
 )
 

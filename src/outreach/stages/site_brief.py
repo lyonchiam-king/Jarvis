@@ -36,6 +36,7 @@ from ..providers.lovable import LovableAdapter, LovableSkipped
 from ..selection import ORDERS, select_pending, select_rewrite
 from ..sheets import SheetsClient
 from ..stage import Stage, advance
+from .reachability import is_contactable
 
 log = logging.getLogger("outreach")
 
@@ -45,6 +46,7 @@ class SiteBriefReport:
     candidates: int = 0
     already_done: int = 0
     not_ready: int = 0
+    unreachable: int = 0
     selected: int = 0
     prompts_written: int = 0
     projects_created: int = 0
@@ -58,6 +60,7 @@ class SiteBriefReport:
             f"Leads on the Sheet        {self.candidates}",
             f"  already briefed         {self.already_done}  (skipped)",
             f"  not yet researched      {self.not_ready}  (skipped)",
+            f"  no way to contact them  {self.unreachable}  (skipped)",
             f"  selected this run       {self.selected}",
             "",
             f"Lovable prompts written   {self.prompts_written}",
@@ -173,6 +176,21 @@ def run(
     research = sheets.read_rows(schema.RESEARCH)
     existing = sheets.read_rows(schema.SITE_BRIEFS)
     report.candidates = len(leads)
+
+    # The contactability gate. Building a site is the most expensive thing
+    # this pipeline does, and it used to happen before anyone knew whether
+    # the lead could be reached at all -- so a landline with no email cost a
+    # full generation and its tokens for a message that could never be sent.
+    # A lead is dropped here only when it has no channel whatsoever: not on
+    # WhatsApp AND no email. Unchecked leads pass through, because a lookup
+    # that has not run yet is not evidence of anything.
+    contactable = {}
+    for lead_id, entry in leads.items():
+        row = research.get(lead_id)
+        if row is None or is_contactable(row[1]):
+            contactable[lead_id] = entry
+    report.unreachable = len(leads) - len(contactable)
+    leads = contactable
 
     batch_size = min(limit or config.batch_size, config.batch_size)
     # Same preference as research. Ranking only the research queue would leave

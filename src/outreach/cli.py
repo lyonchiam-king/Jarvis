@@ -30,6 +30,7 @@ from .stages import discovery as discovery_stage
 from .stages import init_sheet as init_sheet_stage
 from .stages import outreach_draft as outreach_stage
 from .stages import research as research_stage
+from .stages import reachability as reachability_stage
 from .stages import site_brief as site_brief_stage
 
 log = logging.getLogger("outreach")
@@ -809,6 +810,26 @@ def run_research(ctx: click.Context, limit: int | None, social_first: bool | Non
     for line in report.summary_lines():
         click.echo(line)
     _echo_sheet_link(config)
+
+
+@run.command("reachability")
+@click.option("--limit", type=int, default=0, help="Check fewer leads than are waiting.")
+@click.pass_context
+def run_reachability(ctx: click.Context, limit: int) -> None:
+    """Stage 3.5 -- who can we actually reach, before a site is built for them.
+
+    Answers from the numbering plan where a country has one, and asks
+    WhatsApp only where it does not (the US and Canada, mainly). Cached: a
+    lead answered once is never asked again.
+    """
+    config = _load(ctx.obj["config_path"])
+    sheets = _sheets_client(config)
+    report = reachability_stage.check_reachability(config, sheets, limit=limit)
+
+    click.echo("")
+    for line in report.lines():
+        click.echo(line)
+    click.echo("")
 
 
 @run.command("site-brief")

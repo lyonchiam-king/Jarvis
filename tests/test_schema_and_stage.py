@@ -94,6 +94,7 @@ def test_column_order_is_append_only():
             "Social Handle", "Social Bio", "Social Recent Post",
             "Social Lookup Status", "Email Found", "Email Source",
             "Research Status", "Researched At", "Social Profiles",
+            "WhatsApp Reachable", "WhatsApp Checked At",
         ],
         "Site Briefs": [
             "Lead ID", "Business Name", "Lovable Prompt", "Approval Status",
@@ -123,7 +124,7 @@ def test_the_new_social_column_is_last_on_research():
     """Proves the append-only rule was followed for the column just added."""
     from outreach import schema
 
-    assert schema.RESEARCH.headers[-1] == "Social Profiles"
+    assert schema.RESEARCH.headers[-1] == "WhatsApp Checked At"
 
 
 def test_a_row_written_before_a_new_column_existed_still_reads():

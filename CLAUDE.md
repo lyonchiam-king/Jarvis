@@ -42,7 +42,7 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             751 tests, pytest, no CI -- the suite is the only gate
+tests/             886 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -105,6 +105,22 @@ Lyon runs Ollama. New spec fields go in `properties` but not `required`, with
 the prompt block rendered conditionally, so a model that skips one produces
 the previous prompt rather than a broken one. `layout_system` is the worked
 example.
+
+**Every phone rule is a country's rule, never "the" rule.** `is_mobile_number`
+hardcoded Malaysia's 01X prefix, and the relay force-prefixed `60` onto any
+number lacking one -- so a US lead was both hidden from the queue and, had it
+sent, addressed to 6015045550123, a real Malaysian stranger. `phone.py` owns
+this now: `line_type` returns **unknown** wherever a numbering plan genuinely
+cannot tell (the US and Canada assign no mobile range), and unknown means
+*ask WhatsApp*, never *give up*. Never infer a country code that was not given.
+
+**Reachability is answered before the site is built, not after.** Building is
+the most expensive thing here, and it used to happen before anyone knew the
+lead could be contacted. `run reachability` sits between research and the
+brief, costs a lookup only where the numbering plan cannot answer, and caches
+the verdict in the Sheet. A lead is dropped only with no channel at all --
+not on WhatsApp *and* no email. An unchecked lead is never dropped: a lookup
+that has not run is not evidence.
 
 **Ordering is the user's, not ours.** Socials-first is the one reorder we do,
 because Lyon asked for it. Within that, sheet order is preserved -- a queue he

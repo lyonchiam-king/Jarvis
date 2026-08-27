@@ -237,7 +237,7 @@ class TestIsMobileNumber:
         ],
     )
     def test_mobile_numbers_are_sendable(self, phone):
-        assert is_mobile_number(phone) is True
+        assert is_mobile_number(phone, "MY") is True
 
     @pytest.mark.parametrize(
         "phone",
@@ -253,7 +253,7 @@ class TestIsMobileNumber:
         ],
     )
     def test_landlines_and_garbage_are_not_sendable(self, phone):
-        assert is_mobile_number(phone) is False
+        assert is_mobile_number(phone, "MY") is False
 
 
 # ----------------------------------------------------------- dashboard API

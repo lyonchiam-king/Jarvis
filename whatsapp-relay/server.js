@@ -27,6 +27,12 @@ const PORT = parseInt(process.env.RELAY_PORT || "4099", 10);
 const AUTH_DIR = process.env.AUTH_DIR || ".whatsapp-session";
 const MAX_PER_DAY = parseInt(process.env.MAX_PER_DAY || "30", 10);
 const MIN_INTERVAL_MS = parseInt(process.env.MIN_INTERVAL_SECONDS || "15", 10) * 1000;
+// Registration lookups are cheaper than sends and carry no message, so they
+// pace faster -- but they still pace. Checking is cached upstream, so this
+// runs once per lead in its lifetime, not once per run.
+const CHECK_INTERVAL_MS =
+  parseInt(process.env.CHECK_INTERVAL_SECONDS || "3", 10) * 1000;
+const CHECK_MAX_PER_REQUEST = parseInt(process.env.CHECK_MAX_PER_REQUEST || "50", 10);
 
 // ---------------------------------------------------------------------------
 // State
@@ -38,6 +44,7 @@ let connected = false;
 let dailySent = 0;
 let dailyDate = new Date().toDateString();
 let lastSendTime = 0;
+let lastCheckTime = 0;
 let sendQueue = Promise.resolve(); // serialise sends so we never firehose
 
 // ---------------------------------------------------------------------------
@@ -177,17 +184,23 @@ app.post("/send", async (req, res) => {
     }
 
     try {
-      // Baileys expects the JID in international format: <country><number>@s.whatsapp.net.
-      // Google Places returns Malaysian numbers both ways -- "010-386 5688"
-      // (local) and "+60 12-3456789" (international) -- so normalise to digits
-      // and make sure the 60 country code is present.
-      let digits = phone.replace(/[^0-9]/g, "");
-      if (digits.startsWith("0")) {
-        digits = "60" + digits.slice(1);
-      } else if (!digits.startsWith("60")) {
-        digits = "60" + digits;
+      // Baileys expects the JID in international format:
+      // <country><number>@s.whatsapp.net. The caller normalises to E.164 --
+      // outreach/phone.py knows each lead's country and this process does
+      // not -- so the number arrives ready and is used as given.
+      //
+      // This used to force a "60" onto anything that lacked one, which was
+      // right in Penang and dangerous everywhere else: a US number
+      // 15045550123 became 6015045550123, a real Malaysian line belonging
+      // to a stranger. Never re-guess a country code here.
+      const jid = toJid(phone);
+      if (!jid) {
+        lastSendTime = Date.now();
+        return res.status(400).json({
+          status: "failed",
+          error: "phone must be in international format, digits only",
+        });
       }
-      const jid = digits + "@s.whatsapp.net";
       const result = await sock.sendMessage(jid, { text: message });
 
       lastSendTime = Date.now();
@@ -207,6 +220,64 @@ app.post("/send", async (req, res) => {
         timestamp: new Date().toISOString(),
       });
     }
+  });
+});
+
+// Digits of an E.164 number -> a WhatsApp JID. No country is inferred: a
+// number that does not already carry its country code is refused rather than
+// sent somewhere plausible-looking.
+function toJid(phone) {
+  const digits = String(phone || "").replace(/[^0-9]/g, "");
+  // Shortest real E.164 subscriber numbers are 8 digits including the code.
+  if (digits.length < 8 || digits.length > 15) return "";
+  if (digits.startsWith("0")) return "";
+  return digits + "@s.whatsapp.net";
+}
+
+// POST /check — is this number registered on WhatsApp?
+//
+// The only reliable answer for countries whose numbering plan does not
+// separate mobile from landline, which is most of them outside Asia. Paced
+// like /send and capped per request: a burst of lookups for numbers that
+// have never been messaged is exactly the pattern WhatsApp rate-limits.
+app.post("/check", async (req, res) => {
+  const { phones } = req.body || {};
+
+  if (!Array.isArray(phones) || phones.length === 0) {
+    return res.status(400).json({ error: "phones must be a non-empty array" });
+  }
+  if (phones.length > CHECK_MAX_PER_REQUEST) {
+    return res.status(400).json({
+      error: `at most ${CHECK_MAX_PER_REQUEST} numbers per request`,
+    });
+  }
+  if (!connected || !sock) {
+    return res.status(503).json({ error: "WhatsApp is not connected" });
+  }
+
+  // Share the send queue so a check can never overlap a send.
+  sendQueue = sendQueue.then(async () => {
+    const results = {};
+    for (const phone of phones) {
+      const jid = toJid(phone);
+      if (!jid) {
+        results[phone] = { registered: false, error: "not international format" };
+        continue;
+      }
+      const wait = Math.max(0, CHECK_INTERVAL_MS - (Date.now() - lastCheckTime));
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      try {
+        const [hit] = await sock.onWhatsApp(jid);
+        results[phone] = { registered: Boolean(hit && hit.exists) };
+      } catch (err) {
+        logger.error({ err, phone }, "Check failed");
+        // Unknown, not "no" -- writing "no" here would permanently retire a
+        // lead because the network hiccuped once.
+        results[phone] = { registered: null, error: err.message || "lookup failed" };
+      }
+      lastCheckTime = Date.now();
+    }
+    res.json({ results, checked_at: new Date().toISOString() });
   });
 });
 

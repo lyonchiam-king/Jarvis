@@ -22,7 +22,7 @@ from ..errors import ErrorLog
 from ..models import utc_now
 from ..providers import gmail as gmail_provider
 from ..providers.llm import BriefWriter, build_outreach_prompt
-from ..providers.whatsapp import is_mobile_number
+from .reachability import can_whatsapp
 from ..selection import ORDERS, select_pending
 from ..sheets import SheetsClient
 from ..stage import Stage, advance
@@ -230,14 +230,14 @@ def run(
                 report.drafts_created += 1
             elif recipient:
                 channel = "Email"
-            elif is_mobile_number(lead.get("Phone", "")):
+            elif can_whatsapp(lead, research_row, config.compliance.country_code):
                 report.whatsapp_only += 1
             else:
                 # No email and no mobile number -- a landline can't receive
                 # WhatsApp, so there is nothing to send. Mark it done so it is
                 # not re-selected, and say why in Notes.
                 channel = "Unreachable"
-                notes = "Unreachable: no email and landline phone"
+                notes = "Unreachable: no email and not reachable on WhatsApp"
 
             if dry_run:
                 log.info("  subject: %s", copy.subject)

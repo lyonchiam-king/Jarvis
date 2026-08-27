@@ -323,7 +323,9 @@ def test_lead_without_email_and_landline_phone_is_unreachable():
     assert gmail.drafted == []
     row = sheets.upserts[0][1][0]
     assert row["Channel"] == "Unreachable"
-    assert "landline" in row["Notes"]
+    # Wording widened from "landline": in the US a number can be
+    # unreachable on WhatsApp without being a landline at all.
+    assert "not reachable on WhatsApp" in row["Notes"]
     assert row["Status"] == "Drafted"
 
 
