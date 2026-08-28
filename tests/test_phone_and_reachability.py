@@ -197,3 +197,61 @@ class TestTheRelayClientIsActuallyBuilt:
         from outreach.stages.reachability import _default_client
 
         assert _default_client(self._config(enabled=False)) is None
+
+
+class TestLegacyRowsHealThemselves:
+    """Rows written before the country came from Google.
+
+    Those carry a national phone number and a Country cell stamped from
+    `compliance.country_code`. On a UK campaign derived from the Penang
+    config that cell says MY, so 07450 225230 was dialled as 607450225230 --
+    a real Malaysian line, and the reason a send could report success and
+    reach nobody. The address is the one field on those rows still telling
+    the truth, so it is read before the stored country.
+    """
+
+    def _lead(self, **over):
+        base = {
+            "Phone": "07450 225230",
+            "Country": "MY",
+            "Address": "12 High St, Manchester, UK",
+        }
+        base.update(over)
+        return base
+
+    def test_the_address_overrides_a_wrong_country_cell(self):
+        from outreach.stages.reachability import _country_of
+
+        assert _country_of(self._lead(), "MY") == "GB"
+
+    def test_such_a_lead_now_dials_correctly_without_a_refresh(self):
+        from outreach.stages.reachability import _country_of
+
+        lead = self._lead()
+        dialled = phone.normalise(lead["Phone"], _country_of(lead, "MY"))
+
+        assert dialled == "447450225230"
+        assert not dialled.startswith("60")
+
+    def test_a_genuine_malaysian_row_is_untouched(self):
+        """The rescue must not disturb the market that always worked."""
+        from outreach.stages.reachability import _country_of
+
+        lead = self._lead(
+            Phone="012-345 6789", Address="5 Lebuh Chulia, George Town, Malaysia"
+        )
+        assert _country_of(lead, "MY") == "MY"
+        assert phone.normalise(lead["Phone"], _country_of(lead, "MY")) == "60123456789"
+
+    def test_the_number_s_own_prefix_still_wins(self):
+        """An international number cannot be wrong, so nothing overrides it."""
+        from outreach.stages.reachability import _country_of
+
+        lead = self._lead(Phone="+44 7450 225230", Address="Nowhere in particular")
+        assert _country_of(lead, "MY") == "GB"
+
+    def test_an_unrecognised_address_falls_back_rather_than_guessing(self):
+        from outreach.stages.reachability import _country_of
+
+        lead = self._lead(Country="", Address="somewhere odd")
+        assert _country_of(lead, "MY") == "MY"

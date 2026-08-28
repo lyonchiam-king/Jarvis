@@ -1189,7 +1189,7 @@ def create_app(config: Config) -> Flask:
         opening the dashboard costs no lookups.
         """
         from . import phone as phone_lib
-        from .stages.reachability import has_email
+        from .stages.reachability import _country_of, has_email
 
         c = current()
         if not c.secrets.sheet_id:
@@ -1208,7 +1208,7 @@ def create_app(config: Config) -> Flask:
                 continue  # not researched yet -- not this panel's business
             row = found[1]
             verdict = (row.get("WhatsApp Reachable") or "").strip().lower()
-            country = lead.get("Country", "") or c.compliance.country_code
+            country = _country_of(lead, c.compliance.country_code)
             entry = {
                 "lead_id": lead_id,
                 "name": lead.get("Business Name", "") or lead_id,
@@ -1246,7 +1246,7 @@ def create_app(config: Config) -> Flask:
         """Leads waiting for WhatsApp send, with phone + message text."""
         from . import phone as phone_lib
         from .providers.whatsapp import WA_SENT_STATUSES
-        from .stages.reachability import can_whatsapp
+        from .stages.reachability import _country_of, can_whatsapp
 
         c = current()
         if not c.secrets.sheet_id:
@@ -1357,7 +1357,7 @@ def create_app(config: Config) -> Flask:
                     # must not guess it, so it is computed once, server-side,
                     # and carried through the send.
                     "phone_e164": phone_lib.normalise(
-                        phone, lead.get("Country", "") or c.compliance.country_code
+                        phone, _country_of(lead, c.compliance.country_code)
                     ),
                     "message": row.get("WhatsApp Message", ""),
                 }

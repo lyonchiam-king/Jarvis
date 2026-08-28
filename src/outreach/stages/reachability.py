@@ -106,9 +106,7 @@ def check_reachability(
         ).strip().lower() in {YES, NO}:
             report.already_done += 1
             continue
-        pending.append(
-            (lead_id, lead.get("Phone", ""), lead.get("Country", "") or home_country)
-        )
+        pending.append((lead_id, lead.get("Phone", ""), _country_of(lead, home_country)))
 
     if limit > 0:
         pending = pending[:limit]
@@ -187,6 +185,29 @@ def check_reachability(
     report.unreachable = sum(1 for v in verdicts.values() if v == NO)
     report.still_unknown = sum(1 for v in verdicts.values() if v == UNKNOWN)
     return report
+
+
+
+def _country_of(lead: dict[str, str], home_country: str = "") -> str:
+    """The country to dial this lead by, most trustworthy source first.
+
+    The number's own international prefix wins: it cannot be wrong. Then the
+    ISO code Google put on the address -- which is what rescues rows written
+    before the country came from Places, because those carry a national
+    number and a Country cell stamped from the campaign config, so a UK lead
+    on a Penang-derived config claims to be Malaysian and would dial as one.
+    The stored Country cell is trusted only when it agrees with the address
+    or the address says nothing, and the campaign setting is the last resort.
+    """
+    number_says = phone_lib.country_from_number(lead.get("Phone", ""))
+    if number_says:
+        return number_says
+
+    address_says = phone_lib.country_from_address(lead.get("Address", ""))
+    if address_says:
+        return address_says
+
+    return (lead.get("Country", "") or "").strip().upper() or home_country
 
 
 def _default_client(config):

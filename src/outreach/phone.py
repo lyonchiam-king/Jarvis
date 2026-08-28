@@ -211,3 +211,48 @@ def line_type(phone: str, country: str = "") -> str:
 def whatsapp_jid(phone: str, country: str = "") -> str:
     e164 = normalise(phone, country)
     return f"{e164}@s.whatsapp.net" if e164 else ""
+
+
+# Country names as they appear at the end of a Google formatted address,
+# mapped to their ISO code. Only the markets a campaign plausibly runs in
+# plus the spellings Google actually emits -- an unknown name returns "",
+# which means "no opinion", never a guess.
+_ADDRESS_NAMES: dict[str, str] = {
+    "malaysia": "MY", "singapore": "SG", "indonesia": "ID", "thailand": "TH",
+    "philippines": "PH", "vietnam": "VN", "viet nam": "VN", "india": "IN",
+    "hong kong": "HK", "taiwan": "TW", "japan": "JP", "south korea": "KR",
+    "china": "CN", "australia": "AU", "new zealand": "NZ",
+    "united states": "US", "usa": "US", "united states of america": "US",
+    "canada": "CA", "mexico": "MX", "brazil": "BR", "argentina": "AR",
+    "united kingdom": "GB", "uk": "GB", "england": "GB", "scotland": "GB",
+    "wales": "GB", "northern ireland": "GB", "great britain": "GB",
+    "ireland": "IE", "germany": "DE", "deutschland": "DE", "france": "FR",
+    "spain": "ES", "españa": "ES", "italy": "IT", "italia": "IT",
+    "portugal": "PT", "netherlands": "NL", "the netherlands": "NL",
+    "belgium": "BE", "luxembourg": "LU", "austria": "AT",
+    "switzerland": "CH", "denmark": "DK", "sweden": "SE", "norway": "NO",
+    "finland": "FI", "iceland": "IS", "poland": "PL", "czechia": "CZ",
+    "czech republic": "CZ", "slovakia": "SK", "hungary": "HU",
+    "romania": "RO", "bulgaria": "BG", "greece": "GR", "croatia": "HR",
+    "slovenia": "SI", "serbia": "RS", "estonia": "EE", "latvia": "LV",
+    "lithuania": "LT", "cyprus": "CY", "malta": "MT", "turkey": "TR",
+    "united arab emirates": "AE", "saudi arabia": "SA", "qatar": "QA",
+    "israel": "IL", "south africa": "ZA", "nigeria": "NG", "kenya": "KE",
+    "egypt": "EG",
+}
+
+
+def country_from_address(address: str) -> str:
+    """The ISO country named at the end of a Google formatted address.
+
+    The rescue for rows written before the country came from Google: those
+    hold a national phone number and a Country cell stamped from the
+    campaign config, so a UK lead on a Penang-derived config claims to be
+    Malaysian and dials as one. The address is the one thing on those rows
+    that still tells the truth.
+
+    Returns "" when the trailing name is not recognised -- no opinion is
+    better than a wrong one, and the caller then falls back as before.
+    """
+    tail = (address or "").strip().rstrip(".").split(",")[-1].strip().lower()
+    return _ADDRESS_NAMES.get(tail, "")

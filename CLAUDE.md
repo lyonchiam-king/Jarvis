@@ -42,7 +42,7 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             928 tests, pytest, no CI -- the suite is the only gate
+tests/             933 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -114,6 +114,14 @@ code onto a number that already had one. A UK lead went out as
 nobody. Malaysia survived by luck. Pass `country=""` when a number is already
 E.164. Do not "detect" E.164 from the digits either -- a US national number
 opens with 504, which is Honduras.
+
+**A fix that needs a button pressed is not a fix for existing rows.** New
+leads got Google's country, but every row already on the Sheet kept a
+national number and a Country cell stamped from config, so UK leads carried
+on dialling as Malaysian until someone remembered to press Refresh. The
+address is the one field on those rows still telling the truth, so
+`_country_of` reads the number's own prefix, then the address, and only then
+the stored cell. Legacy rows heal themselves.
 
 **Google knows each lead's country; ask it.** `addressComponents` carries the
 ISO code per place. That is the first source, the phone's own prefix the
