@@ -42,7 +42,7 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             915 tests, pytest, no CI -- the suite is the only gate
+tests/             921 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -105,6 +105,14 @@ Lyon runs Ollama. New spec fields go in `properties` but not `required`, with
 the prompt block rendered conditionally, so a model that skips one produces
 the previous prompt rather than a broken one. `layout_system` is the worked
 example.
+
+**Store the international phone number, never the national one.** Google
+returns both. The national form ("07450 225230") names no country, so keeping
+it meant rebuilding the country from `compliance.country_code` -- which on a
+UK campaign copied from Penang still said MY, and dialled a Manchester mobile
+as 607450225230. The international form carries its own country code, so
+nothing is inferred and a campaign works abroad with no configuration. The
+Country column is likewise read off the number, not stamped from config.
 
 **`onWhatsApp` takes a phone number, not a JID.** It builds its query as
 `"+" + what you pass`, so a JID asked about `+4479...@s.whatsapp.net` and

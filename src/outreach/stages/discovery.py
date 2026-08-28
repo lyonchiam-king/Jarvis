@@ -28,6 +28,7 @@ from ..errors import ErrorLog
 from ..models import Lead, WebsiteStatus, utc_now
 from ..providers.places import PlaceResult, PlacesClient, classify_website
 from ..sheets import SheetsClient, UpsertResult
+from .. import phone as phone_lib
 from ..stage import Stage, advance
 
 log = logging.getLogger("outreach")
@@ -99,7 +100,14 @@ def _to_lead(place: PlaceResult, config: Config, website_status: WebsiteStatus) 
         website_url=place.website_uri,
         maps_url=place.maps_url,
         campaign=config.campaign.name,
-        country=config.compliance.country_code,
+        # The lead's real country, read off its international phone number,
+        # falling back to the campaign's setting only when Google gave no
+        # number. Stamping the campaign country on every lead is what made a
+        # UK number dial as Malaysian.
+        country=(
+            phone_lib.country_from_number(place.phone)
+            or config.compliance.country_code
+        ),
         discovered_at=now,
         last_refreshed=now,
     )

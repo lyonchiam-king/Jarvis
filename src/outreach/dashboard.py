@@ -43,6 +43,7 @@ FUNNEL = [
 
 STAGE_COMMANDS = {
     "discovery": ["run", "discovery"],
+    "discovery-refresh": ["run", "discovery", "--refresh"],
     "research": ["run", "research"],
     "reachability": ["run", "reachability"],
     "reachability-recheck": ["run", "reachability", "--recheck"],
@@ -63,6 +64,7 @@ FULL_RUN = ["discovery", "research", "site-brief", "outreach-draft"]
 # number would be meaningless there.
 TAKES_LIMIT = {
     "discovery",
+    "discovery-refresh",
     "research",
     "reachability",
     "reachability-recheck",
@@ -1708,6 +1710,7 @@ PAGE = """<!doctype html>
       <summary class="sub">Run one step on its own</summary>
       <div class="row" style="margin-top:10px">
         <button data-run="discovery">Find leads</button>
+        <button data-run="discovery-refresh">Refresh lead details</button>
         <button data-run="research">Research</button>
         <button data-run="reachability">Check WhatsApp</button>
         <button data-run="reachability-recheck">Re-check WhatsApp</button>
@@ -1717,6 +1720,12 @@ PAGE = """<!doctype html>
       </div>
       <p class="hint"><b>How many</b> above applies to these too &mdash; set it to
         5, press <b>Research</b>, and only five leads are researched.</p>
+      <p class="hint"><b>Refresh lead details</b> re-reads businesses already on
+        the Sheet and updates their phone number and country from Google, instead
+        of hunting for new ones. Run it once over leads gathered before the phone
+        number was stored in international form &mdash; without the country code a
+        number cannot be dialled, and that is what made whole countries look like
+        they had no WhatsApp.</p>
       <p class="hint"><b>Check WhatsApp</b> runs on its own at the end of every
         Research, so you rarely need it. Press it to answer leads researched
         before this existed, or ones left unchecked because the relay was
