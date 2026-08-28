@@ -192,9 +192,11 @@ def run(
     waiting = 0
     for lead_id, entry in leads.items():
         row = research.get(lead_id)
-        if row is None or is_contactable(row[1]):
+        lead = entry[1]
+        research_row = row[1] if row else None
+        if row is None or is_contactable(research_row, lead):
             contactable[lead_id] = entry
-        elif is_waiting_on_a_check(row[1]):
+        elif is_waiting_on_a_check(research_row, lead):
             waiting += 1
     report.waiting_on_check = waiting
     report.unreachable = len(leads) - len(contactable) - waiting

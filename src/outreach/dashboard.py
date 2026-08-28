@@ -1193,7 +1193,7 @@ def create_app(config: Config) -> Flask:
         opening the dashboard costs no lookups.
         """
         from . import phone as phone_lib
-        from .stages.reachability import _country_of, has_email
+        from .stages.reachability import CHECKABLE, _country_of, has_email, stored_verdict
 
         c = current()
         if not c.secrets.sheet_id:
@@ -1207,11 +1207,14 @@ def create_app(config: Config) -> Flask:
 
         verified, rejected, waiting = [], [], []
         for lead_id, (_row, lead) in leads.items():
+            # Discovered leads belong here now: the check can run before
+            # research, so this panel is what tells Lyon which leads are
+            # worth researching at all.
+            if (lead.get("Stage") or "").strip() not in CHECKABLE:
+                continue
             found = research.get(lead_id)
-            if found is None:
-                continue  # not researched yet -- not this panel's business
-            row = found[1]
-            verdict = (row.get("WhatsApp Reachable") or "").strip().lower()
+            row = found[1] if found else {}
+            verdict = stored_verdict(lead, row)
             country = _country_of(lead, c.compliance.country_code)
             entry = {
                 "lead_id": lead_id,
@@ -1737,11 +1740,11 @@ PAGE = """<!doctype html>
         number was stored in international form &mdash; without the country code a
         number cannot be dialled, and that is what made whole countries look like
         they had no WhatsApp.</p>
-      <p class="hint"><b>Check WhatsApp</b> runs on its own at the end of every
-        Research, so you rarely need it. Press it to answer leads researched
-        before this existed, or ones left unchecked because the relay was
-        offline &mdash; it only asks about numbers it has no answer for, and
-        never asks twice.</p>
+      <p class="hint"><b>Check WhatsApp</b> works on leads you have only just
+        found, before any research is spent on them &mdash; press it straight
+        after <b>Find leads</b> and section 1b tells you which ones are worth
+        researching. It also runs on its own at the end of every Research, only
+        asks about numbers it has no answer for, and never asks twice.</p>
       <p class="hint"><b>Re-check WhatsApp</b> asks again for leads that already
         have an answer. Use it once on any leads answered before the check
         started asking WhatsApp directly: a &ldquo;no&rdquo; worked out from the

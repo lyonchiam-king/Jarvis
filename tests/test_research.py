@@ -196,7 +196,15 @@ def test_writes_a_brief_and_advances_the_stage():
     assert tab is schema.RESEARCH
     assert rows[0]["Suggested Website Angle"].startswith("Online booking")
     assert rows[0]["Research Status"] == "ok"
-    assert sheets.column_writes == [(schema.LEADS, "Stage", {"a": "Researched"})]
+    # The stage advance, then the reachability check that now runs at the end
+    # of research. The verdict lands on Leads, not Research: research decides
+    # what is left to do by whether a Lead ID appears on the Research tab, so
+    # a verdict written there for an unresearched lead would make that lead
+    # skipped for ever.
+    assert sheets.column_writes[0] == (schema.LEADS, "Stage", {"a": "Researched"})
+    written = [(tab, col) for tab, col, _ in sheets.column_writes]
+    assert (schema.LEADS, "WhatsApp Reachable") in written
+    assert not any(tab is schema.RESEARCH for tab, _ in written)
 
 
 def test_rerun_does_no_work_when_everything_is_researched():
@@ -722,3 +730,67 @@ def test_an_offline_relay_leaves_leads_unchecked_rather_than_unreachable():
 
     assert report.skipped_no_relay == 1
     assert _verdicts(sheets) == {}, "nothing may be written for an unchecked lead"
+
+
+def test_checking_a_discovered_lead_does_not_stop_it_being_researched():
+    """The trap this feature had to avoid.
+
+    Research decides what is left to do by whether a Lead ID appears on the
+    Research tab. Had the WhatsApp verdict been written there for a lead
+    that has not been researched yet -- which is the whole point of checking
+    early -- that lead would have been treated as done and never researched
+    at all. The verdict goes on the Leads tab for exactly this reason.
+    """
+    from outreach.stages import reachability
+
+    row = lead_row("a", stage="Discovered")
+    row["Phone"] = "+44 7450 225230"
+    row["Country"] = "GB"
+    sheets = FakeSheets(leads_index([row]))
+
+    reachability.check_reachability(config(), sheets, _Relay(registered={"447450225230"}))
+
+    tabs_written = {tab for tab, _col, _v in sheets.column_writes}
+    assert schema.RESEARCH not in tabs_written, (
+        "a verdict on the Research tab would retire this lead before it is researched"
+    )
+    assert schema.LEADS in tabs_written
+
+    # And the lead is still selectable for research afterwards.
+    selected, _already, _not_ready = research.select_leads(
+        leads_index([row]), set(), batch_size=10
+    )
+    assert [s["Lead ID"] for s in selected] == ["a"]
+
+
+def test_a_discovered_lead_is_checked_without_being_researched_first():
+    """The request: know who is reachable before spending a model call."""
+    from outreach.stages import reachability
+
+    row = lead_row("a", stage="Discovered")
+    row["Phone"] = "+44 7450 225230"
+    row["Country"] = "GB"
+    sheets = FakeSheets(leads_index([row]))
+    relay = _Relay(registered={"447450225230"})
+
+    reachability.check_reachability(config(), sheets, relay)
+
+    assert relay.asked == ["447450225230"]
+    assert _verdicts(sheets) == {"a": "yes"}
+
+
+def test_a_verdict_already_on_the_research_tab_is_not_paid_for_twice():
+    """Verdicts written before the move must still count as answered."""
+    from outreach.stages import reachability
+
+    row = lead_row("a", stage="Researched")
+    row["Phone"] = "+44 7450 225230"
+    row["Country"] = "GB"
+    sheets = FakeSheets(leads_index([row]), ["a"])
+    sheets._research["a"][1]["WhatsApp Reachable"] = "yes"
+    relay = _Relay()
+
+    report = reachability.check_reachability(config(), sheets, relay)
+
+    assert relay.asked == [], "an answered lead must not be asked again"
+    assert report.already_done == 1

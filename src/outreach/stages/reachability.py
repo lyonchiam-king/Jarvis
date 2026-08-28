@@ -93,17 +93,17 @@ def check_reachability(
 
     pending: list[tuple[str, str, str]] = []  # lead_id, phone, country
     for lead_id, (_row, lead) in leads.items():
-        if (lead.get("Stage") or "").strip() != Stage.RESEARCHED.value:
+        # Discovered leads are included on purpose: asking WhatsApp costs a
+        # lookup, researching costs a model call per lead, so the cheap
+        # question is worth answering first.
+        if (lead.get("Stage") or "").strip() not in CHECKABLE:
             continue
-        row = research.get(lead_id)
-        if row is None:
-            continue
+        found = research.get(lead_id)
+        research_row = found[1] if found else None
         # Cached: a lead answered once is never asked again. `unknown` is not
         # an answer -- it is what a failed lookup leaves behind, and it stays
         # in the queue on purpose.
-        if not recheck and (
-            row[1].get("WhatsApp Reachable") or ""
-        ).strip().lower() in {YES, NO}:
+        if not recheck and stored_verdict(lead, research_row):
             report.already_done += 1
             continue
         pending.append((lead_id, lead.get("Phone", ""), _country_of(lead, home_country)))
@@ -173,9 +173,9 @@ def check_reachability(
         return report
 
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    sheets.update_column(schema.RESEARCH, "WhatsApp Reachable", verdicts)
+    sheets.update_column(schema.LEADS, "WhatsApp Reachable", verdicts)
     sheets.update_column(
-        schema.RESEARCH,
+        schema.LEADS,
         "WhatsApp Checked At",
         {lead_id: now for lead_id in verdicts},
     )
@@ -186,6 +186,27 @@ def check_reachability(
     report.still_unknown = sum(1 for v in verdicts.values() if v == UNKNOWN)
     return report
 
+
+
+
+# Stages a lead can be checked at. Discovered is the point of this: the
+# lookup is nearly free and research is not, so knowing who can be reached
+# before spending a model call per lead is the cheaper order.
+CHECKABLE = (Stage.DISCOVERED.value, Stage.RESEARCHED.value)
+
+
+def stored_verdict(lead: dict[str, str], research_row: dict[str, str] | None = None) -> str:
+    """The cached answer: "yes", "no", or "" when it has not been asked.
+
+    The Leads tab is the home for this now. The Research tab is read as a
+    fallback so verdicts written before the move are not thrown away and
+    those leads are not paid for a second time.
+    """
+    on_lead = (lead.get("WhatsApp Reachable") or "").strip().lower()
+    if on_lead in {YES, NO}:
+        return on_lead
+    legacy = ((research_row or {}).get("WhatsApp Reachable") or "").strip().lower()
+    return legacy if legacy in {YES, NO} else ""
 
 
 def _country_of(lead: dict[str, str], home_country: str = "") -> str:
@@ -232,7 +253,7 @@ def has_email(research_row: dict[str, str]) -> bool:
     return bool(email) and email != "not found"
 
 
-def is_contactable(research_row: dict[str, str]) -> bool:
+def is_contactable(research_row: dict[str, str], lead: dict[str, str] | None = None) -> bool:
     """Whether building this lead a site is worth paying for.
 
     Needs a *confirmed* channel: reachable on WhatsApp, or holding an email.
@@ -247,22 +268,22 @@ def is_contactable(research_row: dict[str, str]) -> bool:
     went all the way to a built site and only then turned out to be
     unmessageable.
     """
-    reachable = (research_row.get("WhatsApp Reachable") or "").strip().lower()
-    if reachable == YES:
+    if stored_verdict(lead or {}, research_row) == YES:
         return True
     # An email is a confirmed channel in its own right, so it qualifies a
     # lead whether or not WhatsApp ever answers for it.
     return has_email(research_row)
 
 
-def is_waiting_on_a_check(research_row: dict[str, str]) -> bool:
+def is_waiting_on_a_check(
+    research_row: dict[str, str], lead: dict[str, str] | None = None
+) -> bool:
     """Held back only because the WhatsApp check has not answered yet.
 
     Distinguished from a real "no" so the report can tell Lyon to connect
     the relay, rather than leaving him to wonder where his leads went.
     """
-    reachable = (research_row.get("WhatsApp Reachable") or "").strip().lower()
-    return reachable in {"", UNKNOWN} and not has_email(research_row)
+    return not stored_verdict(lead or {}, research_row) and not has_email(research_row)
 
 
 def can_whatsapp(
@@ -284,5 +305,4 @@ def can_whatsapp(
     # unreachable when WhatsApp Business runs on fixed lines every day. An
     # unchecked lead is now simply not yet confirmed, and the build gate
     # holds it rather than guessing about it.
-    verdict = ((research_row or {}).get("WhatsApp Reachable") or "").strip().lower()
-    return verdict == YES
+    return stored_verdict(lead, research_row) == YES

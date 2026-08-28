@@ -1101,17 +1101,22 @@ class TestTheReachabilityPanel:
             {
                 "yes": {
                     "lead": {"Lead ID": "yes", "Business Name": "Yes Ltd",
-                             "Phone": "+44 20 7946 0958", "Country": "GB"},
-                    "research": {"WhatsApp Reachable": "yes"},
+                             "Stage": "Researched", "Phone": "+44 20 7946 0958",
+                             "Country": "GB", "WhatsApp Reachable": "yes"},
+                    "research": {},
                 },
                 "no": {
                     "lead": {"Lead ID": "no", "Business Name": "No Ltd",
-                             "Phone": "+44 20 7946 0959", "Country": "GB"},
-                    "research": {"WhatsApp Reachable": "no"},
+                             "Stage": "Researched", "Phone": "+44 20 7946 0959",
+                             "Country": "GB", "WhatsApp Reachable": "no"},
+                    "research": {},
                 },
+                # Discovered, not researched, and never checked -- the case
+                # this panel now exists to surface before research is spent.
                 "new": {
                     "lead": {"Lead ID": "new", "Business Name": "New Ltd",
-                             "Phone": "+44 20 7946 0960", "Country": "GB"},
+                             "Stage": "Discovered", "Phone": "+44 20 7946 0960",
+                             "Country": "GB"},
                     "research": {},
                 },
             },
@@ -1130,8 +1135,9 @@ class TestTheReachabilityPanel:
             {
                 "a": {
                     "lead": {"Lead ID": "a", "Business Name": "Chip Shop",
-                             "Phone": "020 7946 0958", "Country": "GB"},
-                    "research": {"WhatsApp Reachable": "yes"},
+                             "Stage": "Researched", "Phone": "020 7946 0958",
+                             "Country": "GB", "WhatsApp Reachable": "yes"},
+                    "research": {},
                 }
             },
         )
@@ -1147,9 +1153,9 @@ class TestTheReachabilityPanel:
             {
                 "a": {
                     "lead": {"Lead ID": "a", "Business Name": "Mailer",
-                             "Phone": "+44 20 7946 0958", "Country": "GB"},
-                    "research": {"WhatsApp Reachable": "no",
-                                 "Email Found": "hi@mailer.co.uk"},
+                             "Stage": "Researched", "Phone": "+44 20 7946 0958",
+                             "Country": "GB", "WhatsApp Reachable": "no"},
+                    "research": {"Email Found": "hi@mailer.co.uk"},
                 }
             },
         )
@@ -1157,15 +1163,42 @@ class TestTheReachabilityPanel:
         assert data["counts"]["rejected"] == 1
         assert data["counts"]["buildable"] == 1
 
-    def test_an_unresearched_lead_is_not_listed_at_all(self, monkeypatch):
-        """This panel is about the check, and the check only runs on
-        researched leads. Listing the rest would make the numbers meaningless."""
+    def test_a_discovered_lead_is_listed_before_it_is_researched(self, monkeypatch):
+        """Was test_an_unresearched_lead_is_not_listed_at_all.
+
+        The premise reversed deliberately. Asking WhatsApp costs a lookup and
+        researching costs a model call per lead, so the cheap question is
+        answered first -- and this panel is what tells Lyon which leads are
+        worth researching at all.
+        """
         from outreach import schema
 
         class FakeSheets:
             def read_rows(self, tab):
                 if tab is schema.LEADS:
-                    return {"a": (2, {"Lead ID": "a", "Phone": "+44 20 7946 0958"})}
+                    return {
+                        "a": (2, {"Lead ID": "a", "Stage": "Discovered",
+                                  "Phone": "+44 20 7946 0958", "Country": "GB"})
+                    }
+                return {}
+
+        client = _make_client(monkeypatch, sheets=FakeSheets())
+        data = json.loads(client.get("/api/reachability").data)
+
+        assert data["counts"]["waiting"] == 1
+
+    def test_a_lead_past_the_brief_stage_is_not_listed(self, monkeypatch):
+        """The panel is about the decision still to be made. A lead already
+        briefed or built is answered and only adds noise."""
+        from outreach import schema
+
+        class FakeSheets:
+            def read_rows(self, tab):
+                if tab is schema.LEADS:
+                    return {
+                        "a": (2, {"Lead ID": "a", "Stage": "Site Briefed",
+                                  "Phone": "+44 20 7946 0958", "Country": "GB"})
+                    }
                 return {}
 
         client = _make_client(monkeypatch, sheets=FakeSheets())

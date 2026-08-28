@@ -93,10 +93,14 @@ def test_update_writes_only_automated_columns(client):
     )
 
     written = c._fake._ss.values().batch_updates
-    assert len(written) == 1
-    # Columns A..O are the automated run; P, Q, R are the founder's.
+    # Two runs now: the original automated block, then the WhatsApp verdict
+    # columns appended after the founder's three. P, Q and R are skipped,
+    # which is the whole point -- his notes are never overwritten.
+    assert len(written) == 2
     assert written[0]["range"] == "'Leads'!A2:O2"
     assert len(written[0]["values"][0]) == 15
+    assert written[1]["range"] == "'Leads'!S2:T2"
+    assert all("P" not in w["range"] for w in written)
 
 
 def test_manual_column_values_are_never_sent_in_the_payload(client):

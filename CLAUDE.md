@@ -42,7 +42,7 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             954 tests, pytest, no CI -- the suite is the only gate
+tests/             958 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -173,6 +173,15 @@ cannot tell (the US and Canada assign no mobile range), and unknown means
 Normalising to E.164 belongs in `WhatsAppClient.send_message`, the last place
 that knows the lead's country -- making the relay strict without doing that
 refused every national-format Malaysian number on the Sheet.
+
+**The WhatsApp verdict lives on Leads, not Research.** Research decides what
+is left to do by whether a Lead ID appears on the Research tab, so a verdict
+written there for a lead that has not been researched -- which is the point
+of checking early -- would retire that lead for ever. It is on Leads,
+appended after the manual block: append-only is a data rule and manual-last
+was only an efficiency note, so a refresh now costs two range writes.
+`stored_verdict` still reads Research as a fallback so older answers are not
+paid for twice.
 
 **Reachability is answered before the site is built, not after.** Building is
 the most expensive thing here, and it used to happen before anyone knew the

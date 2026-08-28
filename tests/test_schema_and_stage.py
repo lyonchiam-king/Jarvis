@@ -29,12 +29,26 @@ def test_automated_runs_when_trailing_columns_are_automated():
     assert tab.automated_runs() == [(1, 3)]
 
 
-def test_leads_manual_columns_are_trailing():
-    # The upsert writes contiguous runs; keeping manual columns at the end of
-    # Leads means a refresh is a single range write.
-    assert schema.LEADS.automated_runs() == [(0, 15)]
+def test_leads_manual_columns_stay_one_untouched_block():
+    """Was ...are_trailing, asserting a single automated run.
+
+    Two rules met here and only one can win. Columns are append-only,
+    because the Sheet is read by position and inserting one shifts every
+    value on every existing row; manual columns being last was only ever an
+    efficiency note, since it made a refresh one range write. So the
+    WhatsApp verdict was appended after the manual block, the refresh now
+    costs two range writes, and what still matters is enforced: the manual
+    columns remain a contiguous block that automation never writes.
+    """
+    runs = schema.LEADS.automated_runs()
+    assert runs == [(0, 15), (18, 20)]
+
     manual = [c.name for c in schema.LEADS.columns if c.manual]
     assert manual == ["Priority", "Owner Notes", "Next Action"]
+
+    # No automated run may overlap the manual block.
+    for start, end in runs:
+        assert not any(schema.LEADS.columns[i].manual for i in range(start, end))
 
 
 def test_every_tab_is_keyed_on_a_stable_first_column():
@@ -87,6 +101,7 @@ def test_column_order_is_append_only():
             "Rating", "Review Count", "Website Status", "Website URL",
             "Maps URL", "Campaign", "Country", "Discovered At", "Last Refreshed",
             "Priority", "Owner Notes", "Next Action",
+            "WhatsApp Reachable", "WhatsApp Checked At",
         ],
         "Research": [
             "Lead ID", "Business Name", "Tone", "Services", "Price Tier",

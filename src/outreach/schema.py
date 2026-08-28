@@ -74,6 +74,19 @@ LEADS = Tab(
         Column("Priority", manual=True),
         Column("Owner Notes", manual=True),
         Column("Next Action", manual=True),
+        # Appended after the manual block, which is allowed -- the rule is
+        # append-only, not "automated columns first".
+        #
+        # The verdict lives here rather than on Research so it can be
+        # answered before a lead is researched at all: research decides what
+        # is left to do by whether a Lead ID appears on the Research tab, so
+        # a stub row written there for an unresearched lead would make that
+        # lead skipped for ever.
+        Column(
+            "WhatsApp Reachable",
+            note="yes | no | unknown -- unknown means the check has not run yet",
+        ),
+        Column("WhatsApp Checked At", note="ISO timestamp; blank until checked"),
     ),
 )
 
