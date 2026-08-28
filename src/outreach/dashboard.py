@@ -1178,6 +1178,67 @@ def create_app(config: Config) -> Flask:
 
         return jsonify({"areas": list(areas), "location": location})
 
+    @app.route("/api/reachability")
+    def api_reachability():
+        """Who the relay has confirmed on WhatsApp, and who is still waiting.
+
+        Reads the cached verdicts written by the check at the end of
+        research. Purely a view -- it never asks WhatsApp anything, so
+        opening the dashboard costs no lookups.
+        """
+        from . import phone as phone_lib
+        from .stages.reachability import has_email
+
+        c = current()
+        if not c.secrets.sheet_id:
+            return jsonify({"verified": [], "rejected": [], "waiting": [], "counts": {}})
+        try:
+            sheets = _sheets_client(c)
+            leads = sheets.read_rows(schema.LEADS)
+            research = sheets.read_rows(schema.RESEARCH)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
+
+        verified, rejected, waiting = [], [], []
+        for lead_id, (_row, lead) in leads.items():
+            found = research.get(lead_id)
+            if found is None:
+                continue  # not researched yet -- not this panel's business
+            row = found[1]
+            verdict = (row.get("WhatsApp Reachable") or "").strip().lower()
+            country = lead.get("Country", "") or c.compliance.country_code
+            entry = {
+                "lead_id": lead_id,
+                "name": lead.get("Business Name", "") or lead_id,
+                "phone": lead.get("Phone", ""),
+                "dialled": phone_lib.normalise(lead.get("Phone", ""), country),
+                "country": country,
+                "email": has_email(row),
+                "checked_at": row.get("WhatsApp Checked At", ""),
+            }
+            if verdict == "yes":
+                verified.append(entry)
+            elif verdict == "no":
+                rejected.append(entry)
+            else:
+                waiting.append(entry)
+
+        return jsonify(
+            {
+                "verified": verified,
+                "rejected": rejected,
+                "waiting": waiting,
+                "counts": {
+                    "verified": len(verified),
+                    "rejected": len(rejected),
+                    "waiting": len(waiting),
+                    # A rejected lead still gets built when it has an email,
+                    # so "will be built" is not the same as "on WhatsApp".
+                    "buildable": len(verified) + sum(1 for e in rejected if e["email"]),
+                },
+            }
+        )
+
     @app.route("/api/whatsapp/queue")
     def api_whatsapp_queue():
         """Leads waiting for WhatsApp send, with phone + message text."""
@@ -1687,6 +1748,12 @@ PAGE = """<!doctype html>
     </details>
   </div>
 
+  <h2><span class="stepno">1b</span> WhatsApp check
+      <span class="sub" style="text-transform:none;letter-spacing:0">
+      &mdash; who can actually be messaged. No message is sent; only verified
+      leads go on to a brief</span></h2>
+  <div class="card" id="reach">Loading&hellip;</div>
+
   <h2><span class="stepno">2</span> Review
       <span class="sub" style="text-transform:none;letter-spacing:0">
       &mdash; one at a time. Approve sends it to the build queue; nothing is spent yet</span>
@@ -2037,6 +2104,7 @@ async function poll() {
     loadModel();
     loadNextUp();
     loadQueue();
+  loadReach();
     // Awaited, not fired and forgotten: refresh() rebuilds the #send panel
     // and only then fills in the WhatsApp cards. Drafting finishes in step 1
     // and the messages have to be on screen in step 4 without a manual
@@ -2535,6 +2603,44 @@ async function decide(decision) {
 
 // ------------------------------------------------------------- step 3: build
 
+async function loadReach() {
+  const el = $('#reach');
+  let d;
+  try { d = await (await fetch('/api/reachability')).json(); } catch { return; }
+  if (d.error) { el.innerHTML = `<span class="err">${esc(d.error)}</span>`; return; }
+
+  const c = d.counts || {};
+  if (!c.verified && !c.rejected && !c.waiting) {
+    el.innerHTML = '<div class="what">Nothing researched yet.</div>' +
+      '<p class="hint">Run <b>Research</b> and the WhatsApp check runs with it.</p>';
+    return;
+  }
+
+  const row = (e, mark) =>
+    `<tr><td>${mark}</td><td>${esc(e.name)}</td>` +
+    `<td style="white-space:nowrap">${esc(e.dialled || e.phone)}</td>` +
+    `<td>${e.email ? 'has email' : ''}</td></tr>`;
+
+  // Waiting first: it is the only group that needs Lyon to do something.
+  const waiting = (d.waiting || []).map(e => row(e, '\u23F3')).join('');
+  const verified = (d.verified || []).map(e => row(e, '\u2713')).join('');
+  const rejected = (d.rejected || []).map(e => row(e, '\u2717')).join('');
+
+  el.innerHTML =
+    `<div class="what">${c.verified} on WhatsApp &middot; ${c.rejected} not &middot; ` +
+    `${c.waiting} not yet checked</div>` +
+    `<p class="hint"><b>${c.buildable}</b> lead(s) can be followed up, so those are ` +
+    `the ones that go on to a brief &mdash; the ones on WhatsApp, plus any with an ` +
+    `email address. Nothing here has been messaged.</p>` +
+    (c.waiting
+      ? '<p class="hint"><b>Not yet checked</b> means the relay could not answer. ' +
+        'Pair WhatsApp in the panel below, then press <b>Check WhatsApp</b>. ' +
+        'They are held until then &mdash; no site is built for a lead we cannot reach.</p>'
+      : '') +
+    '<table style="width:100%;border-collapse:collapse;margin-top:10px">' +
+    waiting + verified + rejected + '</table>';
+}
+
 async function loadQueue() {
   let d;
   try { d = await (await fetch('/api/build-queue')).json(); } catch { return; }
@@ -2589,6 +2695,7 @@ loadModel();
 loadNextUp();
 loadReview();
 loadQueue();
+loadReach();
 poll();
 setInterval(poll, 1200);
 setInterval(refresh, 30000);

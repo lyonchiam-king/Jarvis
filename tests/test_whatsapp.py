@@ -1063,3 +1063,114 @@ class TestTheLookupAsksAboutAPhoneNumber:
             )
             WhatsAppClient().check_raw(["442079460958"])
             assert _j.loads(rsps.calls[0].request.body)["debug"] is True
+
+
+class TestTheReachabilityPanel:
+    """What Lyon reads to know who can be messaged before anything is built.
+
+    It is a view over the cached verdicts and must never ask WhatsApp
+    anything -- opening the dashboard is not a reason to spend lookups
+    against the account.
+    """
+
+    def _sheets(self, rows):
+        from outreach import schema
+
+        class FakeSheets:
+            def read_rows(self, tab):
+                if tab is schema.LEADS:
+                    return {
+                        k: (i + 2, v["lead"]) for i, (k, v) in enumerate(rows.items())
+                    }
+                if tab is schema.RESEARCH:
+                    return {
+                        k: (i + 2, v["research"])
+                        for i, (k, v) in enumerate(rows.items())
+                    }
+                return {}
+
+        return FakeSheets()
+
+    def _get(self, monkeypatch, rows):
+        client = _make_client(monkeypatch, sheets=self._sheets(rows))
+        return json.loads(client.get("/api/reachability").data)
+
+    def test_it_sorts_leads_into_verified_rejected_and_waiting(self, monkeypatch):
+        data = self._get(
+            monkeypatch,
+            {
+                "yes": {
+                    "lead": {"Lead ID": "yes", "Business Name": "Yes Ltd",
+                             "Phone": "+44 20 7946 0958", "Country": "GB"},
+                    "research": {"WhatsApp Reachable": "yes"},
+                },
+                "no": {
+                    "lead": {"Lead ID": "no", "Business Name": "No Ltd",
+                             "Phone": "+44 20 7946 0959", "Country": "GB"},
+                    "research": {"WhatsApp Reachable": "no"},
+                },
+                "new": {
+                    "lead": {"Lead ID": "new", "Business Name": "New Ltd",
+                             "Phone": "+44 20 7946 0960", "Country": "GB"},
+                    "research": {},
+                },
+            },
+        )
+
+        assert data["counts"]["verified"] == 1
+        assert data["counts"]["rejected"] == 1
+        assert data["counts"]["waiting"] == 1
+
+    def test_it_shows_the_number_as_it_will_actually_be_dialled(self, monkeypatch):
+        """The whole class of bug here was numbers reaching WhatsApp in the
+        wrong shape. Showing the dialled form makes a bad one visible
+        instead of something to discover after a build."""
+        data = self._get(
+            monkeypatch,
+            {
+                "a": {
+                    "lead": {"Lead ID": "a", "Business Name": "Chip Shop",
+                             "Phone": "020 7946 0958", "Country": "GB"},
+                    "research": {"WhatsApp Reachable": "yes"},
+                }
+            },
+        )
+
+        assert data["verified"][0]["dialled"] == "442079460958"
+
+    def test_a_rejected_lead_with_an_email_still_counts_as_buildable(self, monkeypatch):
+        """Not on WhatsApp is not the same as not worth building for -- the
+        gate lets an email through, and the panel must agree with the gate
+        or it will look like leads vanished."""
+        data = self._get(
+            monkeypatch,
+            {
+                "a": {
+                    "lead": {"Lead ID": "a", "Business Name": "Mailer",
+                             "Phone": "+44 20 7946 0958", "Country": "GB"},
+                    "research": {"WhatsApp Reachable": "no",
+                                 "Email Found": "hi@mailer.co.uk"},
+                }
+            },
+        )
+
+        assert data["counts"]["rejected"] == 1
+        assert data["counts"]["buildable"] == 1
+
+    def test_an_unresearched_lead_is_not_listed_at_all(self, monkeypatch):
+        """This panel is about the check, and the check only runs on
+        researched leads. Listing the rest would make the numbers meaningless."""
+        from outreach import schema
+
+        class FakeSheets:
+            def read_rows(self, tab):
+                if tab is schema.LEADS:
+                    return {"a": (2, {"Lead ID": "a", "Phone": "+44 20 7946 0958"})}
+                return {}
+
+        client = _make_client(monkeypatch, sheets=FakeSheets())
+        data = json.loads(client.get("/api/reachability").data)
+
+        assert data["counts"] == {
+            "verified": 0, "rejected": 0, "waiting": 0, "buildable": 0
+        }

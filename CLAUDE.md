@@ -42,7 +42,7 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             911 tests, pytest, no CI -- the suite is the only gate
+tests/             915 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
