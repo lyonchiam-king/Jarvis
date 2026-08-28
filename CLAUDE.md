@@ -42,7 +42,7 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             933 tests, pytest, no CI -- the suite is the only gate
+tests/             943 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -105,6 +105,15 @@ Lyon runs Ollama. New spec fields go in `properties` but not `required`, with
 the prompt block rendered conditionally, so a model that skips one produces
 the previous prompt rather than a broken one. `layout_system` is the worked
 example.
+
+**"Sent" must mean WhatsApp acknowledged it.** `sendMessage()` resolving only
+means the socket accepted the message; a half-open connection queues it,
+resolves, and transmits nothing -- so the dashboard reported success while
+the sender's own phone showed no chat at all. The relay waits for a server
+ack and reports `pending` otherwise, which the client raises, so the lead
+stays in the queue instead of being marked done. It also asks `onWhatsApp`
+before sending: WhatsApp accepts a message for any well-formed JID, so
+sending blind to an unregistered number is indistinguishable from success.
 
 **Normalise a number once, and only where its country is known.** The send
 path normalised twice -- in the dashboard queue with the lead's country, then

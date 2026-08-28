@@ -52,8 +52,11 @@ class WhatsAppError(Exception):
 @dataclass(frozen=True)
 class SendResult:
     message_id: str
-    status: str  # "sent" | "failed"
+    status: str  # "sent" | "pending" | "failed"
     timestamp: str
+    # The digits the relay actually addressed. Surfaced so a wrong number is
+    # visible in the Sheet rather than inferred from a message never arriving.
+    dialled: str = ""
 
 
 class WhatsAppClient:
@@ -150,11 +153,22 @@ class WhatsAppClient:
         status = data.get("status", "failed")
         if status == "failed":
             raise WhatsAppError(data.get("error", "Unknown relay error"))
+        if status == "pending":
+            # WhatsApp never acknowledged it. Reporting this as sent is what
+            # made a message that reached nobody look like a success, so it
+            # is raised -- the Sheet records a failure and the lead stays in
+            # the queue rather than being marked done.
+            raise WhatsAppError(
+                data.get("error")
+                or f"WhatsApp did not acknowledge the message to "
+                   f"{data.get('dialled', 'that number')}."
+            )
 
         return SendResult(
             message_id=data.get("message_id", ""),
             status=status,
             timestamp=data.get("timestamp", ""),
+            dialled=data.get("dialled", ""),
         )
 
     # ------------------------------------------------------------------ check

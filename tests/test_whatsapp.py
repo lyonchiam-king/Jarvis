@@ -1315,3 +1315,50 @@ class TestTheDashboardSendPath:
         )
 
         assert dialled == "60123456789"
+
+
+class TestSentMeansAcknowledged:
+    """"Sent" reported a message that reached nobody.
+
+    sendMessage() resolving only means the socket accepted the message. A
+    half-open connection queues it, resolves, and transmits nothing -- so the
+    dashboard said success while the sender's own phone showed no chat at
+    all. The relay now waits for WhatsApp to acknowledge, and anything else
+    is reported as a failure so the lead stays in the queue.
+    """
+
+    def _reply(self, rsps, body):
+        rsps.add(responses.POST, "http://127.0.0.1:4099/send", json=body)
+
+    def test_an_acknowledged_message_is_sent(self):
+        with responses.RequestsMock() as rsps:
+            self._reply(rsps, {"status": "sent", "message_id": "m1",
+                               "timestamp": "t", "dialled": "447450225230", "ack": 1})
+            result = WhatsAppClient().send_message("447450225230", "Hi", "")
+
+        assert result.status == "sent"
+        assert result.dialled == "447450225230"
+
+    def test_an_unacknowledged_message_is_not_reported_as_sent(self):
+        """The exact failure: relay accepted it, WhatsApp never confirmed."""
+        with responses.RequestsMock() as rsps:
+            self._reply(rsps, {"status": "pending", "message_id": "m1",
+                               "timestamp": "t", "dialled": "447450225230",
+                               "ack": None, "error": "not acknowledged"})
+            with pytest.raises(WhatsAppError, match="not acknowledged"):
+                WhatsAppClient().send_message("447450225230", "Hi", "")
+
+    def test_an_unregistered_number_is_refused_before_sending(self):
+        with responses.RequestsMock() as rsps:
+            self._reply(rsps, {"status": "failed", "dialled": "447450225230",
+                               "error": "447450225230 is not registered on WhatsApp"})
+            with pytest.raises(WhatsAppError, match="not registered"):
+                WhatsAppClient().send_message("447450225230", "Hi", "")
+
+    def test_the_pending_error_names_the_number_it_tried(self):
+        """So a wrong number is visible rather than deduced from silence."""
+        with responses.RequestsMock() as rsps:
+            self._reply(rsps, {"status": "pending", "message_id": "m1",
+                               "timestamp": "t", "dialled": "60447450225230"})
+            with pytest.raises(WhatsAppError, match="60447450225230"):
+                WhatsAppClient().send_message("60447450225230", "Hi", "")

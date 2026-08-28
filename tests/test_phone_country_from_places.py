@@ -60,3 +60,58 @@ class TestTheNumberSurvivesToWhatsApp:
         the number, a wrong campaign setting silently dials another country."""
         assert phone.normalise("07450 225230", "MY") == "607450225230"
         assert phone.normalise("07450 225230", "GB") == "447450225230"
+
+
+class TestAnyCountryWorksWithoutACodeChange:
+    """Item 1: scrape a new country tomorrow and it must simply work.
+
+    Every country-specific failure in this project came from a rule that
+    named one country. There are none left on the reachability path: the
+    dialling table covers every ITU code, and the country comes from Google
+    per lead, so adding a market is a config change and nothing more.
+    """
+
+    SAMPLE = [
+        ("GB", "+44 20 7946 0958", "442079460958"),
+        ("US", "+1 504-555-0123", "15045550123"),
+        ("DE", "+49 30 12345678", "493012345678"),
+        ("FR", "+33 1 42 68 53 00", "33142685300"),
+        ("ES", "+34 91 123 4567", "34911234567"),
+        ("IT", "+39 06 1234 5678", "390612345678"),
+        ("NL", "+31 20 123 4567", "31201234567"),
+        ("PL", "+48 22 123 4567", "48221234567"),
+        ("SE", "+46 8 123 456", "468123456"),
+        ("JP", "+81 90 1234 5678", "819012345678"),
+        ("BR", "+55 11 5555-1234", "551155551234"),
+        ("ZA", "+27 82 123 4567", "27821234567"),
+        ("AE", "+971 4 123 4567", "97141234567"),
+        ("MY", "+60 12-345 6789", "60123456789"),
+    ]
+
+    def test_every_sampled_country_dials_correctly(self):
+        for iso, intl, expected in self.SAMPLE:
+            raw = {
+                "id": "p",
+                "displayName": {"text": "X"},
+                "formattedAddress": "somewhere",
+                "addressComponents": [{"shortText": iso, "types": ["country"]}],
+                "internationalPhoneNumber": intl,
+            }
+            place = _parse_place(raw)
+            assert place.country == iso
+            # country="" -- the send path's contract for an already-E.164
+            # number, and the one that must never re-prefix.
+            assert phone.normalise(place.phone, "") == expected, iso
+
+    def test_the_dialling_table_covers_every_sampled_country(self):
+        for iso, _intl, _expected in self.SAMPLE:
+            assert iso in phone.DIALLING_CODES, f"{iso} cannot be dialled"
+
+    def test_no_country_is_privileged_in_the_reachability_path(self):
+        """Malaysia must have no special standing left anywhere."""
+        import inspect
+        from outreach.stages import reachability
+
+        src = inspect.getsource(reachability)
+        for token in ('"MY"', "'MY'", '"60"', "'60'"):
+            assert token not in src, f"{token} hardcodes a country into the check"

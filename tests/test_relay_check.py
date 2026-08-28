@@ -68,3 +68,38 @@ def test_results_are_matched_by_number_not_by_position():
 
     assert ".find(" in block, "results must be matched, not indexed"
     assert "const [hit]" not in block, "destructuring index 0 is the bug this replaces"
+
+
+def test_the_relay_hardcodes_no_country_anywhere():
+    """Item 1: a new country must never need a code change here.
+
+    The relay has twice grown a Malaysia-shaped assumption -- a forced "60"
+    on send, and a numbering rule that decided who was reachable. It knows
+    about no country now, and must not learn one: everything arrives already
+    dialled by phone.py, which resolves the country per lead.
+    """
+    # Comments are stripped first: the file deliberately explains the old
+    # forced-60 bug, and that history is worth keeping. It is the code that
+    # must be free of it.
+    code = re.sub(r"//[^\n]*", "", source())
+    code = re.sub(r"/\*.*?\*/", "", code, flags=re.S)
+
+    for banned in ('"60"', "'60'", '"+60'):
+        assert banned not in code, f"{banned} reintroduces a country into the relay"
+
+
+def test_sent_is_only_claimed_with_an_acknowledgement():
+    """A send that merely resolved was reported as sent, and reached nobody."""
+    block = source().split('app.post("/send"', 1)[1].split("app.post(", 1)[0]
+
+    assert "waitForAck" in block, "the send must wait for WhatsApp to confirm"
+    assert '"pending"' in block, "an unacknowledged send must not be called sent"
+
+
+def test_the_recipient_is_checked_before_a_message_is_sent():
+    """WhatsApp accepts a message for any well-formed JID, so sending blind
+    to an unregistered number looks exactly like success."""
+    block = source().split('app.post("/send"', 1)[1].split("app.post(", 1)[0]
+
+    assert "onWhatsApp" in block
+    assert "not registered on WhatsApp" in block

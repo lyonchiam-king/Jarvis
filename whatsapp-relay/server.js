@@ -33,6 +33,7 @@ const MIN_INTERVAL_MS = parseInt(process.env.MIN_INTERVAL_SECONDS || "15", 10) *
 const CHECK_INTERVAL_MS =
   parseInt(process.env.CHECK_INTERVAL_SECONDS || "3", 10) * 1000;
 const CHECK_MAX_PER_REQUEST = parseInt(process.env.CHECK_MAX_PER_REQUEST || "50", 10);
+const ACK_TIMEOUT_MS = parseInt(process.env.ACK_TIMEOUT_SECONDS || "8", 10) * 1000;
 
 // ---------------------------------------------------------------------------
 // State
@@ -45,6 +46,21 @@ let dailySent = 0;
 let dailyDate = new Date().toDateString();
 let lastSendTime = 0;
 let lastCheckTime = 0;
+// message id -> WhatsApp status code (1 = sent to server, 2 = delivered).
+const acks = new Map();
+
+// Wait briefly for the server to acknowledge a message. Resolves to the
+// status code, or null if nothing came back in time -- which is reported as
+// "pending", never as "sent".
+async function waitForAck(id, timeoutMs = ACK_TIMEOUT_MS) {
+  if (!id) return null;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (acks.has(id)) return acks.get(id);
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return acks.has(id) ? acks.get(id) : null;
+}
 let sendQueue = Promise.resolve(); // serialise sends so we never firehose
 
 // ---------------------------------------------------------------------------
@@ -82,6 +98,23 @@ async function connect() {
   });
 
   sock.ev.on("creds.update", saveCreds);
+
+  // WhatsApp acknowledges a message separately from sendMessage() resolving.
+  // Without this the relay reported "sent" the moment the call returned,
+  // which is true of a message the socket merely queued and never
+  // transmitted -- so a send could look successful and arrive nowhere, with
+  // nothing in the sender's own chat list either.
+  sock.ev.on("messages.update", (updates) => {
+    for (const u of updates || []) {
+      const id = u?.key?.id;
+      const status = u?.update?.status;
+      if (id && typeof status === "number") {
+        acks.set(id, status);
+        // Bounded: this is a short-lived correlation table, not a log.
+        if (acks.size > 500) acks.delete(acks.keys().next().value);
+      }
+    }
+  });
 
   sock.ev.on("connection.update", (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -201,15 +234,53 @@ app.post("/send", async (req, res) => {
           error: "phone must be in international format, digits only",
         });
       }
+      // Confirm the recipient exists before sending. WhatsApp accepts a
+      // message for any well-formed JID and reports nothing wrong, so
+      // sending blind to a number that is not registered looks exactly like
+      // success and reaches nobody.
+      const digits = jid.split("@")[0];
+      let registered = null;
+      try {
+        const found = await sock.onWhatsApp(digits);
+        registered = (found || []).some((e) => {
+          const back = String(e?.jid || "").replace(/[^0-9]/g, "");
+          return (back === digits || back.endsWith(digits)) && e?.exists !== false;
+        });
+      } catch (err) {
+        // A failed check is not proof of absence, so the send still goes.
+        logger.warn({ err, phone }, "Pre-send check failed; sending anyway");
+      }
+      if (registered === false) {
+        lastSendTime = Date.now();
+        return res.json({
+          status: "failed",
+          error: `${digits} is not registered on WhatsApp`,
+          dialled: digits,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       const result = await sock.sendMessage(jid, { text: message });
 
       lastSendTime = Date.now();
       dailySent += 1;
 
       const key = result?.key;
+      // "sent" now means WhatsApp acknowledged it, not merely that the call
+      // returned. Without an ack the honest answer is "pending": the message
+      // may be sitting in a socket that never transmitted it.
+      const ack = await waitForAck(key?.id);
       res.json({
-        status: "sent",
+        status: ack === null ? "pending" : "sent",
         message_id: key?.id || "",
+        dialled: digits,
+        ack: ack,
+        error:
+          ack === null
+            ? "WhatsApp did not acknowledge this message. It may not have left "
+              + "the relay -- check the relay is still paired, then look for the "
+              + "chat on your phone before resending."
+            : undefined,
         timestamp: new Date().toISOString(),
       });
     } catch (err) {
