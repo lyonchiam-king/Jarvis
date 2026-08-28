@@ -814,8 +814,18 @@ def run_research(ctx: click.Context, limit: int | None, social_first: bool | Non
 
 @run.command("reachability")
 @click.option("--limit", type=int, default=0, help="Check fewer leads than are waiting.")
+@click.option(
+    "--recheck",
+    is_flag=True,
+    help=(
+        "Ask again for leads that already have an answer. Needed once for "
+        "leads answered before the check asked WhatsApp directly -- every "
+        "'no' decided from the number's format alone is untrustworthy, "
+        "because WhatsApp Business runs on landlines."
+    ),
+)
 @click.pass_context
-def run_reachability(ctx: click.Context, limit: int) -> None:
+def run_reachability(ctx: click.Context, limit: int, recheck: bool) -> None:
     """Stage 3.5 -- who can we actually reach, before a site is built for them.
 
     Answers from the numbering plan where a country has one, and asks
@@ -824,7 +834,9 @@ def run_reachability(ctx: click.Context, limit: int) -> None:
     """
     config = _load(ctx.obj["config_path"])
     sheets = _sheets_client(config)
-    report = reachability_stage.check_reachability(config, sheets, limit=limit)
+    report = reachability_stage.check_reachability(
+        config, sheets, limit=limit, recheck=recheck
+    )
 
     click.echo("")
     for line in report.lines():

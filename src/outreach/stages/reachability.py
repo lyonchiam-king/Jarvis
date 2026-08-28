@@ -47,8 +47,8 @@ class ReachabilityReport:
     def lines(self) -> list[str]:
         out = [
             f"Checked {self.checked} lead(s): "
-            f"{self.from_plan} from the numbering plan, "
-            f"{self.from_lookup} asked on WhatsApp.",
+            f"{self.from_lookup} asked on WhatsApp, "
+            f"{self.from_plan} had no usable number.",
             f"  reachable on WhatsApp: {self.reachable}",
             f"  not on WhatsApp:       {self.unreachable}",
         ]
@@ -74,8 +74,16 @@ def check_reachability(
     client=None,
     *,
     limit: int = 0,
+    recheck: bool = False,
 ) -> ReachabilityReport:
-    """Answer 'can we reach this lead on WhatsApp?' for researched leads."""
+    """Answer 'can we reach this lead on WhatsApp?' for researched leads.
+
+    ``recheck`` ignores the cached verdict and asks again. Needed once,
+    because early verdicts were decided by the numbering plan rather than by
+    WhatsApp, and every "no" it produced for a landline is untrustworthy --
+    UK businesses running WhatsApp Business on an 020 number were written
+    off without ever being asked.
+    """
     report = ReachabilityReport()
 
     home_country = getattr(getattr(config, "compliance", None), "country_code", "") or ""
@@ -93,7 +101,9 @@ def check_reachability(
         # Cached: a lead answered once is never asked again. `unknown` is not
         # an answer -- it is what a failed lookup leaves behind, and it stays
         # in the queue on purpose.
-        if (row[1].get("WhatsApp Reachable") or "").strip().lower() in {YES, NO}:
+        if not recheck and (
+            row[1].get("WhatsApp Reachable") or ""
+        ).strip().lower() in {YES, NO}:
             report.already_done += 1
             continue
         pending.append(
@@ -111,22 +121,22 @@ def check_reachability(
     needs_lookup: dict[str, str] = {}  # lead_id -> E.164 digits
 
     for lead_id, raw_phone, country in pending:
-        kind = phone_lib.line_type(raw_phone, country)
-        if kind == "mobile":
-            verdicts[lead_id] = YES
-            report.from_plan += 1
-        elif kind == "landline":
+        e164 = phone_lib.normalise(raw_phone, country)
+        if not e164 or e164.startswith("0"):
+            # No usable number at all -- nothing to dial and nothing to ask
+            # about. The one verdict the numbering plan is still allowed to
+            # reach on its own, because it is about the number existing, not
+            # about who is on WhatsApp.
             verdicts[lead_id] = NO
             report.from_plan += 1
         else:
-            e164 = phone_lib.normalise(raw_phone, country)
-            if not e164:
-                # No usable number at all. That is a real "no", not a lookup
-                # we failed to do.
-                verdicts[lead_id] = NO
-                report.from_plan += 1
-            else:
-                needs_lookup[lead_id] = e164
+            # Everything else is asked, whatever the plan thinks. The plan is
+            # wrong in both directions: WhatsApp Business verifies landlines
+            # by voice call, so a fixed line is not a no -- which is what
+            # wrote off every UK business with an 020 number without ever
+            # asking -- and plenty of mobiles have no WhatsApp account, so a
+            # mobile is not a yes either.
+            needs_lookup[lead_id] = e164
 
     if needs_lookup:
         client = client or _default_client(config)
@@ -247,17 +257,11 @@ def can_whatsapp(
     yet, and it is a guess -- in an ambiguous country it says "no" where the
     honest answer is "not yet asked", so the check is what should decide.
     """
+    # The cached verdict, and nothing else. It came from WhatsApp itself.
+    # There used to be a numbering-plan fallback here for unchecked leads,
+    # and it was wrong in both directions -- it read a UK landline as
+    # unreachable when WhatsApp Business runs on fixed lines every day. An
+    # unchecked lead is now simply not yet confirmed, and the build gate
+    # holds it rather than guessing about it.
     verdict = ((research_row or {}).get("WhatsApp Reachable") or "").strip().lower()
-    if verdict == YES:
-        return True
-    if verdict == NO:
-        return False
-    # The lead's own Country, then the number's international prefix, then
-    # the campaign's country. That last fallback matters: rows discovered
-    # before the Country column was populated hold numbers in national form
-    # ("012-3456789"), which identifies no country by itself -- and without
-    # it every one of those Penang leads would quietly go dark.
-    country = lead.get("Country", "") or phone_lib.country_from_number(
-        lead.get("Phone", "")
-    ) or default_country
-    return phone_lib.line_type(lead.get("Phone", ""), country) == "mobile"
+    return verdict == YES

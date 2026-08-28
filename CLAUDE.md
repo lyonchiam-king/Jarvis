@@ -42,7 +42,7 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             899 tests, pytest, no CI -- the suite is the only gate
+tests/             902 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -105,6 +105,15 @@ Lyon runs Ollama. New spec fields go in `properties` but not `required`, with
 the prompt block rendered conditionally, so a model that skips one produces
 the previous prompt rather than a broken one. `layout_system` is the worked
 example.
+
+**The numbering plan never decides who is on WhatsApp.** It was wrong in both
+directions: WhatsApp Business verifies landlines by voice call, so reading a
+UK `020` number as unreachable wrote off every shop running WhatsApp on its
+shop line -- and a mobile is no guarantee of an account either. `line_type`
+is informational only. Every lead with a dialable number gets asked, and the
+answer is cached; the plan's one remaining verdict is "there is no usable
+number here". Adding a country now means adding a dialling code so the number
+can be *dialled*, never a rule about who can be reached.
 
 **Every phone rule is a country's rule, never "the" rule.** `is_mobile_number`
 hardcoded Malaysia's 01X prefix, and the relay force-prefixed `60` onto any

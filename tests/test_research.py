@@ -644,19 +644,70 @@ def test_a_us_number_is_asked_about_rather_than_written_off():
     assert _verdicts(sheets) == {"a": "no"}
 
 
-def test_a_malaysian_mobile_costs_no_lookup_at_all():
-    """Penang must not start paying for lookups it never needed: the plan
-    answers there, so the relay is never troubled."""
+def test_even_an_obvious_mobile_is_asked_about_rather_than_assumed():
+    """The numbering plan no longer decides anything, in either direction.
+
+    It used to answer "mobile -> yes" without asking, which saved a lookup
+    in Penang and was still wrong: plenty of mobiles have no WhatsApp
+    account. The mirror of that mistake -- "landline -> no" -- is what wrote
+    off every UK business running WhatsApp Business on its shop line.
+    """
     from outreach.stages import reachability
 
     sheets = FakeSheets(_reach_leads(phone="+60 12-3456789", country="MY"), ["a"])
-    relay = _Relay()
+    relay = _Relay(registered={"60123456789"})
 
-    report = reachability.check_reachability(config(), sheets, relay)
+    reachability.check_reachability(config(), sheets, relay)
 
-    assert relay.asked == []
-    assert report.from_plan == 1
+    assert relay.asked == ["60123456789"]
     assert _verdicts(sheets) == {"a": "yes"}
+
+
+def test_a_uk_landline_is_asked_about_not_written_off():
+    """The bug Lyon hit across the UK and Europe. WhatsApp Business verifies
+    fixed lines by voice call, so an 020 number is a perfectly normal
+    business WhatsApp -- and every one of them was being marked unreachable
+    without a single lookup."""
+    from outreach.stages import reachability
+
+    sheets = FakeSheets(_reach_leads(phone="+44 20 7946 0958", country="GB"), ["a"])
+    relay = _Relay(registered={"442079460958"})
+
+    reachability.check_reachability(config(), sheets, relay)
+
+    assert relay.asked == ["442079460958"], "a landline must still be asked about"
+    assert _verdicts(sheets) == {"a": "yes"}
+
+
+def test_a_european_national_number_is_dialled_not_dropped():
+    """030 12345678 in Germany has to become 493012345678 before it can be
+    asked about at all. Without the dialling code it stayed 03012345678,
+    which is not a number anything can look up."""
+    from outreach.stages import reachability
+
+    sheets = FakeSheets(_reach_leads(phone="030 12345678", country="DE"), ["a"])
+    relay = _Relay(registered={"493012345678"})
+
+    reachability.check_reachability(config(), sheets, relay)
+
+    assert relay.asked == ["493012345678"]
+    assert _verdicts(sheets) == {"a": "yes"}
+
+
+def test_a_cached_answer_can_be_asked_again_on_demand():
+    """Early verdicts came from the numbering plan, so every "no" it wrote
+    is untrustworthy. Without a way to re-ask, those leads would stay
+    written off for good."""
+    from outreach.stages import reachability
+
+    leads = _reach_leads(phone="+44 20 7946 0958", country="GB")
+    sheets = FakeSheets(leads, ["a"])
+    sheets._research["a"][1]["WhatsApp Reachable"] = "no"
+    relay = _Relay(registered={"442079460958"})
+
+    reachability.check_reachability(config(), sheets, relay, recheck=True)
+
+    assert _verdicts(sheets) == {"a": "yes"}, "a re-check must overwrite a stale no"
 
 
 def test_an_offline_relay_leaves_leads_unchecked_rather_than_unreachable():

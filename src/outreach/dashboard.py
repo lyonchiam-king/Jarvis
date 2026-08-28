@@ -45,6 +45,7 @@ STAGE_COMMANDS = {
     "discovery": ["run", "discovery"],
     "research": ["run", "research"],
     "reachability": ["run", "reachability"],
+    "reachability-recheck": ["run", "reachability", "--recheck"],
     "site-brief": ["run", "site-brief"],
     "site-brief-rewrite": ["run", "site-brief", "--rewrite"],
     "site-build": ["run", "site-build"],
@@ -64,6 +65,7 @@ TAKES_LIMIT = {
     "discovery",
     "research",
     "reachability",
+    "reachability-recheck",
     "site-brief",
     "site-brief-rewrite",
     "site-build",
@@ -1647,6 +1649,7 @@ PAGE = """<!doctype html>
         <button data-run="discovery">Find leads</button>
         <button data-run="research">Research</button>
         <button data-run="reachability">Check WhatsApp</button>
+        <button data-run="reachability-recheck">Re-check WhatsApp</button>
         <button data-run="site-brief">Write briefs</button>
         <button data-run="site-build">Build approved</button>
         <button data-run="outreach-draft">Draft messages</button>
@@ -1658,6 +1661,12 @@ PAGE = """<!doctype html>
         before this existed, or ones left unchecked because the relay was
         offline &mdash; it only asks about numbers it has no answer for, and
         never asks twice.</p>
+      <p class="hint"><b>Re-check WhatsApp</b> asks again for leads that already
+        have an answer. Use it once on any leads answered before the check
+        started asking WhatsApp directly: a &ldquo;no&rdquo; worked out from the
+        number&rsquo;s format alone is not trustworthy, because WhatsApp
+        Business runs on landlines. It costs one lookup per lead, so it is not
+        something to press daily.</p>
       <div class="hint" id="nextup"></div>
       <div class="row" style="margin-top:10px">
         <button data-run="preview-leads">Preview leads</button>

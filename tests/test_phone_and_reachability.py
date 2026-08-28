@@ -92,15 +92,19 @@ class TestTheCachedVerdictWins:
         lead = {"Phone": "+60 12-3456789", "Country": "MY"}
         assert can_whatsapp(lead, {"WhatsApp Reachable": "no"}) is False
 
-    def test_an_unchecked_lead_falls_back_to_the_plan(self):
+    def test_an_unchecked_lead_is_not_assumed_reachable(self):
+        """There used to be a numbering-plan fallback here. It read a UK
+        landline as unreachable and a mobile as reachable, and both are
+        guesses -- so it decided a lead's fate without asking anyone. An
+        unchecked lead is simply not confirmed, and the build gate holds it."""
         lead = {"Phone": "+60 12-3456789", "Country": "MY"}
-        assert can_whatsapp(lead, {}) is True
+        assert can_whatsapp(lead, {}) is False
 
-    def test_the_campaign_country_rescues_a_bare_national_number(self):
-        """Existing Penang rows hold '012-3456789' with no Country cell. If
-        that resolved to unreachable, the whole live sheet would go dark."""
-        lead = {"Phone": "012-3456789", "Country": ""}
-        assert can_whatsapp(lead, {}, "MY") is True
+    def test_a_landline_confirmed_on_whatsapp_is_reachable(self):
+        """WhatsApp Business verifies fixed lines by voice call. Whatever the
+        number looks like, a yes from WhatsApp is a yes."""
+        lead = {"Phone": "+44 20 7946 0958", "Country": "GB"}
+        assert can_whatsapp(lead, {"WhatsApp Reachable": "yes"}) is True
 
 
 class TestTheGateBeforeBuilding:

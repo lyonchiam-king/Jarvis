@@ -373,6 +373,11 @@ class TestWhatsAppQueueEndpoint:
                     return {}
                 if tab is schema.LEADS:
                     return {}
+                if tab is schema.RESEARCH:
+                    return {
+                        k: (i + 2, {"Lead ID": k, "WhatsApp Reachable": "yes"})
+                        for i, k in enumerate(self.read_rows(schema.LEADS))
+                    }
                 return {}
 
         client = _make_client(monkeypatch, sheets=FakeSheets())
@@ -421,6 +426,11 @@ class TestWhatsAppQueueEndpoint:
                             },
                         ),
                     }
+                if tab is schema.RESEARCH:
+                    return {
+                        k: (i + 2, {"Lead ID": k, "WhatsApp Reachable": "yes"})
+                        for i, k in enumerate(self.read_rows(schema.LEADS))
+                    }
                 return {}
 
         client = _make_client(monkeypatch, sheets=FakeSheets())
@@ -467,6 +477,11 @@ class TestWhatsAppQueueEndpoint:
                             },
                         ),
                     }
+                if tab is schema.RESEARCH:
+                    return {
+                        k: (i + 2, {"Lead ID": k, "WhatsApp Reachable": "yes"})
+                        for i, k in enumerate(self.read_rows(schema.LEADS))
+                    }
                 return {}
 
         client = _make_client(monkeypatch, sheets=FakeSheets())
@@ -503,6 +518,11 @@ class TestWhatsAppQueueEndpoint:
                             {"Lead ID": "lead-1", "Phone": "+60123456789"},
                         ),
                     }
+                if tab is schema.RESEARCH:
+                    return {
+                        k: (i + 2, {"Lead ID": k, "WhatsApp Reachable": "yes"})
+                        for i, k in enumerate(self.read_rows(schema.LEADS))
+                    }
                 return {}
 
         client = _make_client(monkeypatch, sheets=FakeSheets())
@@ -536,6 +556,11 @@ class TestWhatsAppQueueEndpoint:
                             {"Lead ID": "lead-1", "Phone": ""},
                         ),
                     }
+                if tab is schema.RESEARCH:
+                    return {
+                        k: (i + 2, {"Lead ID": k, "WhatsApp Reachable": "yes"})
+                        for i, k in enumerate(self.read_rows(schema.LEADS))
+                    }
                 return {}
 
         client = _make_client(monkeypatch, sheets=FakeSheets())
@@ -543,7 +568,11 @@ class TestWhatsAppQueueEndpoint:
         data = json.loads(resp.data)
         assert data["queue"] == []
 
-    def test_hides_landline_numbers(self, monkeypatch):
+    def test_hides_numbers_whatsapp_said_no_to(self, monkeypatch):
+        """Was test_hides_landline_numbers. The queue no longer hides a lead
+        for having a landline-shaped number -- WhatsApp Business verifies
+        fixed lines, and reading the shape as a verdict wrote off every UK
+        business with an 020 number. Only a real no from WhatsApp hides."""
         from outreach import schema
 
         class FakeSheets:
@@ -583,6 +612,14 @@ class TestWhatsAppQueueEndpoint:
                             3,
                             {"Lead ID": "lead-2", "Phone": "04-1234567"},
                         ),
+                    }
+                if tab is schema.RESEARCH:
+                    # lead-2 is hidden because WhatsApp said no, not because
+                    # the number looks like a landline -- WhatsApp Business
+                    # runs on landlines, so the shape decides nothing.
+                    return {
+                        "lead-1": (2, {"Lead ID": "lead-1", "WhatsApp Reachable": "yes"}),
+                        "lead-2": (3, {"Lead ID": "lead-2", "WhatsApp Reachable": "no"}),
                     }
                 return {}
 
@@ -677,6 +714,19 @@ class TestWhatsAppQueueEndpoint:
                         # lead-orphan deliberately absent from Leads.
                         "lead-ok": (6, {"Lead ID": "lead-ok", "Phone": "+6012-3456789"}),
                     }
+                if tab is schema.RESEARCH:
+                    # lead-landline is excluded because WhatsApp answered no
+                    # for it, not because of how the number looks.
+                    return {
+                        k: (
+                            i + 2,
+                            {
+                                "Lead ID": k,
+                                "WhatsApp Reachable": "no" if k == "lead-landline" else "yes",
+                            },
+                        )
+                        for i, k in enumerate(self.read_rows(schema.LEADS))
+                    }
                 return {}
 
         client = _make_client(monkeypatch, sheets=FakeSheets())
@@ -747,6 +797,11 @@ class TestWhatsAppQueueEndpoint:
                         "lead-unreach": (5, {"Phone": "04-1234567"}),
                         "lead-ok": (6, {"Phone": "+6012-3456789"}),
                         "lead-empty": (7, {"Phone": ""}),
+                    }
+                if tab is schema.RESEARCH:
+                    return {
+                        k: (i + 2, {"Lead ID": k, "WhatsApp Reachable": "yes"})
+                        for i, k in enumerate(self.read_rows(schema.LEADS))
                     }
                 return {}
 

@@ -193,9 +193,13 @@ def lead(lead_id, stage="Researched", phone="012-3456789"):
     }
 
 
-def research_row(lead_id, email=""):
+def research_row(lead_id, email="", whatsapp="yes"):
+    """`whatsapp` defaults to "yes": by the time a lead reaches the draft
+    stage the check has run, because the build gate holds anything it has
+    not answered for. Tests about the no-channel case pass "no"."""
     return {
         "Lead ID": lead_id,
+        "WhatsApp Reachable": whatsapp,
         "Business Name": f"Salon {lead_id}",
         "Tone": "warm",
         "Services": "cut, colour",
@@ -311,9 +315,13 @@ def test_lead_without_an_email_still_gets_whatsapp_text():
     assert row["Gmail Draft ID"] == ""
 
 
-def test_lead_without_email_and_landline_phone_is_unreachable():
+def test_lead_with_no_email_and_no_whatsapp_is_unreachable():
+    """Was named ...landline_phone... The number's shape decides nothing now:
+    WhatsApp Business runs on landlines, so only a no from WhatsApp itself
+    makes a lead unreachable."""
     sheets = FakeSheets(
-        index([lead("a", phone="04-1234567")]), index([research_row("a")])
+        index([lead("a", phone="04-1234567")]),
+        index([research_row("a", whatsapp="no")]),
     )
     gmail = FakeGmail()
 

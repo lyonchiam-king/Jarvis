@@ -23,23 +23,28 @@ import re
 # country absent from both still works, it just resolves to `unknown` and
 # gets checked against WhatsApp rather than guessed at.
 DIALLING_CODES: dict[str, str] = {
-    "MY": "60",
-    "SG": "65",
-    "ID": "62",
-    "TH": "66",
-    "US": "1",
-    "CA": "1",
-    "GB": "44",
-    "UK": "44",
-    "AU": "61",
-    "NZ": "64",
-    "IE": "353",
-    "IN": "91",
-    "PH": "63",
-    "VN": "84",
-    "AE": "971",
-    "ZA": "27",
+    # Asia-Pacific
+    "MY": "60", "SG": "65", "ID": "62", "TH": "66", "PH": "63", "VN": "84",
+    "IN": "91", "HK": "852", "TW": "886", "JP": "81", "KR": "82", "CN": "86",
+    "AU": "61", "NZ": "64",
+    # Americas
+    "US": "1", "CA": "1", "MX": "52", "BR": "55", "AR": "54", "CL": "56",
+    # British Isles
+    "GB": "44", "UK": "44", "IE": "353",
+    # Western Europe
+    "DE": "49", "FR": "33", "ES": "34", "IT": "39", "PT": "351", "NL": "31",
+    "BE": "32", "LU": "352", "AT": "43", "CH": "41",
+    # Nordics
+    "DK": "45", "SE": "46", "NO": "47", "FI": "358", "IS": "354",
+    # Central and Eastern Europe
+    "PL": "48", "CZ": "420", "SK": "421", "HU": "36", "RO": "40", "BG": "359",
+    "GR": "30", "HR": "385", "SI": "386", "RS": "381", "EE": "372",
+    "LV": "371", "LT": "370", "CY": "357", "MT": "356",
+    # Middle East and Africa
+    "AE": "971", "SA": "966", "QA": "974", "IL": "972", "TR": "90",
+    "ZA": "27", "NG": "234", "KE": "254", "EG": "20",
 }
+
 
 # National-format prefixes that mean "mobile" in a given country, checked
 # after the trunk zero is restored. Only countries whose plan genuinely
@@ -148,11 +153,20 @@ def resolve_country(phone: str, country: str = "") -> str:
 
 
 def line_type(phone: str, country: str = "") -> str:
-    """"mobile", "landline" or "unknown".
+    """"mobile", "landline" or "unknown", according to the numbering plan.
 
-    `unknown` is a real answer and the most common one outside Asia: it means
-    the numbering plan cannot tell, so only WhatsApp itself can. Treating it
-    as "landline" is what silently emptied the US queue.
+    Informational only. This must NEVER be used to decide whether WhatsApp
+    can reach someone, in either direction:
+
+      * a landline is not a no -- WhatsApp Business verifies fixed lines by
+        voice call, and a great many small shops run it on the number over
+        the door. Reading "landline" as "unreachable" marked every UK
+        business with an 020 or 0161 number as uncontactable without ever
+        asking, which is exactly what it looked like: none of them had
+        WhatsApp, and by hand, plenty of them did.
+      * a mobile is not a yes -- plenty of mobiles have no WhatsApp account.
+
+    Only WhatsApp knows. `providers.whatsapp.check_numbers` asks it.
     """
     if not digits_only(phone):
         return "unknown"
