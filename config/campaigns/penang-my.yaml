@@ -124,7 +124,7 @@ research:
   order: sheet
 
 outreach:
-  sender_name: "Yiu Ming"
+  sender_name: "Lyon Ming"
   sender_title: "Founder"
   company: "COAI"
   # REQUIRED before Stage 5 will run. Goes in the footer of every draft --

@@ -188,6 +188,7 @@ def rewrite_campaign(
     location: str | None = None,
     areas: list[str] | None = None,
     batch_size: int | None = None,
+    sender_name: str | None = None,
 ) -> str:
     """Return ``text`` with the campaign target replaced.
 
@@ -201,6 +202,10 @@ def rewrite_campaign(
             f"A batch of {batch_size} is more than a day's work to review, and "
             "Google only returns about 60 results per area anyway. 200 is the "
             "ceiling here; run the batch twice if you really want more."
+        )
+    if sender_name is not None and not sender_name.strip():
+        raise CampaignEditError(
+            "The sender name cannot be empty -- it is who the message is from."
         )
     if category is not None and not category.strip():
         raise CampaignEditError("Category cannot be empty -- it is what you search for.")
@@ -233,6 +238,18 @@ def rewrite_campaign(
         # must be the last edit.
         start, end = _campaign_bounds(lines)
         _replace_areas(lines, start, end, cleaned)
+
+    if sender_name is not None:
+        # Lives under `outreach:`, not `campaign:`, so it gets its own bounds.
+        # Editable from the page because the tracked YAML is not what runs
+        # once the dashboard has forked to a .local twin -- changing the name
+        # in the file Lyon can see would silently do nothing.
+        bounds = _section_bounds(lines, "outreach")
+        if bounds is None:
+            raise CampaignEditError("No `outreach:` section found in this campaign.")
+        o_start, o_end = bounds
+        if not _replace_scalar(lines, o_start, o_end, "sender_name", sender_name.strip()):
+            raise CampaignEditError("No `sender_name:` line found under `outreach:`.")
 
     if batch_size is not None:
         _set_batch_size(lines, batch_size)

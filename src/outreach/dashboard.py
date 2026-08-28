@@ -642,6 +642,7 @@ def create_app(config: Config) -> Flask:
                 "category": c.campaign.category,
                 "location": c.campaign.location,
                 "areas": list(c.campaign.areas),
+                "sender_name": c.outreach.sender_name,
                 "batch_size": c.batch_size,
                 "file": str(c.source_path),
             }
@@ -773,6 +774,7 @@ def create_app(config: Config) -> Flask:
         if areas is not None and not isinstance(areas, list):
             return jsonify({"error": "areas must be a list of strings"}), 400
 
+        sender_name = payload.get("sender_name")
         raw_size = payload.get("batch_size")
         batch_size: int | None = None
         if raw_size not in (None, ""):
@@ -793,6 +795,7 @@ def create_app(config: Config) -> Flask:
                 location=location,
                 areas=[str(a) for a in areas] if areas is not None else None,
                 batch_size=batch_size,
+                sender_name=sender_name,
             )
         except CampaignEditError as exc:
             return jsonify({"error": str(exc)}), 200
@@ -820,6 +823,7 @@ def create_app(config: Config) -> Flask:
                 "category": c.campaign.category,
                 "location": c.campaign.location,
                 "areas": list(c.campaign.areas),
+                "sender_name": c.outreach.sender_name,
                 "batch_size": c.batch_size,
             }
         )
@@ -2374,6 +2378,13 @@ function drawTarget(editing) {
       writes out the neighbourhoods. They are suggestions, so read the list and
       delete the ones you do not want before saving. Nothing is saved until you
       press Save.</p>
+    <label class="sub" for="t-sender">Who the message is from</label>
+    <input id="t-sender" style="width:100%;margin:5px 0 4px"
+           value="${esc(target.sender_name || '')}" placeholder="Lyon Ming">
+    <p class="hint">The name on every email and WhatsApp message. Edit it here
+      rather than in the campaign file &mdash; once settings have been saved the
+      file that actually runs is a private copy, so changing the tracked one
+      does nothing.</p>
     <label class="sub" for="t-batch">Most a single run may do</label>
     <input id="t-batch" type="number" min="1" max="200" style="width:110px;margin:5px 0 4px"
            value="${target.batch_size}">
@@ -2429,6 +2440,7 @@ async function saveTarget() {
     category: $('#t-cat').value,
     location: $('#t-loc').value,
     areas: $('#t-areas').value.split('\\n').map(s => s.trim()).filter(Boolean),
+    sender_name: $('#t-sender').value.trim(),
     batch_size: $('#t-batch').value.trim(),
   };
   document.querySelectorAll('#target button').forEach(b => b.disabled = true);
