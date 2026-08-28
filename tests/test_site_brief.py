@@ -146,7 +146,14 @@ def lead(lead_id, stage="Researched"):
     }
 
 
-def research_row(lead_id):
+def research_row(lead_id, whatsapp="yes", email=""):
+    """A researched lead.
+
+    `whatsapp` defaults to "yes" because that is the state of a lead by the
+    time it reaches the brief stage: the check runs at the end of research,
+    so a row without a verdict is the exception, not the norm. Tests about
+    the gate itself pass "" or "no" explicitly.
+    """
     return {
         "Lead ID": lead_id,
         "Tone": "warm",
@@ -155,6 +162,8 @@ def research_row(lead_id):
         "Customer Praise": "Friendly",
         "Customer Pain Points": "Booking is hard",
         "Suggested Website Angle": "Online booking",
+        "WhatsApp Reachable": whatsapp,
+        "Email Found": email,
     }
 
 

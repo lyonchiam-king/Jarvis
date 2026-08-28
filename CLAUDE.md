@@ -42,7 +42,7 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             894 tests, pytest, no CI -- the suite is the only gate
+tests/             899 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -124,9 +124,17 @@ lead could be contacted. The check runs at the end of `research` automatically
 it never ran at all and every US lead stayed unchecked. A stage Lyon cannot
 reach from `Dashboard.bat` does not exist. It sits between research and the
 brief, costs a lookup only where the numbering plan cannot answer, and caches
-the verdict in the Sheet. A lead is dropped only with no channel at all --
-not on WhatsApp *and* no email. An unchecked lead is never dropped: a lookup
-that has not run is not evidence.
+the verdict in the Sheet. A lead needs a *confirmed* channel to be built for -- WhatsApp `yes`, or an
+email. An unchecked lead **holds**: no evidence means wait, not spend. The
+report separates held from rejected, because one needs the relay connecting
+and the other is a dead end.
+
+**Defensive `getattr` on config hides typos.** `_default_client` read a nested
+`outreach.whatsapp` that does not exist -- the real fields are flat,
+`whatsapp_enabled` -- so it returned None on a campaign with WhatsApp on, and
+every lookup silently did nothing while five US leads were researched,
+briefed and built. Read config attributes directly and let a wrong name
+raise.
 
 **Ordering is the user's, not ours.** Socials-first is the one reorder we do,
 because Lyon asked for it. Within that, sheet order is preserved -- a queue he

@@ -11,7 +11,11 @@ import pytest
 
 from outreach import phone
 from outreach.providers.whatsapp import is_mobile_number
-from outreach.stages.reachability import can_whatsapp, is_contactable
+from outreach.stages.reachability import (
+    can_whatsapp,
+    is_contactable,
+    is_waiting_on_a_check,
+)
 
 
 class TestCountriesOtherThanMalaysia:
@@ -113,14 +117,79 @@ class TestTheGateBeforeBuilding:
         row = {"WhatsApp Reachable": "no", "Email Found": "not found"}
         assert is_contactable(row) is False
 
-    def test_an_unchecked_lead_is_never_dropped(self):
-        """A lookup that has not run is not evidence. Dropping on it would
-        silently discard the entire queue the first time the relay was down."""
-        assert is_contactable({}) is True
-        assert is_contactable({"WhatsApp Reachable": "unknown"}) is True
+    def test_an_unchecked_lead_is_held_rather_than_built_for(self):
+        """This rule was the wrong way round at first.
+
+        The original reasoning was that a lookup which has not run is not
+        evidence, so an unchecked lead should pass. True about evidence,
+        wrong about what to do with none: the safe move is to wait, not to
+        spend. Five US leads went all the way to a finished site and only
+        then turned out to be unmessageable, which is the exact cost this
+        gate exists to avoid.
+        """
+        assert is_contactable({}) is False
+        assert is_contactable({"WhatsApp Reachable": "unknown"}) is False
+
+    def test_a_held_lead_is_reported_as_waiting_not_as_unreachable(self):
+        """Held and rejected must not look alike: one needs the relay
+        connecting, the other is a genuine dead end. Collapsing them is how
+        someone concludes their leads vanished."""
+        assert is_waiting_on_a_check({}) is True
+        assert is_waiting_on_a_check({"WhatsApp Reachable": "no"}) is False
+
+    def test_an_email_releases_a_lead_the_check_never_answered_for(self):
+        """An email is a confirmed channel on its own, so it does not wait
+        on WhatsApp -- otherwise an offline relay would stall leads that
+        were always contactable."""
+        assert is_contactable({"Email Found": "hi@shop.com"}) is True
+        assert is_waiting_on_a_check({"Email Found": "hi@shop.com"}) is False
 
 
 def test_is_mobile_number_still_answers_for_malaysia():
     """The old callers' behaviour, preserved now that it takes a country."""
     assert is_mobile_number("+60 12-3456789", "MY") is True
     assert is_mobile_number("04-262 1188", "MY") is False
+
+
+class TestTheRelayClientIsActuallyBuilt:
+    """The bug that made all of the above pointless.
+
+    `_default_client` read a nested `outreach.whatsapp` object. The real
+    config is flat -- `outreach.whatsapp_enabled` -- so getattr found
+    nothing and returned None on a campaign where WhatsApp was switched on.
+    No lookup ever ran, no verdict was ever written, and five US leads were
+    researched, briefed and BUILT before anyone found out they could not be
+    messaged. Defensive getattr is what hid it: it turned a typo into a
+    silent no-op.
+    """
+
+    def _config(self, enabled=True):
+        from dataclasses import replace
+        from outreach.config import load_config
+
+        cfg = load_config("config/campaigns/penang-my.yaml", env_file=None)
+        return replace(
+            cfg, outreach=replace(cfg.outreach, whatsapp_enabled=enabled)
+        )
+
+    def test_an_enabled_campaign_gets_a_real_client(self):
+        from outreach.stages.reachability import _default_client
+
+        client = _default_client(self._config(enabled=True))
+        assert client is not None, (
+            "WhatsApp is enabled, so a client must be built -- returning None "
+            "here silently disables every lookup"
+        )
+
+    def test_the_client_uses_the_configured_relay_port(self):
+        from dataclasses import replace
+        from outreach.stages.reachability import _default_client
+
+        cfg = self._config(enabled=True)
+        cfg = replace(cfg, outreach=replace(cfg.outreach, whatsapp_relay_port=4111))
+        assert "4111" in _default_client(cfg)._base
+
+    def test_a_disabled_campaign_gets_no_client(self):
+        from outreach.stages.reachability import _default_client
+
+        assert _default_client(self._config(enabled=False)) is None

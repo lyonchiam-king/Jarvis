@@ -36,7 +36,7 @@ from ..providers.lovable import LovableAdapter, LovableSkipped
 from ..selection import ORDERS, select_pending, select_rewrite
 from ..sheets import SheetsClient
 from ..stage import Stage, advance
-from .reachability import is_contactable
+from .reachability import is_contactable, is_waiting_on_a_check
 
 log = logging.getLogger("outreach")
 
@@ -47,6 +47,7 @@ class SiteBriefReport:
     already_done: int = 0
     not_ready: int = 0
     unreachable: int = 0
+    waiting_on_check: int = 0
     selected: int = 0
     prompts_written: int = 0
     projects_created: int = 0
@@ -61,6 +62,9 @@ class SiteBriefReport:
             f"  already briefed         {self.already_done}  (skipped)",
             f"  not yet researched      {self.not_ready}  (skipped)",
             f"  no way to contact them  {self.unreachable}  (skipped)",
+            f"  waiting on a WhatsApp check {self.waiting_on_check}  (held)"
+            if self.waiting_on_check
+            else "",
             f"  selected this run       {self.selected}",
             "",
             f"Lovable prompts written   {self.prompts_written}",
@@ -185,12 +189,25 @@ def run(
     # WhatsApp AND no email. Unchecked leads pass through, because a lookup
     # that has not run yet is not evidence of anything.
     contactable = {}
+    waiting = 0
     for lead_id, entry in leads.items():
         row = research.get(lead_id)
         if row is None or is_contactable(row[1]):
             contactable[lead_id] = entry
-    report.unreachable = len(leads) - len(contactable)
+        elif is_waiting_on_a_check(row[1]):
+            waiting += 1
+    report.waiting_on_check = waiting
+    report.unreachable = len(leads) - len(contactable) - waiting
     leads = contactable
+
+    if waiting:
+        log.warning(
+            "%d lead(s) are held because the WhatsApp check has not answered "
+            "for them. Pair the relay in the dashboard and press Research or "
+            "Check WhatsApp -- building before the answer is what this gate "
+            "exists to prevent.",
+            waiting,
+        )
 
     batch_size = min(limit or config.batch_size, config.batch_size)
     # Same preference as research. Ranking only the research queue would leave

@@ -180,32 +180,58 @@ def check_reachability(
 
 
 def _default_client(config):
-    """The relay client, or None when WhatsApp is switched off entirely."""
-    whatsapp = getattr(getattr(config, "outreach", None), "whatsapp", None)
-    if whatsapp is None or not getattr(whatsapp, "enabled", False):
+    """The relay client, or None when WhatsApp is switched off entirely.
+
+    The settings are flat on `outreach` -- `whatsapp_enabled`,
+    `whatsapp_relay_port` -- not a nested `whatsapp` object. This once read
+    the nested shape through getattr, found nothing, and returned None on a
+    campaign where WhatsApp was switched on: no lookup ever ran, every US
+    lead stayed unchecked, and sites were built for people who could not be
+    messaged. Read the real attributes, and let a missing one raise.
+    """
+    if not config.outreach.whatsapp_enabled:
         return None
     from ..providers.whatsapp import WhatsAppClient
 
-    return WhatsAppClient(port=getattr(whatsapp, "relay_port", 4099))
+    return WhatsAppClient(port=config.outreach.whatsapp_relay_port)
+
+
+def has_email(research_row: dict[str, str]) -> bool:
+    email = (research_row.get("Email Found") or "").strip().lower()
+    return bool(email) and email != "not found"
 
 
 def is_contactable(research_row: dict[str, str]) -> bool:
-    """Whether a site build for this lead can actually be followed up.
+    """Whether building this lead a site is worth paying for.
 
-    Reachable on WhatsApp OR holding an email address. Lyon's rule: only a
-    lead with no channel at all is worth skipping, because in the US plenty
-    of small businesses list a landline and an email and are perfectly
-    contactable that way.
+    Needs a *confirmed* channel: reachable on WhatsApp, or holding an email.
+    A lead whose WhatsApp check has not run is NOT contactable yet -- it is
+    unknown, and building on unknown is exactly the cost this gate exists to
+    avoid. Those leads hold, and the moment the check runs they either
+    qualify or they do not.
 
-    `unknown` counts as contactable on purpose -- it means the check has not
-    happened yet or failed, and a lead must never be dropped because a lookup
-    could not run.
+    This used to let unchecked leads through, on the reasoning that a lookup
+    which has not run is not evidence. True, but the conclusion was wrong:
+    the safe thing to do with no evidence is wait, not spend. Five US leads
+    went all the way to a built site and only then turned out to be
+    unmessageable.
     """
     reachable = (research_row.get("WhatsApp Reachable") or "").strip().lower()
-    if reachable in {YES, "", UNKNOWN}:
+    if reachable == YES:
         return True
-    email = (research_row.get("Email Found") or "").strip().lower()
-    return bool(email) and email != "not found"
+    # An email is a confirmed channel in its own right, so it qualifies a
+    # lead whether or not WhatsApp ever answers for it.
+    return has_email(research_row)
+
+
+def is_waiting_on_a_check(research_row: dict[str, str]) -> bool:
+    """Held back only because the WhatsApp check has not answered yet.
+
+    Distinguished from a real "no" so the report can tell Lyon to connect
+    the relay, rather than leaving him to wonder where his leads went.
+    """
+    reachable = (research_row.get("WhatsApp Reachable") or "").strip().lower()
+    return reachable in {"", UNKNOWN} and not has_email(research_row)
 
 
 def can_whatsapp(
