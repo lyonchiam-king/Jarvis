@@ -236,12 +236,18 @@ function toJid(phone) {
 
 // POST /check — is this number registered on WhatsApp?
 //
-// The only reliable answer for countries whose numbering plan does not
-// separate mobile from landline, which is most of them outside Asia. Paced
-// like /send and capped per request: a burst of lookups for numbers that
-// have never been messaged is exactly the pattern WhatsApp rate-limits.
+// The only reliable answer for a country whose numbering plan does not
+// separate mobile from landline -- and for landlines everywhere, since
+// WhatsApp Business verifies fixed lines by voice call. Paced like /send and
+// capped per request: a burst of lookups for numbers never messaged is
+// exactly the pattern WhatsApp rate-limits.
+//
+// onWhatsApp() takes a PHONE NUMBER, not a JID. It builds the query by
+// prefixing "+" to whatever it is handed, so passing 4479...@s.whatsapp.net
+// asks about "+4479...@s.whatsapp.net", which matches nothing -- every
+// number came back "not on WhatsApp", in every country. Pass bare digits.
 app.post("/check", async (req, res) => {
-  const { phones } = req.body || {};
+  const { phones, debug } = req.body || {};
 
   if (!Array.isArray(phones) || phones.length === 0) {
     return res.status(400).json({ error: "phones must be a non-empty array" });
@@ -255,29 +261,51 @@ app.post("/check", async (req, res) => {
     return res.status(503).json({ error: "WhatsApp is not connected" });
   }
 
-  // Share the send queue so a check can never overlap a send.
+  // Share the send queue so a check never overlaps a send. Everything inside
+  // is wrapped: an escaping throw would both hang this request and poison
+  // sendQueue for the life of the process, silently killing every later send.
   sendQueue = sendQueue.then(async () => {
     const results = {};
-    for (const phone of phones) {
-      const jid = toJid(phone);
-      if (!jid) {
-        results[phone] = { registered: false, error: "not international format" };
-        continue;
+    try {
+      for (const phone of phones) {
+        const digits = String(phone || "").replace(/[^0-9]/g, "");
+        if (digits.length < 8 || digits.length > 15 || digits.startsWith("0")) {
+          results[phone] = { registered: false, error: "not international format" };
+          continue;
+        }
+
+        const wait = Math.max(0, CHECK_INTERVAL_MS - (Date.now() - lastCheckTime));
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+
+        try {
+          const found = await sock.onWhatsApp(digits);
+          // Match on the digits that come back rather than on position:
+          // Baileys omits numbers that do not exist, so index 0 of a short
+          // reply can belong to a different number than the one asked about.
+          const hit = (found || []).find((entry) => {
+            const back = String(entry?.jid || "").replace(/[^0-9]/g, "");
+            return back === digits || back.endsWith(digits) || digits.endsWith(back);
+          });
+          results[phone] = { registered: Boolean(hit && hit.exists !== false) };
+          if (debug) {
+            results[phone].raw = found;
+            results[phone].asked = digits;
+          }
+        } catch (err) {
+          logger.error({ err, phone }, "Check failed");
+          // Unknown, not "no" -- writing "no" would permanently retire a lead
+          // because the network hiccuped once.
+          results[phone] = { registered: null, error: err.message || "lookup failed" };
+        }
+        lastCheckTime = Date.now();
       }
-      const wait = Math.max(0, CHECK_INTERVAL_MS - (Date.now() - lastCheckTime));
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-      try {
-        const [hit] = await sock.onWhatsApp(jid);
-        results[phone] = { registered: Boolean(hit && hit.exists) };
-      } catch (err) {
-        logger.error({ err, phone }, "Check failed");
-        // Unknown, not "no" -- writing "no" here would permanently retire a
-        // lead because the network hiccuped once.
-        results[phone] = { registered: null, error: err.message || "lookup failed" };
+      res.json({ results, checked_at: new Date().toISOString() });
+    } catch (err) {
+      logger.error({ err }, "Check batch failed");
+      if (!res.headersSent) {
+        res.status(500).json({ error: err.message || "check failed" });
       }
-      lastCheckTime = Date.now();
     }
-    res.json({ results, checked_at: new Date().toISOString() });
   });
 });
 

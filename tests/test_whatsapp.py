@@ -997,3 +997,69 @@ class TestTheNumberThatActuallyGetsDialled:
         lead; guessing messages a stranger."""
         with pytest.raises(WhatsAppError, match="which country"):
             WhatsAppClient().send_message("012-345 6789", "Hi")
+
+
+class TestTheLookupAsksAboutAPhoneNumber:
+    """Baileys' onWhatsApp takes a phone number and builds its query by
+    prefixing "+". Handed a JID it asks about "+4479...@s.whatsapp.net",
+    which matches nothing -- so every lead in every country came back "not
+    on WhatsApp". Malaysia hid it for weeks, because the numbering plan
+    answered there and the lookup was never called.
+    """
+
+    def test_the_relay_is_sent_bare_digits_not_a_jid(self):
+        import json as _j
+
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                "http://127.0.0.1:4099/check",
+                json={"results": {"442079460958": {"registered": True}}},
+            )
+            WhatsAppClient().check_numbers(["442079460958"])
+            sent = _j.loads(rsps.calls[0].request.body)
+
+        assert sent["phones"] == ["442079460958"]
+        assert not any("@" in p for p in sent["phones"]), (
+            "a JID here is what made every lookup answer no"
+        )
+
+    def test_a_registered_number_reads_as_reachable(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                "http://127.0.0.1:4099/check",
+                json={"results": {"442079460958": {"registered": True}}},
+            )
+            assert WhatsAppClient().check_numbers(["442079460958"]) == {
+                "442079460958": True
+            }
+
+    def test_a_failed_lookup_is_unknown_rather_than_no(self):
+        """null must not collapse to False: a lead retired by a network
+        hiccup never comes back."""
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                "http://127.0.0.1:4099/check",
+                json={
+                    "results": {
+                        "442079460958": {"registered": None, "error": "timeout"}
+                    }
+                },
+            )
+            assert WhatsAppClient().check_numbers(["442079460958"]) == {
+                "442079460958": None
+            }
+
+    def test_probe_asks_for_the_raw_reply(self):
+        import json as _j
+
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                "http://127.0.0.1:4099/check",
+                json={"results": {}},
+            )
+            WhatsAppClient().check_raw(["442079460958"])
+            assert _j.loads(rsps.calls[0].request.body)["debug"] is True

@@ -159,6 +159,18 @@ class WhatsAppClient:
 
     # ------------------------------------------------------------------ check
 
+    def check_raw(self, phones: list[str]) -> dict:
+        """The relay's full reply, including what it asked WhatsApp and what
+        came back. For `outreach whatsapp-probe` -- when a number is known to
+        be on WhatsApp and the pipeline says otherwise, this is the only way
+        to see which half is lying without guessing."""
+        resp = requests.post(
+            f"{self._base}/check",
+            json={"phones": [p.strip() for p in phones if p.strip()], "debug": True},
+            timeout=self._timeout + 5.0 * max(1, len(phones)),
+        )
+        return resp.json()
+
     def check_numbers(self, phones: list[str]) -> dict[str, bool | None]:
         """Ask WhatsApp which of these numbers are registered.
 

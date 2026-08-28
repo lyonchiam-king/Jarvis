@@ -42,7 +42,7 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             902 tests, pytest, no CI -- the suite is the only gate
+tests/             911 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -105,6 +105,15 @@ Lyon runs Ollama. New spec fields go in `properties` but not `required`, with
 the prompt block rendered conditionally, so a model that skips one produces
 the previous prompt rather than a broken one. `layout_system` is the worked
 example.
+
+**`onWhatsApp` takes a phone number, not a JID.** It builds its query as
+`"+" + what you pass`, so a JID asked about `+4479...@s.whatsapp.net` and
+matched nothing -- every lead in every country came back "not on WhatsApp".
+Malaysia hid it for weeks because the numbering plan answered there and the
+lookup was never called. `tests/test_relay_check.py` reads server.js as text
+and holds that line, plus the send path's old forced `60`. When the relay is
+wrong, `outreach whatsapp-probe +44...` shows the digits asked and the raw
+reply -- use it before theorising.
 
 **The numbering plan never decides who is on WhatsApp.** It was wrong in both
 directions: WhatsApp Business verifies landlines by voice call, so reading a

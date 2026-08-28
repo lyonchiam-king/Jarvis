@@ -812,6 +812,61 @@ def run_research(ctx: click.Context, limit: int | None, social_first: bool | Non
     _echo_sheet_link(config)
 
 
+@main.command("whatsapp-probe")
+@click.argument("numbers", nargs=-1, required=True)
+@click.pass_context
+def whatsapp_probe(ctx: click.Context, numbers: tuple[str, ...]) -> None:
+    """Ask WhatsApp about one number and show exactly what came back.
+
+    Give it a number you have already found on WhatsApp by hand, in full
+    international form: outreach whatsapp-probe +442079460958
+
+    It prints the digits the relay actually asked about and WhatsApp's raw
+    reply, so a disagreement between this tool and your phone can be pinned
+    on the number, the lookup, or the relay -- rather than guessed at.
+    """
+    from .providers.whatsapp import WhatsAppClient, WhatsAppError
+    from . import phone as phone_lib
+
+    config = _load(ctx.obj["config_path"])
+    client = WhatsAppClient(port=config.outreach.whatsapp_relay_port)
+
+    if not client.is_connected():
+        raise click.ClickException(
+            "The relay is not connected. Start it and pair WhatsApp in the "
+            "dashboard, then run this again."
+        )
+
+    home = config.compliance.country_code
+    dialled = []
+    for raw in numbers:
+        e164 = phone_lib.normalise(raw, phone_lib.resolve_country(raw, home))
+        click.echo(f"{raw}  ->  {e164 or '(could not resolve a country)'}")
+        if e164:
+            dialled.append(e164)
+
+    if not dialled:
+        raise click.ClickException(
+            "No usable number. Pass it in full international form, e.g. "
+            "+442079460958."
+        )
+
+    try:
+        data = client.check_raw(dialled)
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(f"The relay call failed: {exc}")
+
+    click.echo("")
+    click.echo(json.dumps(data, indent=2)[:4000])
+    click.echo("")
+    click.echo(
+        "registered: true  -> the pipeline will treat this lead as reachable.\n"
+        "registered: false -> WhatsApp says no for the digits under 'asked'.\n"
+        "                     If those digits are the ones that work on your\n"
+        "                     phone, the lookup is at fault, not the number."
+    )
+
+
 @run.command("reachability")
 @click.option("--limit", type=int, default=0, help="Check fewer leads than are waiting.")
 @click.option(
