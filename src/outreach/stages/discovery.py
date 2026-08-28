@@ -104,8 +104,16 @@ def _to_lead(place: PlaceResult, config: Config, website_status: WebsiteStatus) 
         # falling back to the campaign's setting only when Google gave no
         # number. Stamping the campaign country on every lead is what made a
         # UK number dial as Malaysian.
+        # Three sources, most trustworthy first. Google's own ISO code for
+        # this address settles it; the phone's international prefix covers a
+        # listing without address components; the campaign setting is the
+        # last resort and applies only when Google gave neither. That order
+        # is the whole fix -- the campaign setting used to be the ONLY
+        # source, so a Penang config copied for a UK run stamped MY on every
+        # British lead and dialled them as Malaysian.
         country=(
-            phone_lib.country_from_number(place.phone)
+            place.country
+            or phone_lib.country_from_number(place.phone)
             or config.compliance.country_code
         ),
         discovered_at=now,

@@ -23,26 +23,48 @@ import re
 # country absent from both still works, it just resolves to `unknown` and
 # gets checked against WhatsApp rather than guessed at.
 DIALLING_CODES: dict[str, str] = {
-    # Asia-Pacific
-    "MY": "60", "SG": "65", "ID": "62", "TH": "66", "PH": "63", "VN": "84",
-    "IN": "91", "HK": "852", "TW": "886", "JP": "81", "KR": "82", "CN": "86",
-    "AU": "61", "NZ": "64",
-    # Americas
-    "US": "1", "CA": "1", "MX": "52", "BR": "55", "AR": "54", "CL": "56",
-    # British Isles
-    "GB": "44", "UK": "44", "IE": "353",
-    # Western Europe
-    "DE": "49", "FR": "33", "ES": "34", "IT": "39", "PT": "351", "NL": "31",
-    "BE": "32", "LU": "352", "AT": "43", "CH": "41",
-    # Nordics
-    "DK": "45", "SE": "46", "NO": "47", "FI": "358", "IS": "354",
-    # Central and Eastern Europe
-    "PL": "48", "CZ": "420", "SK": "421", "HU": "36", "RO": "40", "BG": "359",
-    "GR": "30", "HR": "385", "SI": "386", "RS": "381", "EE": "372",
-    "LV": "371", "LT": "370", "CY": "357", "MT": "356",
-    # Middle East and Africa
-    "AE": "971", "SA": "966", "QA": "974", "IL": "972", "TR": "90",
-    "ZA": "27", "NG": "234", "KE": "254", "EG": "20",
+    # Every ITU calling code, so no campaign can land on a country the tool
+    # cannot dial. A missing entry does not fail loudly -- it leaves a
+    # national number un-normalised, which reads downstream as "not on
+    # WhatsApp", so the whole table is here rather than the handful of
+    # countries that happened to come up.
+    "AD": "376", "AE": "971", "AF": "93", "AG": "1", "AI": "1", "AL": "355",
+    "AM": "374", "AO": "244", "AR": "54", "AS": "1", "AT": "43", "AU": "61",
+    "AW": "297", "AZ": "994", "BA": "387", "BB": "1", "BD": "880", "BE": "32",
+    "BF": "226", "BG": "359", "BH": "973", "BI": "257", "BJ": "229", "BM": "1",
+    "BN": "673", "BO": "591", "BR": "55", "BS": "1", "BT": "975", "BW": "267",
+    "BY": "375", "BZ": "501", "CA": "1", "CD": "243", "CF": "236", "CG": "242",
+    "CH": "41", "CI": "225", "CL": "56", "CM": "237", "CN": "86", "CO": "57",
+    "CR": "506", "CU": "53", "CV": "238", "CW": "599", "CY": "357", "CZ": "420",
+    "DE": "49", "DJ": "253", "DK": "45", "DM": "1", "DO": "1", "DZ": "213",
+    "EC": "593", "EE": "372", "EG": "20", "ER": "291", "ES": "34", "ET": "251",
+    "FI": "358", "FJ": "679", "FM": "691", "FO": "298", "FR": "33", "GA": "241",
+    "GB": "44", "GD": "1", "GE": "995", "GF": "594", "GH": "233", "GI": "350",
+    "GL": "299", "GM": "220", "GN": "224", "GP": "590", "GQ": "240", "GR": "30",
+    "GT": "502", "GU": "1", "GW": "245", "GY": "592", "HK": "852", "HN": "504",
+    "HR": "385", "HT": "509", "HU": "36", "ID": "62", "IE": "353", "IL": "972",
+    "IM": "44", "IN": "91", "IQ": "964", "IR": "98", "IS": "354", "IT": "39",
+    "JE": "44", "JM": "1", "JO": "962", "JP": "81", "KE": "254", "KG": "996",
+    "KH": "855", "KI": "686", "KM": "269", "KN": "1", "KP": "850", "KR": "82",
+    "KW": "965", "KY": "1", "KZ": "7", "LA": "856", "LB": "961", "LC": "1",
+    "LI": "423", "LK": "94", "LR": "231", "LS": "266", "LT": "370", "LU": "352",
+    "LV": "371", "LY": "218", "MA": "212", "MC": "377", "MD": "373", "ME": "382",
+    "MG": "261", "MH": "692", "MK": "389", "ML": "223", "MM": "95", "MN": "976",
+    "MO": "853", "MP": "1", "MQ": "596", "MR": "222", "MS": "1", "MT": "356",
+    "MU": "230", "MV": "960", "MW": "265", "MX": "52", "MY": "60", "MZ": "258",
+    "NA": "264", "NC": "687", "NE": "227", "NG": "234", "NI": "505", "NL": "31",
+    "NO": "47", "NP": "977", "NR": "674", "NZ": "64", "OM": "968", "PA": "507",
+    "PE": "51", "PF": "689", "PG": "675", "PH": "63", "PK": "92", "PL": "48",
+    "PR": "1", "PS": "970", "PT": "351", "PW": "680", "PY": "595", "QA": "974",
+    "RE": "262", "RO": "40", "RS": "381", "RU": "7", "RW": "250", "SA": "966",
+    "SB": "677", "SC": "248", "SD": "249", "SE": "46", "SG": "65", "SI": "386",
+    "SK": "421", "SL": "232", "SM": "378", "SN": "221", "SO": "252", "SR": "597",
+    "SS": "211", "SV": "503", "SY": "963", "SZ": "268", "TC": "1", "TD": "235",
+    "TG": "228", "TH": "66", "TJ": "992", "TL": "670", "TM": "993", "TN": "216",
+    "TO": "676", "TR": "90", "TT": "1", "TV": "688", "TW": "886", "TZ": "255",
+    "UA": "380", "UG": "256", "UK": "44", "US": "1", "UY": "598", "UZ": "998",
+    "VC": "1", "VE": "58", "VG": "1", "VI": "1", "VN": "84", "VU": "678",
+    "WS": "685", "YE": "967", "ZA": "27", "ZM": "260", "ZW": "263",
 }
 
 
@@ -88,8 +110,11 @@ def normalise(phone: str, country: str = "") -> str:
 
     code = DIALLING_CODES.get((country or "").strip().upper(), "")
 
-    # Already international: Places usually returns +60 12-345 6789 or
-    # +1 504-555-0123, so the country code is normally already on the front.
+    # Deliberately NOT "does this look international already?". A US
+    # national number 5045550123 opens with 504, which is Honduras' code, so
+    # guessing from the digits alone silently dropped the US country code.
+    # Idempotency is the caller's job instead: pass country="" for a number
+    # that is already E.164 and it comes back untouched (see below).
     if code and digits.startswith(code):
         rest = digits[len(code):]
         # A leading zero after the country code is a trunk prefix that got

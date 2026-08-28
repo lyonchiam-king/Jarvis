@@ -42,7 +42,7 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             921 tests, pytest, no CI -- the suite is the only gate
+tests/             928 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -105,6 +105,20 @@ Lyon runs Ollama. New spec fields go in `properties` but not `required`, with
 the prompt block rendered conditionally, so a model that skips one produces
 the previous prompt rather than a broken one. `layout_system` is the worked
 example.
+
+**Normalise a number once, and only where its country is known.** The send
+path normalised twice -- in the dashboard queue with the lead's country, then
+again in `send_message` with the campaign's -- and the second pass glued that
+code onto a number that already had one. A UK lead went out as
+60447450225230: a JID Baileys accepts and reports as **sent**, delivered to
+nobody. Malaysia survived by luck. Pass `country=""` when a number is already
+E.164. Do not "detect" E.164 from the digits either -- a US national number
+opens with 504, which is Honduras.
+
+**Google knows each lead's country; ask it.** `addressComponents` carries the
+ISO code per place. That is the first source, the phone's own prefix the
+second, and `compliance.country_code` only the last resort -- it is
+campaign-wide and was silently wrong the moment a Penang config was copied.
 
 **Store the international phone number, never the national one.** Google
 returns both. The national form ("07450 225230") names no country, so keeping

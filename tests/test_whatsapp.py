@@ -1174,3 +1174,144 @@ class TestTheReachabilityPanel:
         assert data["counts"] == {
             "verified": 0, "rejected": 0, "waiting": 0, "buildable": 0
         }
+
+
+class TestTheNumberIsNeverPrefixedTwice:
+    """A send reported "sent" and was delivered to nobody.
+
+    The number is normalised in the dashboard queue, using the lead's
+    country. It was then normalised AGAIN in send_message, using the
+    campaign's country -- and the second pass glued that country's code onto
+    a number that already carried its own. A UK lead went out as
+    60447450225230. Baileys accepts any well-formed JID and returns a
+    message object, so the relay answered "sent" and nothing ever arrived.
+    Malaysia survived by luck: 60... already started with 60.
+    """
+
+    def _sent_phone(self, rsps):
+        import json as _j
+        return _j.loads(rsps.calls[0].request.body)["phone"]
+
+    def _ok(self, rsps):
+        rsps.add(
+            responses.POST,
+            "http://127.0.0.1:4099/send",
+            json={"status": "sent", "message_id": "m1", "timestamp": "t"},
+        )
+
+    def test_an_already_dialled_number_is_left_alone(self):
+        """country="" is how the caller says "this is already E.164"."""
+        with responses.RequestsMock() as rsps:
+            self._ok(rsps)
+            WhatsAppClient().send_message("447450225230", "Hi", "")
+            assert self._sent_phone(rsps) == "447450225230"
+
+    def test_a_uk_number_never_gains_a_malaysian_prefix(self):
+        """The exact failure: 447450225230 must not become 60447450225230."""
+        with responses.RequestsMock() as rsps:
+            self._ok(rsps)
+            WhatsAppClient().send_message("447450225230", "Hi", "")
+            dialled = self._sent_phone(rsps)
+
+        assert dialled == "447450225230"
+        assert not dialled.startswith("60"), "a second country code was applied"
+
+    def test_a_us_national_number_keeps_its_own_country_code(self):
+        """504 is also Honduras' dialling code, so a US national number can
+        look international to a digits-only guess. It must still gain the 1."""
+        with responses.RequestsMock() as rsps:
+            self._ok(rsps)
+            WhatsAppClient().send_message("(504) 555-0123", "Hi", "US")
+            assert self._sent_phone(rsps) == "15045550123"
+
+    def test_a_national_number_still_gets_its_country(self):
+        with responses.RequestsMock() as rsps:
+            self._ok(rsps)
+            WhatsAppClient().send_message("012-345 6789", "Hi", "MY")
+            assert self._sent_phone(rsps) == "60123456789"
+
+
+class TestTheDashboardSendPath:
+    """Where the "sent but never delivered" bug actually lived.
+
+    Testing send_message directly does not reach it: that function was fine.
+    The fault was the dashboard handing it an already-E.164 number together
+    with the CAMPAIGN's country, so it normalised a second time and prefixed
+    a code the number already had.
+    """
+
+    def _relay_saw(self, monkeypatch, payload):
+        """POST to the real endpoint; capture what reached WhatsAppClient."""
+        from outreach import dashboard as dash
+
+        seen = {}
+
+        class FakeClient:
+            def __init__(self, port=4099):
+                pass
+
+            def send_message(self, phone, text, country=""):
+                from outreach import phone as phone_lib
+                from outreach.providers.whatsapp import SendResult
+
+                # Mirror the real client: it normalises with what it is given.
+                seen["dialled"] = phone_lib.normalise(phone, country)
+                return SendResult(message_id="m1", status="sent", timestamp="t")
+
+        class FakeSheets:
+            def read_rows(self, tab):
+                return {}
+
+            def update_column(self, *a, **k):
+                return 0
+
+        monkeypatch.setattr(dash, "_sheets_client", lambda c: FakeSheets())
+        import outreach.providers.whatsapp as wa
+
+        monkeypatch.setattr(wa, "WhatsAppClient", FakeClient)
+        client = _make_client(monkeypatch, sheets=FakeSheets())
+        client.post(
+            "/api/whatsapp/send",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+        return seen.get("dialled")
+
+    def test_a_uk_lead_is_not_dialled_as_malaysian(self, monkeypatch):
+        """447450225230 must not go out as 60447450225230 -- a JID Baileys
+        accepts, reports as sent, and delivers to nobody."""
+        dialled = self._relay_saw(
+            monkeypatch,
+            {
+                "lead_id": "a",
+                "phone": "07450 225230",
+                "phone_e164": "447450225230",
+                "message": "Hi",
+            },
+        )
+
+        assert dialled == "447450225230"
+        assert not (dialled or "").startswith("60")
+
+    def test_a_malaysian_lead_still_dials_correctly(self, monkeypatch):
+        dialled = self._relay_saw(
+            monkeypatch,
+            {
+                "lead_id": "a",
+                "phone": "012-345 6789",
+                "phone_e164": "60123456789",
+                "message": "Hi",
+            },
+        )
+
+        assert dialled == "60123456789"
+
+    def test_without_a_dialled_number_the_campaign_country_is_used(self, monkeypatch):
+        """The fallback still has to work: a raw display number carries no
+        country, so the campaign's is the only thing left."""
+        dialled = self._relay_saw(
+            monkeypatch,
+            {"lead_id": "a", "phone": "012-345 6789", "message": "Hi"},
+        )
+
+        assert dialled == "60123456789"

@@ -42,6 +42,7 @@ DETAILS_FIELDS = (
     "id",
     "displayName",
     "formattedAddress",
+    "addressComponents",
     "nationalPhoneNumber",
     "internationalPhoneNumber",
     "websiteUri",
@@ -59,6 +60,7 @@ SEARCH_FIELDS = (
     "places.id",
     "places.displayName",
     "places.formattedAddress",
+    "places.addressComponents",
     "places.nationalPhoneNumber",
     "places.internationalPhoneNumber",
     "places.websiteUri",
@@ -97,6 +99,9 @@ class PlaceResult:
     category: str
     maps_url: str
     business_status: str
+    # Defaulted, so it goes last: Google's ISO country for this lead, which
+    # is what stops a campaign having to be told which country it is in.
+    country: str = ""
 
 
 @dataclass(frozen=True)
@@ -119,6 +124,7 @@ class PlaceDetails:
     name: str = ""
     address: str = ""
     phone: str = ""
+    country: str = ""
     website_uri: str = ""
     rating: float | None = None
     review_count: int = 0
@@ -136,6 +142,24 @@ _PRICE_LABELS = {
     "PRICE_LEVEL_EXPENSIVE": "Premium",
     "PRICE_LEVEL_VERY_EXPENSIVE": "Luxury",
 }
+
+
+
+def _country_of(raw: dict) -> str:
+    """The ISO country code Google puts on the address, e.g. "GB".
+
+    The authoritative answer, and the reason a campaign no longer has to be
+    told which country it is working in: Google already knows, per lead. A
+    phone prefix is the fallback and a config setting the last resort,
+    because that setting is campaign-wide and was silently wrong the moment
+    a Penang config was copied for a UK run.
+    """
+    for part in raw.get("addressComponents") or ():
+        if "country" in (part.get("types") or ()):
+            code = (part.get("shortText") or "").strip().upper()
+            if len(code) == 2:
+                return code
+    return ""
 
 
 def _parse_details(raw: dict) -> PlaceDetails:
@@ -176,6 +200,7 @@ def _parse_details(raw: dict) -> PlaceDetails:
         place_id=raw.get("id") or "",
         name=display.get("text") or "",
         address=raw.get("formattedAddress") or "",
+        country=_country_of(raw),
         phone=raw.get("internationalPhoneNumber") or raw.get("nationalPhoneNumber") or "",
         website_uri=raw.get("websiteUri") or "",
         rating=rating_value,
@@ -246,6 +271,7 @@ def _parse_place(raw: dict) -> PlaceResult | None:
         place_id=place_id,
         name=display.get("text") or "",
         address=raw.get("formattedAddress") or "",
+        country=_country_of(raw),
         phone=raw.get("internationalPhoneNumber") or raw.get("nationalPhoneNumber") or "",
         website_uri=raw.get("websiteUri") or "",
         rating=rating_value,

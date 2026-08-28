@@ -1376,7 +1376,16 @@ def create_app(config: Config) -> Flask:
         lead_id = (payload.get("lead_id") or "").strip()
         # The queue computed this from the lead's country. Preferred over the
         # display number, which carries no country and cannot be dialled.
-        phone = (payload.get("phone_e164") or payload.get("phone") or "").strip()
+        #
+        # When it is present the number is ALREADY E.164, so no country is
+        # passed on: normalising a second time with the campaign's country
+        # glued that country's code onto a number that already had its own.
+        # A UK lead went out as 60447450225230 -- a JID Baileys accepts and
+        # reports as sent, delivered to nobody. Only the raw display number,
+        # which carries no country, may be normalised here.
+        dialled = (payload.get("phone_e164") or "").strip()
+        phone = dialled or (payload.get("phone") or "").strip()
+        send_country = "" if dialled else c.compliance.country_code
         message = (payload.get("message") or "").strip()
 
         if not lead_id:
@@ -1390,9 +1399,7 @@ def create_app(config: Config) -> Flask:
 
         try:
             client = WhatsAppClient(port=c.outreach.whatsapp_relay_port)
-            result = client.send_message(
-                phone, message, c.compliance.country_code
-            )
+            result = client.send_message(phone, message, send_country)
         except WhatsAppError as exc:
             # Record the failure so the user sees it in the Sheet.
             try:
@@ -2625,29 +2632,35 @@ async function loadReach() {
     return;
   }
 
-  const row = (e, mark) =>
-    `<tr><td>${mark}</td><td>${esc(e.name)}</td>` +
-    `<td style="white-space:nowrap">${esc(e.dialled || e.phone)}</td>` +
-    `<td>${e.email ? 'has email' : ''}</td></tr>`;
+  const rows = list => list.map(e =>
+    `<tr><td style="padding:2px 10px 2px 0">${esc(e.name)}</td>` +
+    `<td style="white-space:nowrap;padding:2px 0">${esc(e.dialled || e.phone)}</td>` +
+    `<td style="padding:2px 0 2px 10px">${e.email ? 'has email' : ''}</td></tr>`
+  ).join('');
 
-  // Waiting first: it is the only group that needs Lyon to do something.
-  const waiting = (d.waiting || []).map(e => row(e, '\u23F3')).join('');
-  const verified = (d.verified || []).map(e => row(e, '\u2713')).join('');
-  const rejected = (d.rejected || []).map(e => row(e, '\u2717')).join('');
+  // Only the ones needing a decision are shown outright. The verified and
+  // rejected lists are the long ones and are answered questions, so they
+  // fold away -- the counts are what Lyon actually reads each morning.
+  const fold = (label, list) => list.length
+    ? `<details style="margin-top:8px"><summary class="sub">${label} (${list.length})</summary>` +
+      `<table style="width:100%;border-collapse:collapse;margin-top:6px">${rows(list)}</table></details>`
+    : '';
 
   el.innerHTML =
     `<div class="what">${c.verified} on WhatsApp &middot; ${c.rejected} not &middot; ` +
     `${c.waiting} not yet checked</div>` +
-    `<p class="hint"><b>${c.buildable}</b> lead(s) can be followed up, so those are ` +
-    `the ones that go on to a brief &mdash; the ones on WhatsApp, plus any with an ` +
-    `email address. Nothing here has been messaged.</p>` +
+    `<p class="hint"><b>${c.buildable}</b> lead(s) can be followed up &mdash; those on ` +
+    `WhatsApp, plus any with an email address. Those are the ones that go on to a ` +
+    `brief. Nothing here has been messaged.</p>` +
     (c.waiting
       ? '<p class="hint"><b>Not yet checked</b> means the relay could not answer. ' +
-        'Pair WhatsApp in the panel below, then press <b>Check WhatsApp</b>. ' +
-        'They are held until then &mdash; no site is built for a lead we cannot reach.</p>'
+        'Pair WhatsApp below, then press <b>Check WhatsApp</b>. They are held until ' +
+        'then &mdash; no site is built for a lead we cannot reach.</p>' +
+        `<table style="width:100%;border-collapse:collapse;margin-top:8px">` +
+        `${rows(d.waiting || [])}</table>`
       : '') +
-    '<table style="width:100%;border-collapse:collapse;margin-top:10px">' +
-    waiting + verified + rejected + '</table>';
+    fold('On WhatsApp', d.verified || []) +
+    fold('Not on WhatsApp', d.rejected || []);
 }
 
 async function loadQueue() {
