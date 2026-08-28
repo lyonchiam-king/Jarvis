@@ -42,7 +42,7 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             890 tests, pytest, no CI -- the suite is the only gate
+tests/             894 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -119,7 +119,10 @@ refused every national-format Malaysian number on the Sheet.
 
 **Reachability is answered before the site is built, not after.** Building is
 the most expensive thing here, and it used to happen before anyone knew the
-lead could be contacted. `run reachability` sits between research and the
+lead could be contacted. The check runs at the end of `research` automatically
+-- it shipped once as a separate stage with no dashboard button, which meant
+it never ran at all and every US lead stayed unchecked. A stage Lyon cannot
+reach from `Dashboard.bat` does not exist. It sits between research and the
 brief, costs a lookup only where the numbering plan cannot answer, and caches
 the verdict in the Sheet. A lead is dropped only with no channel at all --
 not on WhatsApp *and* no email. An unchecked lead is never dropped: a lookup

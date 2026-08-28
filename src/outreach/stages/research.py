@@ -31,6 +31,7 @@ from ..providers.places import PlaceDetails, PlacesClient
 from ..selection import ORDERS, select_pending
 from ..sheets import SheetsClient
 from ..stage import Stage, advance
+from .reachability import check_reachability
 
 log = logging.getLogger("outreach")
 
@@ -50,6 +51,9 @@ class ResearchReport:
     llm_calls: int = 0
     places_requests: int = 0
     checkpoints: int = 0
+    wa_reachable: int = 0
+    wa_unreachable: int = 0
+    wa_unchecked: int = 0
 
     def summary_lines(self) -> list[str]:
         return [
@@ -63,6 +67,13 @@ class ResearchReport:
             f"Briefs written            {self.briefed}",
             f"  social data found       {self.social_found}",
             f"  emails found            {self.emails_found}",
+            "",
+            "WhatsApp reachability (checked now, so the brief queue knows)",
+            f"  can be reached          {self.wa_reachable}",
+            f"  not on WhatsApp         {self.wa_unreachable}",
+            f"  could not check         {self.wa_unchecked}"
+            + ("  (relay offline -- they stay in the queue)" if self.wa_unchecked else ""),
+            "",
             f"Errors logged             {self.errors}",
             "",
             f"Claude calls              {self.llm_calls}",
@@ -317,5 +328,24 @@ def run(
         except Exception as exc:  # noqa: BLE001
             log.error("Could not write Errors tab: %s", exc)
     report.errors = len(errors)
+
+    # Reachability, immediately and automatically. This used to be a separate
+    # step, which meant it never ran: the dashboard is the only way Lyon
+    # drives this and it had no button for it, so every US lead stayed
+    # unchecked and fell back to a numbering-plan guess that cannot answer
+    # for the US. Answering it here means that by the time research is done,
+    # the brief queue already knows who can actually be contacted.
+    #
+    # Never fatal: a failed check leaves leads unchecked, and unchecked leads
+    # are still briefed. Losing a run's research because a relay was down
+    # would be far worse than a missing verdict.
+    try:
+        reach = check_reachability(config, sheets)
+        report.wa_reachable = reach.reachable
+        report.wa_unreachable = reach.unreachable
+        report.wa_unchecked = reach.still_unknown + reach.skipped_no_relay
+    except Exception as exc:  # noqa: BLE001
+        log.warning("WhatsApp reachability check did not run: %s", exc)
+        report.wa_unchecked = report.briefed
 
     return report

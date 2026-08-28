@@ -574,3 +574,100 @@ def test_the_run_reports_how_many_of_the_batch_have_socials():
 
 def test_the_campaign_ships_with_socials_first_on():
     assert config().research.social_first is True
+
+
+# --------------------------------------------------------------------------
+# Reachability runs as part of research, not as a step someone has to
+# remember. It shipped as a separate stage first, and because the dashboard
+# had no button for it, it simply never ran -- every US lead stayed unchecked
+# and fell back to a numbering-plan guess that cannot answer for the US.
+# --------------------------------------------------------------------------
+
+
+def _reach_leads(*, phone, country, lead_id="a"):
+    """A researched lead carrying the phone and country the check reads."""
+    row = lead_row(lead_id, stage="Researched")
+    row["Phone"] = phone
+    row["Country"] = country
+    return leads_index([row])
+
+
+class _Relay:
+    """Stands in for the WhatsApp relay. Records what it was asked."""
+
+    def __init__(self, registered=(), connected=True):
+        self._registered = set(registered)
+        self._connected = connected
+        self.asked = []
+
+    def is_connected(self):
+        return self._connected
+
+    def check_numbers(self, numbers):
+        self.asked.extend(numbers)
+        return {n: (n in self._registered) for n in numbers}
+
+
+def _verdicts(sheets):
+    """The WhatsApp Reachable column as it was written."""
+    for tab, column, values in sheets.column_writes:
+        if column == "WhatsApp Reachable":
+            return values
+    return {}
+
+
+def test_research_answers_reachability_without_being_asked_separately():
+    """The whole point: when research finishes, the queue already knows."""
+    from outreach.stages import reachability
+
+    sheets = FakeSheets(_reach_leads(phone="+1 504-555-0123", country="US"), ["a"])
+    relay = _Relay(registered={"15045550123"})
+
+    reachability.check_reachability(config(), sheets, relay)
+
+    assert _verdicts(sheets) == {"a": "yes"}, (
+        "a US number confirmed on WhatsApp must be marked reachable"
+    )
+
+
+def test_a_us_number_is_asked_about_rather_than_written_off():
+    """This is the bug Lyon hit twice. The numbering plan cannot separate
+    mobile from landline in the US, so the only correct move is to ask."""
+    from outreach.stages import reachability
+
+    sheets = FakeSheets(_reach_leads(phone="+1 504-555-0123", country="US"), ["a"])
+    relay = _Relay(registered=set())
+
+    reachability.check_reachability(config(), sheets, relay)
+
+    assert relay.asked == ["15045550123"], "it must ask, not guess"
+    assert _verdicts(sheets) == {"a": "no"}
+
+
+def test_a_malaysian_mobile_costs_no_lookup_at_all():
+    """Penang must not start paying for lookups it never needed: the plan
+    answers there, so the relay is never troubled."""
+    from outreach.stages import reachability
+
+    sheets = FakeSheets(_reach_leads(phone="+60 12-3456789", country="MY"), ["a"])
+    relay = _Relay()
+
+    report = reachability.check_reachability(config(), sheets, relay)
+
+    assert relay.asked == []
+    assert report.from_plan == 1
+    assert _verdicts(sheets) == {"a": "yes"}
+
+
+def test_an_offline_relay_leaves_leads_unchecked_rather_than_unreachable():
+    """A relay that is down is not evidence about anybody. Writing 'no' here
+    would retire the entire US queue the first time it disconnected."""
+    from outreach.stages import reachability
+
+    sheets = FakeSheets(_reach_leads(phone="+1 504-555-0123", country="US"), ["a"])
+    relay = _Relay(connected=False)
+
+    report = reachability.check_reachability(config(), sheets, relay)
+
+    assert report.skipped_no_relay == 1
+    assert _verdicts(sheets) == {}, "nothing may be written for an unchecked lead"

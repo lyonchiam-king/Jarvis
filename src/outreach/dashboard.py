@@ -1646,12 +1646,18 @@ PAGE = """<!doctype html>
       <div class="row" style="margin-top:10px">
         <button data-run="discovery">Find leads</button>
         <button data-run="research">Research</button>
+        <button data-run="reachability">Check WhatsApp</button>
         <button data-run="site-brief">Write briefs</button>
         <button data-run="site-build">Build approved</button>
         <button data-run="outreach-draft">Draft messages</button>
       </div>
       <p class="hint"><b>How many</b> above applies to these too &mdash; set it to
         5, press <b>Research</b>, and only five leads are researched.</p>
+      <p class="hint"><b>Check WhatsApp</b> runs on its own at the end of every
+        Research, so you rarely need it. Press it to answer leads researched
+        before this existed, or ones left unchecked because the relay was
+        offline &mdash; it only asks about numbers it has no answer for, and
+        never asks twice.</p>
       <div class="hint" id="nextup"></div>
       <div class="row" style="margin-top:10px">
         <button data-run="preview-leads">Preview leads</button>

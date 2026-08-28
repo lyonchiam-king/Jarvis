@@ -24,7 +24,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from .. import errors, phone as phone_lib, schema
+from .. import phone as phone_lib, schema
 from ..stage import Stage
 
 log = logging.getLogger("outreach")
@@ -139,22 +139,27 @@ def check_reachability(
             )
         else:
             by_number = {number: lead_id for lead_id, number in needs_lookup.items()}
-            with errors.guard(lead_id="", business_name="WhatsApp lookup"):
+            try:
                 results = client.check_numbers(list(by_number))
-                for number, registered in results.items():
-                    lead_id = by_number.get(number)
-                    if lead_id is None:
-                        continue
-                    report.from_lookup += 1
-                    if registered is True:
-                        verdicts[lead_id] = YES
-                    elif registered is False:
-                        verdicts[lead_id] = NO
-                    else:
-                        # None means the lookup itself failed. Recorded as
-                        # unknown so the next run tries again rather than
-                        # retiring a lead over one bad request.
-                        verdicts[lead_id] = UNKNOWN
+            except Exception as exc:  # noqa: BLE001 -- one bad batch is not a verdict
+                log.warning("WhatsApp lookup failed: %s", exc)
+                report.errors.append(str(exc))
+                report.skipped_no_relay = len(needs_lookup)
+                results = {}
+            for number, registered in results.items():
+                lead_id = by_number.get(number)
+                if lead_id is None:
+                    continue
+                report.from_lookup += 1
+                if registered is True:
+                    verdicts[lead_id] = YES
+                elif registered is False:
+                    verdicts[lead_id] = NO
+                else:
+                    # None means the lookup itself failed. Recorded as
+                    # unknown so the next run tries again rather than
+                    # retiring a lead over one bad request.
+                    verdicts[lead_id] = UNKNOWN
 
     if not verdicts:
         return report
