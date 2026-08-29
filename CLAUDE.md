@@ -42,7 +42,7 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             958 tests, pytest, no CI -- the suite is the only gate
+tests/             961 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -173,6 +173,14 @@ cannot tell (the US and Canada assign no mobile range), and unknown means
 Normalising to E.164 belongs in `WhatsAppClient.send_message`, the last place
 that knows the lead's country -- making the relay strict without doing that
 refused every national-format Malaysian number on the Sheet.
+
+**Buying a cheap answer and then ignoring it is worse than not asking.** The
+check reported six leads reachable and Research went through all twenty
+anyway, because nothing gated it. Research now skips a definite `no`, and
+the dashboard's "leads to research" count applies the same rule -- a count
+that disagrees with what the stage will do makes every run look like it
+under-delivered. An *unchecked* lead is still researched: gating on `yes`
+would make Research silently do nothing for anyone who never ran the check.
 
 **The WhatsApp verdict lives on Leads, not Research.** Research decides what
 is left to do by whether a Lead ID appears on the Research tab, so a verdict

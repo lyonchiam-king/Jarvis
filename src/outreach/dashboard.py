@@ -24,6 +24,7 @@ from flask import Flask, jsonify, render_template_string, request
 
 from . import schema
 from .config import Config, load_config
+from .stages.reachability import stored_verdict
 from .stage import Stage
 
 log = logging.getLogger("outreach")
@@ -201,7 +202,14 @@ def summarise(
             summary.by_stage[current.value] += 1
 
         # Outstanding work, using the same rules the stages themselves apply.
-        if lead_id not in research_ids and rank(current) < rank(Stage.RESEARCHED):
+        # That includes the WhatsApp gate: research skips a lead WhatsApp has
+        # refused, so counting it here would promise work that will not
+        # happen and make the run look like it under-delivered.
+        if (
+            lead_id not in research_ids
+            and rank(current) < rank(Stage.RESEARCHED)
+            and stored_verdict(row) != "no"
+        ):
             summary.to_research += 1
         if (
             lead_id not in site_brief_ids

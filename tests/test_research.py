@@ -794,3 +794,59 @@ def test_a_verdict_already_on_the_research_tab_is_not_paid_for_twice():
 
     assert relay.asked == [], "an answered lead must not be asked again"
     assert report.already_done == 1
+
+
+def test_the_gate_runs_inside_research_not_only_in_the_selector():
+    """Guards the real path: run() must apply it, or pressing Research in
+    the dashboard still researches everything."""
+    refused = lead_row("no", stage="Discovered")
+    refused["WhatsApp Reachable"] = "no"
+    reachable = lead_row("yes", stage="Discovered")
+    reachable["WhatsApp Reachable"] = "yes"
+
+    sheets = FakeSheets(leads_index([refused, reachable]))
+    details = {
+        "yes": PlaceDetails(
+            place_id="yes",
+            name="Salon yes",
+            address="1 Test St",
+            phone="+60 12-345 6789",
+            website_uri="",
+            rating=4.5,
+            review_count=10,
+            category="Hair salon",
+            reviews=(Review(rating=5, text="Lovely cut", when="a month ago"),),
+        )
+    }
+
+    report = research.run(config(), FakePlaces(details), sheets, FakeWriter())
+
+    assert report.not_on_whatsapp == 1
+    assert report.briefed == 1, "only the reachable lead should have been researched"
+    researched_ids = {r["Lead ID"] for _tab, rows in sheets.upserts for r in rows}
+    assert researched_ids == {"yes"}
+
+
+def test_an_unchecked_lead_is_still_researched():
+    """Otherwise pressing Research before ever running the check would do
+    nothing at all, with no explanation."""
+    unchecked = lead_row("a", stage="Discovered")
+    sheets = FakeSheets(leads_index([unchecked]))
+    details = {
+        "a": PlaceDetails(
+            place_id="a",
+            name="Salon a",
+            address="1 Test St",
+            phone="+60 12-345 6789",
+            website_uri="",
+            rating=4.5,
+            review_count=10,
+            category="Hair salon",
+            reviews=(Review(rating=5, text="Lovely cut", when="a month ago"),),
+        )
+    }
+
+    report = research.run(config(), FakePlaces(details), sheets, FakeWriter())
+
+    assert report.not_on_whatsapp == 0
+    assert report.briefed == 1

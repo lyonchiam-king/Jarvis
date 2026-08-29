@@ -1823,3 +1823,27 @@ class TestPerThreadTransport:
         # every panel misses at the same instant on a cold cache and the cache
         # saves nothing precisely when the quota is tightest.
         assert inner.n == 1
+
+
+def test_the_leads_to_research_count_excludes_refused_leads(monkeypatch):
+    """The count has to agree with what Research will actually do.
+
+    Research skips a lead WhatsApp has refused, so counting it as work
+    outstanding promises a batch that will not happen and makes the run look
+    like it under-delivered -- the same mismatch Lyon hit when the check said
+    six were reachable and Research went through all of them.
+    """
+    from outreach import dashboard as dash
+
+    leads = {
+        "yes": (2, {"Lead ID": "yes", "Stage": "Discovered",
+                    "WhatsApp Reachable": "yes"}),
+        "no": (3, {"Lead ID": "no", "Stage": "Discovered",
+                   "WhatsApp Reachable": "no"}),
+        "unchecked": (4, {"Lead ID": "unchecked", "Stage": "Discovered"}),
+    }
+
+    summary = dash.summarise(leads, set(), set(), {}, {}, require_site=False)
+
+    # The reachable one and the unchecked one; never the refused one.
+    assert summary.to_research == 2

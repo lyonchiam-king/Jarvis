@@ -31,7 +31,7 @@ from ..providers.places import PlaceDetails, PlacesClient
 from ..selection import ORDERS, select_pending
 from ..sheets import SheetsClient
 from ..stage import Stage, advance
-from .reachability import check_reachability
+from .reachability import check_reachability, stored_verdict
 
 log = logging.getLogger("outreach")
 
@@ -41,6 +41,7 @@ class ResearchReport:
     candidates: int = 0
     already_researched: int = 0
     not_ready: int = 0
+    not_on_whatsapp: int = 0
     selected: int = 0
     selected_with_social: int = 0
     social_first: bool = True
@@ -60,6 +61,10 @@ class ResearchReport:
             f"Leads on the Sheet        {self.candidates}",
             f"  already researched      {self.already_researched}  (skipped)",
             f"  not yet discovered      {self.not_ready}  (skipped)",
+            f"  not on WhatsApp         {self.not_on_whatsapp}  (skipped -- "
+            f"checked already, so not worth researching)"
+            if self.not_on_whatsapp
+            else "",
             f"  selected this run       {self.selected}",
             f"    with a social page    {self.selected_with_social}"
             + ("  (picked first)" if self.social_first else ""),
@@ -205,6 +210,23 @@ def run(
     leads = sheets.read_rows(schema.LEADS)
     researched = set(sheets.read_rows(schema.RESEARCH))
     report.candidates = len(leads)
+
+    # Don't research someone WhatsApp has already said no to. Checking is a
+    # lookup; researching is a model call per lead, so once the cheap answer
+    # is in, spending the expensive one on a lead that cannot be messaged is
+    # pure waste -- which is exactly what happened: the check ran, said six
+    # of them were reachable, and Research went through all of them anyway.
+    #
+    # Only a definite "no" is skipped. An unchecked lead is still researched,
+    # because otherwise pressing Research before ever running the check would
+    # silently do nothing at all.
+    reachable = {}
+    for lead_id, entry in leads.items():
+        if stored_verdict(entry[1]) == "no":
+            report.not_on_whatsapp += 1
+        else:
+            reachable[lead_id] = entry
+    leads = reachable
 
     batch_size = min(limit or config.batch_size, config.batch_size)
     prioritise = (
