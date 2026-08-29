@@ -40,9 +40,10 @@ src/outreach/
   providers/       places, sheets auth, llm, social, web, lovable, sitegen
   images.py        generated page imagery -- mood and texture, never the premises
   sitecheck.py     refuses a generated page that would embarrass you
+  screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             961 tests, pytest, no CI -- the suite is the only gate
+tests/             978 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -105,6 +106,13 @@ Lyon runs Ollama. New spec fields go in `properties` but not `required`, with
 the prompt block rendered conditionally, so a model that skips one produces
 the previous prompt rather than a broken one. `layout_system` is the worked
 example.
+
+**The screenshot is never worth the message.** Every way photographing the
+site can fail -- no browser, no page, a hung browser, a browser that exits 0
+having written nothing -- ends with the text still sending. It drives Edge or
+Chrome headless rather than adding Playwright: a 150MB browser download is a
+real cost to a non-programmer on Windows, and every Windows machine already
+has Edge. A zero exit code is not proof; bytes on disk are.
 
 **"Sent" must mean WhatsApp acknowledged it.** `sendMessage()` resolving only
 means the socket accepted the message; a half-open connection queues it,

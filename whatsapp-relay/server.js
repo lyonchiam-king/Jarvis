@@ -183,7 +183,10 @@ app.get("/qr", (_req, res) => {
 
 // POST /send — { phone, message }
 app.post("/send", async (req, res) => {
-  const { phone, message } = req.body || {};
+  // `image` is optional base64 PNG/JPEG bytes. With one, the message goes
+  // as a picture with the text as its caption -- a screenshot of the site
+  // says more in a phone notification than a link nobody taps.
+  const { phone, message, image } = req.body || {};
 
   if (!phone || !message) {
     return res.status(400).json({
@@ -260,7 +263,19 @@ app.post("/send", async (req, res) => {
         });
       }
 
-      const result = await sock.sendMessage(jid, { text: message });
+      let payload = { text: message };
+      if (image) {
+        try {
+          const buffer = Buffer.from(image, "base64");
+          if (!buffer.length) throw new Error("empty image");
+          payload = { image: buffer, caption: message };
+        } catch (err) {
+          // A bad attachment must not cost the message. Sending the text
+          // alone is worth far more than failing the whole send.
+          logger.warn({ err, phone }, "Attachment unusable; sending text only");
+        }
+      }
+      const result = await sock.sendMessage(jid, payload);
 
       lastSendTime = Date.now();
       dailySent += 1;

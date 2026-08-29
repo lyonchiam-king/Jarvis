@@ -14,6 +14,7 @@ usually the only reliable contact channel.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from dataclasses import dataclass, field
 
 from .. import compliance, schema
@@ -25,6 +26,7 @@ from ..providers.llm import BriefWriter, build_outreach_prompt
 from .reachability import can_whatsapp
 from ..selection import ORDERS, select_pending
 from ..sheets import SheetsClient
+from .. import screenshot
 from ..stage import Stage, advance
 
 log = logging.getLogger("outreach")
@@ -45,6 +47,7 @@ class OutreachReport:
     copy_written: int = 0
     drafts_created: int = 0
     whatsapp_only: int = 0
+    screenshots: int = 0
     errors: int = 0
     llm_calls: int = 0
     checkpoints: int = 0
@@ -59,6 +62,9 @@ class OutreachReport:
             f"Messages written          {self.copy_written}",
             f"  Gmail drafts created    {self.drafts_created}",
             f"  WhatsApp only (no email){self.whatsapp_only:>4}",
+            f"  with a site screenshot  {self.screenshots:>4}"
+            if self.screenshots
+            else "",
             f"Errors logged             {self.errors}",
             "",
             f"Claude calls              {self.llm_calls}",
@@ -110,6 +116,43 @@ def preflight(config: Config) -> None:
             "  outreach:\n"
             '    postal_address: "Your Company, 12 Some Road, 10450 Penang, Malaysia"'
         )
+
+
+
+def site_page_for(config, lead: dict[str, str], lead_id: str) -> Path | None:
+    """The built page on disk for this lead, if there is one."""
+    from ..slug import site_slug
+
+    name = lead.get("Business Name", "") or lead_id
+    page = Path(config.build.output_dir) / site_slug(name, lead_id) / "index.html"
+    return page if page.exists() else None
+
+
+def capture_site_shot(config, lead: dict[str, str], lead_id: str) -> Path | None:
+    """Photograph the built site so the message can carry a picture of it.
+
+    Never fatal. A screenshot that cannot be taken -- no browser, a page that
+    was never built, a browser that hung -- must not stop a draft: the
+    message is the deliverable and the picture only makes it land better.
+    """
+    if not getattr(config.build, "screenshot", True):
+        return None
+
+    page = site_page_for(config, lead, lead_id)
+    if page is None:
+        return None
+
+    out = screenshot.shot_path_for(page)
+    if out.exists() and out.stat().st_size:
+        return out  # already taken; photographing it again buys nothing
+
+    try:
+        return screenshot.capture(
+            page, out, browser=getattr(config.build, "screenshot_browser", "")
+        ).path
+    except screenshot.ScreenshotError as exc:
+        log.warning("No screenshot for %s: %s", lead.get("Business Name", lead_id), exc)
+        return None
 
 
 def run(
@@ -232,6 +275,8 @@ def run(
                 channel = "Email"
             elif can_whatsapp(lead, research_row, config.compliance.country_code):
                 report.whatsapp_only += 1
+                if capture_site_shot(config, lead, lead_id) is not None:
+                    report.screenshots += 1
             else:
                 # No email and no mobile number -- a landline can't receive
                 # WhatsApp, so there is nothing to send. Mark it done so it is

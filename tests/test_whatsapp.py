@@ -1283,7 +1283,8 @@ class TestTheDashboardSendPath:
             def __init__(self, port=4099):
                 pass
 
-            def send_message(self, phone, text, country=""):
+            def send_message(self, phone, text, country="", image_path=None):
+                seen["image"] = image_path
                 from outreach import phone as phone_lib
                 from outreach.providers.whatsapp import SendResult
 
@@ -1395,3 +1396,45 @@ class TestSentMeansAcknowledged:
                                "timestamp": "t", "dialled": "60447450225230"})
             with pytest.raises(WhatsAppError, match="60447450225230"):
                 WhatsAppClient().send_message("60447450225230", "Hi", "")
+
+
+class TestTheScreenshotReachesWhatsApp:
+    def test_an_image_is_sent_as_base64_with_the_text_as_caption(self, tmp_path):
+        import json as _j
+
+        shot = tmp_path / "screenshot.png"
+        shot.write_bytes(b"\x89PNG-real-bytes")
+
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                "http://127.0.0.1:4099/send",
+                json={"status": "sent", "message_id": "m1", "timestamp": "t",
+                      "dialled": "60123456789", "ack": 1},
+            )
+            WhatsAppClient().send_message("60123456789", "Hi", "", image_path=shot)
+            body = _j.loads(rsps.calls[0].request.body)
+
+        import base64
+
+        assert base64.b64decode(body["image"]) == b"\x89PNG-real-bytes"
+        assert body["message"] == "Hi", "the text still travels as the caption"
+
+    def test_an_empty_file_is_not_attached(self, tmp_path):
+        """A zero-byte screenshot would send as a broken image."""
+        import json as _j
+
+        shot = tmp_path / "screenshot.png"
+        shot.write_bytes(b"")
+
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                "http://127.0.0.1:4099/send",
+                json={"status": "sent", "message_id": "m1", "timestamp": "t",
+                      "dialled": "60123456789", "ack": 1},
+            )
+            WhatsAppClient().send_message("60123456789", "Hi", "", image_path=shot)
+            body = _j.loads(rsps.calls[0].request.body)
+
+        assert "image" not in body

@@ -103,3 +103,12 @@ def test_the_recipient_is_checked_before_a_message_is_sent():
 
     assert "onWhatsApp" in block
     assert "not registered on WhatsApp" in block
+
+
+def test_a_bad_attachment_never_costs_the_message():
+    """The relay must fall back to text, not fail the send. The picture is
+    decoration; the message is the deliverable."""
+    block = source().split('app.post("/send"', 1)[1].split("app.post(", 1)[0]
+
+    assert "caption" in block, "the text must travel with the image"
+    assert "sending text only" in block, "a bad image must fall back, not throw"

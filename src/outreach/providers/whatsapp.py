@@ -10,8 +10,10 @@ official WhatsApp Cloud API later without changing the dashboard or pipeline.
 
 from __future__ import annotations
 
+import base64
 import logging
 import re
+from pathlib import Path
 from dataclasses import dataclass
 
 import requests
@@ -99,7 +101,13 @@ class WhatsAppClient:
 
     # ------------------------------------------------------------------- send
 
-    def send_message(self, phone: str, text: str, country: str = "") -> SendResult:
+    def send_message(
+        self,
+        phone: str,
+        text: str,
+        country: str = "",
+        image_path: str | Path | None = None,
+    ) -> SendResult:
         """Send a WhatsApp text message to a phone number.
 
         The number is normalised to E.164 here, because this is the last place
@@ -125,10 +133,22 @@ class WhatsAppClient:
             )
         phone = e164
 
+        body = {"phone": phone.strip(), "message": text.strip()}
+        if image_path:
+            # A missing or unreadable picture never costs the message: the
+            # text alone is the thing being sent, and the screenshot only
+            # makes it land better.
+            try:
+                raw = Path(image_path).read_bytes()
+                if raw:
+                    body["image"] = base64.b64encode(raw).decode("ascii")
+            except OSError as exc:
+                log.warning("Could not read %s: %s", image_path, exc)
+
         try:
             resp = requests.post(
                 f"{self._base}/send",
-                json={"phone": phone.strip(), "message": text.strip()},
+                json=body,
                 timeout=self._timeout + 30.0,  # relay may be rate-limiting
             )
             data = resp.json()

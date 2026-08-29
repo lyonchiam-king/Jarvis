@@ -238,6 +238,12 @@ class BuildSettings:
     max_output_tokens: int = 64000
     min_interval_seconds: float = 6.5
     output_dir: str = "sites"
+    # Attach a picture of the built site to the WhatsApp message. On by
+    # default because a screenshot in a phone notification does far more
+    # than a link nobody taps; off is one line for anyone who disagrees.
+    screenshot: bool = True
+    # Only needed when Edge and Chrome are somewhere this cannot find them.
+    screenshot_browser: str = ""
     url_context: bool = False
     public_base_url: str = ""
     max_versions: int = 5
@@ -548,6 +554,8 @@ def load_config(
         # repo root by construction on Windows -- the same assumption
         # credentials/oauth_client.json above already relies on.
         output_dir=str(b.get("output_dir", "sites")),
+        screenshot=bool(b.get("screenshot", True)),
+        screenshot_browser=str(b.get("screenshot_browser", "")),
         url_context=bool(b.get("url_context", False)),
         public_base_url=str(b.get("public_base_url", "")),
         max_versions=int(b.get("max_versions", 5)),

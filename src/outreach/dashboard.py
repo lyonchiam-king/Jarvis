@@ -1410,11 +1410,33 @@ def create_app(config: Config) -> Flask:
         if not message:
             return jsonify({"error": "message is required"}), 400
 
+        from . import screenshot
         from .providers.whatsapp import WhatsAppClient, WhatsAppError
+        from .stages.outreach_draft import site_page_for
+
+        # One read, only to locate the lead's built page.
+        try:
+            leads_for_shot = {
+                k: v[1] for k, v in _sheets_client(c).read_rows(schema.LEADS).items()
+            }
+        except Exception:  # noqa: BLE001 -- a picture is never worth a failed send
+            leads_for_shot = {}
 
         try:
             client = WhatsAppClient(port=c.outreach.whatsapp_relay_port)
-            result = client.send_message(phone, message, send_country)
+            # The screenshot taken at draft time, if the page is still
+            # there. Looked up here rather than trusted from the browser:
+            # a path from the page could point anywhere on disk.
+            shot = None
+            lead_row = leads_for_shot.get(lead_id)
+            if lead_row is not None:
+                page = site_page_for(c, lead_row, lead_id)
+                if page is not None:
+                    candidate = screenshot.shot_path_for(page)
+                    if candidate.exists() and candidate.stat().st_size:
+                        shot = candidate
+
+            result = client.send_message(phone, message, send_country, shot)
         except WhatsAppError as exc:
             # Record the failure so the user sees it in the Sheet.
             try:
