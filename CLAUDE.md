@@ -43,7 +43,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             995 tests, pytest, no CI -- the suite is the only gate
+tests/             999 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -81,6 +81,19 @@ action on a named row the user just clicked may, with `user_edit=True`.
 **Test fakes must enforce what the real client enforces.** A `FakeSheets` that
 was more permissive than `SheetsClient` is how the manual-column bug shipped
 past a green suite. When you add a rule to the real client, add it to the fakes.
+
+**A dead `CAMPAIGN_CONFIG` must not take the tool down.** Saving a setting
+writes that key into `.env` aimed at a `*.local.yaml` twin. When the twin is
+missing, every command loads config first, so every command died -- drafting
+included -- with an error naming config and nothing about the dashboard.
+Load now falls back to the tracked campaign and warns that saved settings
+are not being applied. An explicit `--config` is never second-guessed.
+
+**Tests must not damage the machine they run on.** A run left
+`CAMPAIGN_CONFIG` in the real `.env` pointing at a pytest temp directory,
+which broke every command long after the run finished. `tests/conftest.py`
+fingerprints `.env` and the `.local.yaml` and fails the test that changes
+one, and restores a leaked `CAMPAIGN_CONFIG` env var between tests.
 
 **Never write to a git-tracked file at runtime.** The dashboard once wrote to
 `config/campaigns/penang-my.yaml` and broke `git pull` on Lyon's machine. Config

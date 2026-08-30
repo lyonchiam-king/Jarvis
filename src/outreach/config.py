@@ -6,12 +6,16 @@ country means pointing CAMPAIGN_CONFIG at a different YAML file.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 from dotenv import load_dotenv
+
+
+log = logging.getLogger("outreach")
 
 
 class ConfigError(Exception):
@@ -334,11 +338,30 @@ def load_config(
     if env_file is not None and Path(env_file).exists():
         load_dotenv(env_file)
 
-    path = Path(
-        config_path
-        or os.getenv("CAMPAIGN_CONFIG")
-        or "config/campaigns/penang-my.yaml"
-    )
+    DEFAULT_CAMPAIGN = "config/campaigns/penang-my.yaml"
+    from_env = os.getenv("CAMPAIGN_CONFIG")
+    path = Path(config_path or from_env or DEFAULT_CAMPAIGN)
+
+    # A CAMPAIGN_CONFIG pointing at a file that is gone must not take the
+    # whole tool down. Saving a setting writes that key into .env, aiming it
+    # at a *.local.yaml twin -- so if that file is later deleted, moved, or
+    # never finished being written, every single command dies at load with
+    # "config not found", including ones that have nothing to do with
+    # settings. Falling back to the tracked campaign keeps the pipeline
+    # usable and says plainly what happened.
+    if not path.exists() and not config_path and from_env:
+        fallback = Path(DEFAULT_CAMPAIGN)
+        if fallback.exists():
+            log.warning(
+                "CAMPAIGN_CONFIG points at %s, which does not exist. Falling "
+                "back to %s -- any settings saved from the dashboard are not "
+                "being applied. Save one again to recreate the file, or "
+                "remove CAMPAIGN_CONFIG from .env.",
+                path,
+                fallback,
+            )
+            path = fallback
+
     if not path.exists():
         raise ConfigError(
             f"Campaign config not found: {path}\n"
