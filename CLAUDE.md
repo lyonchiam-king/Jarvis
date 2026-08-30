@@ -43,7 +43,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             999 tests, pytest, no CI -- the suite is the only gate
+tests/             1004 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -133,6 +133,16 @@ an OSError from the browser escaped into the per-lead guard and killed that
 lead's draft -- when it happened for every lead the run produced no messages
 at all. An optional step catches `Exception` and reports the reason in the
 summary, because the only other trace was a log nobody reads.
+
+**Which headless mode honours `--screenshot` depends on the build.**
+`--headless=new` exited 0 on Lyon's Edge and wrote nothing. The modes are
+tried in turn -- new, old, bare -- and a build that ignores the path and
+drops the file in the working directory has it claimed. A timeout is not
+retried: that is the page hanging, which no flag fixes, and three attempts
+would triple the budget per lead. `outreach shot-check` answers "can this
+machine screenshot at all" in one command. Chrome's stderr noise
+("Every renderer should have at least one task...") is filtered out of the
+error, having once been reported as though it were the cause.
 
 **The screenshot is never worth the message.** Every way photographing the
 site can fail -- no browser, no page, a hung browser, a browser that exits 0

@@ -812,6 +812,52 @@ def run_research(ctx: click.Context, limit: int | None, social_first: bool | Non
     _echo_sheet_link(config)
 
 
+@main.command("shot-check")
+@click.argument("source", required=False, default="")
+@click.pass_context
+def shot_check(ctx: click.Context, source: str) -> None:
+    """Prove the browser can take a screenshot, without running a draft.
+
+    Give it nothing and it photographs example.com; give it a Preview URL or
+    a path to an index.html and it photographs that. Writes .cache/shot.png
+    and says exactly which headless mode worked, so a browser that cannot do
+    this is a one-command answer rather than a failed batch.
+    """
+    from pathlib import Path
+
+    from . import screenshot
+
+    config = _load(ctx.obj["config_path"])
+    browser = config.build.screenshot_browser
+    found = screenshot.find_browser(browser)
+
+    click.echo(f"Browser: {found or '(none found)'}")
+    if not found:
+        raise click.ClickException(
+            "No browser found. Edge or Chrome will do. If one is installed "
+            "somewhere unusual, put its full path in build.screenshot_browser."
+        )
+
+    target = source or "https://example.com"
+    out = Path(".cache/shot.png")
+    click.echo(f"Page:    {target}")
+
+    try:
+        shot = screenshot.capture(
+            target,
+            out,
+            browser=browser,
+            timeout=float(config.build.screenshot_timeout),
+        )
+    except screenshot.ScreenshotError as exc:
+        raise click.ClickException(str(exc))
+
+    size = shot.path.stat().st_size
+    click.echo(f"Wrote:   {shot.path} ({size:,} bytes)")
+    click.echo("")
+    click.echo("Screenshots work. Open that file to check it looks right.")
+
+
 @main.command("whatsapp-probe")
 @click.argument("numbers", nargs=-1, required=True)
 @click.pass_context

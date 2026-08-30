@@ -369,3 +369,109 @@ class TestNoScreenshotFailureCanKillADraft:
         assert report.errors == 0, "a failed picture must not be logged as a lead error"
         row = sheets.upserts[0][1][0]
         assert row["WhatsApp Message"].startswith("Hi!"), "the message still exists"
+
+
+class TestHeadlessModesAreTriedUntilOneWorks:
+    """Lyon's Edge accepted --headless=new, exited 0, and wrote nothing.
+
+    Which headless mode honours --screenshot depends on the browser build
+    on the machine, and there is no way to know from here which one that is.
+    So the modes are tried in turn, and only a browser that fails all of
+    them is a failure.
+    """
+
+    def _exe(self, tmp_path):
+        exe = tmp_path / "msedge"
+        exe.write_text("")
+        return exe
+
+    def _runner(self, tmp_path, works_in, out):
+        """A browser that only writes an image in the named mode."""
+        calls = []
+
+        def run(cmd, **kw):
+            import subprocess as sp
+
+            mode = next(a for a in cmd if a.startswith("--headless"))
+            calls.append(mode)
+            if mode == works_in:
+                out.write_bytes(b"\x89PNG")
+            return sp.CompletedProcess(cmd, 0, b"", b"noise")
+
+        return run, calls
+
+    def test_the_first_mode_is_used_when_it_works(self, tmp_path):
+        out = tmp_path / "out.png"
+        run, calls = self._runner(tmp_path, "--headless=new", out)
+        screenshot.capture(
+            _page(tmp_path), out, browser=str(self._exe(tmp_path)), runner=run
+        )
+        assert calls == ["--headless=new"], "no second launch when the first works"
+
+    def test_it_falls_back_to_old_headless(self, tmp_path):
+        """The case that was failing: new writes nothing, old works."""
+        out = tmp_path / "out.png"
+        run, calls = self._runner(tmp_path, "--headless=old", out)
+        shot = screenshot.capture(
+            _page(tmp_path), out, browser=str(self._exe(tmp_path)), runner=run
+        )
+        assert shot.path == out
+        assert calls == ["--headless=new", "--headless=old"]
+
+    def test_a_stray_file_in_the_working_directory_is_claimed(
+        self, tmp_path, monkeypatch
+    ):
+        """Some builds ignore --screenshot's path and write to the cwd."""
+        monkeypatch.chdir(tmp_path)
+        out = tmp_path / "shots" / "out.png"
+        out.parent.mkdir()
+
+        def run(cmd, **kw):
+            import subprocess as sp
+
+            (tmp_path / "screenshot.png").write_bytes(b"\x89PNG")
+            return sp.CompletedProcess(cmd, 0, b"", b"")
+
+        shot = screenshot.capture(
+            _page(tmp_path), out, browser=str(self._exe(tmp_path)), runner=run
+        )
+        assert shot.path == out and out.read_bytes() == b"\x89PNG"
+
+    def test_failing_every_mode_names_what_was_tried(self, tmp_path):
+        def run(cmd, **kw):
+            import subprocess as sp
+
+            return sp.CompletedProcess(cmd, 0, b"", b"Something real went wrong")
+
+        with pytest.raises(screenshot.ScreenshotError) as err:
+            screenshot.capture(
+                _page(tmp_path), tmp_path / "out.png",
+                browser=str(self._exe(tmp_path)), runner=run,
+            )
+
+        message = str(err.value)
+        assert "--headless=new" in message and "--headless=old" in message
+        assert "Something real went wrong" in message
+
+    def test_chrome_noise_is_not_reported_as_the_cause(self, tmp_path):
+        """"Every renderer should have at least one task provided by a
+        primary provider" is a warning every headless run emits. Putting it
+        forward as the reason sends someone hunting the wrong thing."""
+        noise = (
+            b"[ERROR:fallback_task_provider.cc:126] Every renderer should "
+            b"have at least one task provided by a primary provider"
+        )
+
+        def run(cmd, **kw):
+            import subprocess as sp
+
+            return sp.CompletedProcess(cmd, 0, b"", noise)
+
+        with pytest.raises(screenshot.ScreenshotError) as err:
+            screenshot.capture(
+                _page(tmp_path), tmp_path / "out.png",
+                browser=str(self._exe(tmp_path)), runner=run,
+            )
+
+        assert "Every renderer" not in str(err.value)
+        assert "nothing explaining why" in str(err.value)

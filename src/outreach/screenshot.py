@@ -103,6 +103,35 @@ def source_uri(source) -> str:
     return path.resolve().as_uri()
 
 
+
+# Chrome writes a lot of harmless noise to stderr. Reporting the last line
+# verbatim put "Every renderer should have at least one task provided by a
+# primary provider" in front of Lyon as though it were the cause, which it
+# is not -- it is a warning every headless run emits.
+_NOISE = (
+    "fallback_task_provider",
+    "Every renderer should have",
+    "GPU process",
+    "dbus",
+    "Fontconfig",
+    "DEPRECATED_ENDPOINT",
+    "voice_transcription",
+)
+
+
+def _why(result) -> str:
+    """The most useful line of a browser's stderr, or a plain shrug."""
+    raw = (getattr(result, "stderr", b"") or b"")
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    lines = [
+        line.strip()
+        for line in raw.splitlines()
+        if line.strip() and not any(n in line for n in _NOISE)
+    ]
+    return lines[-1][:200] if lines else "no image and nothing explaining why"
+
+
 def capture(
     page,
     out: Path,
@@ -129,48 +158,67 @@ def capture(
     out.parent.mkdir(parents=True, exist_ok=True)
     # A remote page needs time to load before it is worth photographing;
     # a local file is painted immediately.
-    if uri.startswith("http"):
-        cmd_delay = ["--virtual-time-budget=6000"]
-    else:
-        cmd_delay = []
+    delay = ["--virtual-time-budget=6000"] if uri.startswith("http") else []
 
-    # A throwaway profile: without one, a browser already running as the
-    # user's own window refuses to start a second instance and the call
-    # returns success having done nothing.
-    with tempfile.TemporaryDirectory(prefix="jarvis-shot-") as profile:
-        cmd = [
-            exe,
-            "--headless=new",
-            "--disable-gpu",
-            "--hide-scrollbars",
-            f"--user-data-dir={profile}",
-            f"--window-size={width},{height}",
-            *cmd_delay,
-            f"--screenshot={out}",
-            uri,
-        ]
-        try:
-            result = runner(
-                cmd, capture_output=True, timeout=timeout, check=False
-            )
-        except subprocess.TimeoutExpired:
-            raise ScreenshotError(
-                f"The browser did not finish within {timeout:.0f}s."
-            )
-        except OSError as exc:
-            raise ScreenshotError(f"Could not run {exe}: {exc}")
+    # Chrome's headless modes disagree about --screenshot, and which one
+    # works depends on the build sitting on the machine. "new" is the modern
+    # default and silently wrote nothing on Lyon's Edge; "old" is the
+    # long-standing path for --screenshot; the bare flag is what older
+    # builds understand. Trying them in turn costs a second on the machines
+    # where the first works and is the difference between a feature and a
+    # confusing error everywhere else.
+    modes = (["--headless=new"], ["--headless=old"], ["--headless"])
 
-    # The exit code is not proof: headless Chrome has been known to report
-    # success and write nothing, so what matters is a file with bytes in it.
-    if not out.exists() or out.stat().st_size == 0:
-        detail = (getattr(result, "stderr", b"") or b"")[:300].decode(
-            "utf-8", "replace"
-        )
-        raise ScreenshotError(
-            f"The browser wrote no image{': ' + detail if detail.strip() else '.'}"
-        )
+    attempts: list[str] = []
+    for mode in modes:
+        with tempfile.TemporaryDirectory(prefix="jarvis-shot-") as profile:
+            cmd = [
+                exe,
+                *mode,
+                "--disable-gpu",
+                "--hide-scrollbars",
+                "--no-first-run",
+                "--no-default-browser-check",
+                f"--user-data-dir={profile}",
+                f"--window-size={width},{height}",
+                *delay,
+                f"--screenshot={out}",
+                uri,
+            ]
+            try:
+                result = runner(cmd, capture_output=True, timeout=timeout, check=False)
+            except subprocess.TimeoutExpired:
+                # No retry. A timeout means the browser started and the page
+                # never settled, which no other headless flag fixes -- and
+                # trying all three would cost three times the budget per
+                # lead and make a run look frozen, which is the thing the
+                # short timeout exists to prevent.
+                raise ScreenshotError(
+                    f"The browser did not finish within {timeout:.0f}s."
+                )
+            except OSError as exc:
+                # The browser could not be run at all, which no other mode
+                # will fix.
+                raise ScreenshotError(f"Could not run {exe}: {exc}")
 
-    return Shot(path=out, width=width, height=height)
+        # The exit code is not proof: headless Chrome reports success and
+        # writes nothing often enough that only bytes on disk count.
+        if out.exists() and out.stat().st_size:
+            return Shot(path=out, width=width, height=height)
+
+        # Some builds ignore the path and drop the file in the working
+        # directory instead. Claim it rather than calling this a failure.
+        stray = Path.cwd() / "screenshot.png"
+        if stray.exists() and stray.stat().st_size and stray != out:
+            stray.replace(out)
+            return Shot(path=out, width=width, height=height)
+
+        attempts.append(f"{mode[0]}: {_why(result)}")
+
+    raise ScreenshotError(
+        "The browser wrote no image in any headless mode. Tried -- "
+        + "; ".join(attempts)
+    )
 
 
 def shot_path_for(page: Path) -> Path:
