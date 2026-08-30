@@ -488,3 +488,50 @@ def test_penang_campaign_is_configured_demo_first():
     c = load_config("config/campaigns/penang-my.yaml", env_file=None)
     assert c.outreach.require_site is True, "no message goes out without a demo"
     assert c.lovable.auto_approve is False, "every prompt is reviewed by hand"
+
+
+def test_a_lead_with_an_email_still_gets_a_site_screenshot(monkeypatch, tmp_path):
+    """The second reason no picture appeared.
+
+    The capture sat in the no-email branch, but a lead with an email is
+    filed as Channel Email and still shows up in the WhatsApp queue. So for
+    most leads the screenshot was never taken at all.
+    """
+    from outreach.stages import outreach_draft
+
+    taken = []
+    monkeypatch.setattr(
+        outreach_draft,
+        "capture_site_shot",
+        lambda cfg, lead, lead_id, url="": taken.append(lead_id) or tmp_path / "s.png",
+    )
+
+    sheets = FakeSheets(
+        index([lead("a")]),
+        index([research_row("a", email="hi@salon.com")]),
+    )
+    report = outreach_draft.run(cfg(), sheets, FakeWriter(), FakeGmail())
+
+    assert taken == ["a"], "an emailed lead must still be photographed"
+    assert report.screenshots == 1
+
+
+def test_a_lead_with_no_whatsapp_is_not_photographed(monkeypatch):
+    """The picture rides on the WhatsApp message, so a lead that cannot
+    receive one is a browser launch bought for nothing."""
+    from outreach.stages import outreach_draft
+
+    taken = []
+    monkeypatch.setattr(
+        outreach_draft,
+        "capture_site_shot",
+        lambda cfg, lead, lead_id, url="": taken.append(lead_id),
+    )
+
+    sheets = FakeSheets(
+        index([lead("a")]),
+        index([research_row("a", email="hi@salon.com", whatsapp="no")]),
+    )
+    outreach_draft.run(cfg(), sheets, FakeWriter(), FakeGmail())
+
+    assert taken == []

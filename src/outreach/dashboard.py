@@ -1412,7 +1412,7 @@ def create_app(config: Config) -> Flask:
 
         from . import screenshot
         from .providers.whatsapp import WhatsAppClient, WhatsAppError
-        from .stages.outreach_draft import site_page_for
+        from .stages.outreach_draft import shot_dir_for, site_page_for
 
         # One read, only to locate the lead's built page.
         try:
@@ -1431,10 +1431,16 @@ def create_app(config: Config) -> Flask:
             lead_row = leads_for_shot.get(lead_id)
             if lead_row is not None:
                 page = site_page_for(c, lead_row, lead_id)
+                # Both homes: beside a page this pipeline generated, or in
+                # the lead's slug directory when the site is only a URL --
+                # which is every site built in AI Studio or Lovable.
+                candidates = [shot_dir_for(c, lead_row, lead_id) / "screenshot.png"]
                 if page is not None:
-                    candidate = screenshot.shot_path_for(page)
+                    candidates.insert(0, screenshot.shot_path_for(page))
+                for candidate in candidates:
                     if candidate.exists() and candidate.stat().st_size:
                         shot = candidate
+                        break
 
             result = client.send_message(phone, message, send_country, shot)
         except WhatsAppError as exc:

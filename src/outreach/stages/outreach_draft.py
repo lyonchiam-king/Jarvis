@@ -128,27 +128,52 @@ def site_page_for(config, lead: dict[str, str], lead_id: str) -> Path | None:
     return page if page.exists() else None
 
 
-def capture_site_shot(config, lead: dict[str, str], lead_id: str) -> Path | None:
+def shot_dir_for(config, lead: dict[str, str], lead_id: str) -> Path:
+    """Where this lead's picture belongs, whether or not a page is on disk."""
+    from ..slug import site_slug
+
+    name = lead.get("Business Name", "") or lead_id
+    return Path(config.build.output_dir) / site_slug(name, lead_id)
+
+
+def capture_site_shot(
+    config,
+    lead: dict[str, str],
+    lead_id: str,
+    preview_url: str = "",
+) -> Path | None:
     """Photograph the built site so the message can carry a picture of it.
 
-    Never fatal. A screenshot that cannot be taken -- no browser, a page that
-    was never built, a browser that hung -- must not stop a draft: the
-    message is the deliverable and the picture only makes it land better.
+    The page comes from disk when this pipeline generated it, and from the
+    Preview URL when it did not -- a site built in Google AI Studio or
+    Lovable exists only at a URL, and looking solely on disk meant every
+    externally built site quietly got no screenshot at all.
+
+    Never fatal. A screenshot that cannot be taken -- no browser, no page, a
+    browser that hung -- must not stop a draft: the message is the
+    deliverable and the picture only makes it land better.
     """
     if not getattr(config.build, "screenshot", True):
         return None
 
     page = site_page_for(config, lead, lead_id)
-    if page is None:
+    source = page if page is not None else (preview_url or "").strip()
+    if not source:
         return None
 
-    out = screenshot.shot_path_for(page)
+    # Beside the page when there is one, so the picture travels with the
+    # site; in the lead's slug directory when the site is only a URL.
+    out = (
+        screenshot.shot_path_for(page)
+        if page is not None
+        else shot_dir_for(config, lead, lead_id) / "screenshot.png"
+    )
     if out.exists() and out.stat().st_size:
         return out  # already taken; photographing it again buys nothing
 
     try:
         return screenshot.capture(
-            page, out, browser=getattr(config.build, "screenshot_browser", "")
+            source, out, browser=getattr(config.build, "screenshot_browser", "")
         ).path
     except screenshot.ScreenshotError as exc:
         log.warning("No screenshot for %s: %s", lead.get("Business Name", lead_id), exc)
@@ -264,6 +289,16 @@ def run(
             channel = "WhatsApp"
             notes = ""
 
+            # Taken for anyone reachable on WhatsApp, whatever channel the
+            # draft is filed under. A lead with an email is filed as Email
+            # and still appears in the WhatsApp queue, so gating the picture
+            # on "no email" meant most leads never got one.
+            if not dry_run and can_whatsapp(
+                lead, research_row, config.compliance.country_code
+            ):
+                if capture_site_shot(config, lead, lead_id, preview_url) is not None:
+                    report.screenshots += 1
+
             if recipient and gmail is not None and not dry_run:
                 draft = gmail.create_draft(
                     to=recipient, subject=copy.subject, body=body
@@ -275,8 +310,6 @@ def run(
                 channel = "Email"
             elif can_whatsapp(lead, research_row, config.compliance.country_code):
                 report.whatsapp_only += 1
-                if capture_site_shot(config, lead, lead_id) is not None:
-                    report.screenshots += 1
             else:
                 # No email and no mobile number -- a landline can't receive
                 # WhatsApp, so there is nothing to send. Mark it done so it is

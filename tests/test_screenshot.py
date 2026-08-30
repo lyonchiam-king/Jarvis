@@ -212,3 +212,85 @@ class TestAPictureIsNeverWorthTheMessage:
         assert result.status == "sent"
         assert "image" not in body, "a missing file must not become an empty attachment"
         assert body["message"] == "Hi"
+
+
+class TestASiteThatOnlyExistsAtAUrl:
+    """Why the first version photographed nothing for Lyon.
+
+    It looked only for a local sites/<slug>/index.html, which exists for
+    pages this pipeline generates. Lyon builds in Google AI Studio, so his
+    sites exist only at a Preview URL -- there was nothing on disk to
+    photograph and the failure was silent.
+    """
+
+    def test_a_url_is_something_a_browser_can_open(self):
+        assert screenshot.source_uri("https://acus-salon.web.app") == (
+            "https://acus-salon.web.app"
+        )
+
+    def test_a_local_page_still_becomes_a_file_uri(self, tmp_path):
+        page = _page(tmp_path)
+        assert screenshot.source_uri(page).startswith("file://")
+
+    def test_neither_gives_nothing_rather_than_a_broken_command(self, tmp_path):
+        assert screenshot.source_uri(tmp_path / "gone.html") == ""
+        assert screenshot.source_uri("") == ""
+
+    def test_a_url_is_photographed_with_time_to_load(self, tmp_path):
+        """A remote page is blank for a moment; a local file is not."""
+        out = tmp_path / "out.png"
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["cmd"] = cmd
+            out.write_bytes(b"\x89PNG")
+            import subprocess as sp
+
+            return sp.CompletedProcess(cmd, 0, b"", b"")
+
+        exe = tmp_path / "msedge"
+        exe.write_text("")
+        screenshot.capture(
+            "https://acus-salon.web.app", out, browser=str(exe), runner=fake_run
+        )
+
+        assert seen["cmd"][-1] == "https://acus-salon.web.app"
+        assert any(a.startswith("--virtual-time-budget=") for a in seen["cmd"])
+
+    def test_the_draft_uses_the_preview_url_when_nothing_is_on_disk(
+        self, tmp_path, monkeypatch
+    ):
+        from outreach.config import load_config
+        from outreach import screenshot as shot_mod
+        from outreach.stages import outreach_draft
+
+        cfg = load_config("config/campaigns/penang-my.yaml", env_file=None)
+        monkeypatch.chdir(tmp_path)
+        asked = {}
+
+        def fake_capture(source, out, **kw):
+            asked["source"] = source
+            Path(out).parent.mkdir(parents=True, exist_ok=True)
+            Path(out).write_bytes(b"\x89PNG")
+            return shot_mod.Shot(path=Path(out), width=900, height=1200)
+
+        monkeypatch.setattr(shot_mod, "capture", fake_capture)
+
+        got = outreach_draft.capture_site_shot(
+            cfg, {"Business Name": "Acus Salon"}, "a",
+            "https://acus-salon.web.app",
+        )
+
+        assert asked["source"] == "https://acus-salon.web.app"
+        assert got is not None and got.exists()
+
+    def test_no_page_and_no_url_is_simply_no_picture(self, tmp_path, monkeypatch):
+        from outreach.config import load_config
+        from outreach.stages import outreach_draft
+
+        cfg = load_config("config/campaigns/penang-my.yaml", env_file=None)
+        monkeypatch.chdir(tmp_path)
+
+        assert outreach_draft.capture_site_shot(
+            cfg, {"Business Name": "X"}, "a", ""
+        ) is None

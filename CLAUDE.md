@@ -43,7 +43,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             978 tests, pytest, no CI -- the suite is the only gate
+tests/             986 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -106,6 +106,13 @@ Lyon runs Ollama. New spec fields go in `properties` but not `required`, with
 the prompt block rendered conditionally, so a model that skips one produces
 the previous prompt rather than a broken one. `layout_system` is the worked
 example.
+
+**A site can exist only at a URL.** Pages this pipeline generates sit on
+disk, but one built in Google AI Studio or Lovable exists only at its
+Preview URL -- so a screenshot that looked solely for
+`sites/<slug>/index.html` silently photographed nothing for every
+externally built site. `screenshot.capture` takes either, and the draft
+falls back to the Preview URL.
 
 **The screenshot is never worth the message.** Every way photographing the
 site can fail -- no browser, no page, a hung browser, a browser that exits 0

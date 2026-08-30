@@ -81,8 +81,30 @@ def find_browser(explicit: str = "") -> str:
     return ""
 
 
+def source_uri(source) -> str:
+    """A file path or an http(s) URL, as something a browser can open.
+
+    Both are needed. A site generated here sits on disk, but one built in
+    Google AI Studio or Lovable exists only at a URL -- and photographing
+    only the local file meant every externally built site silently got no
+    screenshot at all.
+    """
+    text = str(source or "").strip()
+    if not text:
+        # Path("") is Path("."), which exists -- so an empty source would
+        # otherwise resolve to the working directory and photograph a file
+        # listing instead of failing.
+        return ""
+    if text.lower().startswith(("http://", "https://")):
+        return text
+    path = Path(text)
+    if not path.exists():
+        return ""
+    return path.resolve().as_uri()
+
+
 def capture(
-    page: Path,
+    page,
     out: Path,
     *,
     browser: str = "",
@@ -92,8 +114,8 @@ def capture(
     runner=subprocess.run,
 ) -> Shot:
     """Screenshot ``page`` into ``out``. Raises ScreenshotError on failure."""
-    page = Path(page)
-    if not page.exists():
+    uri = source_uri(page)
+    if not uri:
         raise ScreenshotError(f"No page to photograph at {page}")
 
     exe = find_browser(browser)
@@ -105,6 +127,13 @@ def capture(
         )
 
     out.parent.mkdir(parents=True, exist_ok=True)
+    # A remote page needs time to load before it is worth photographing;
+    # a local file is painted immediately.
+    if uri.startswith("http"):
+        cmd_delay = ["--virtual-time-budget=6000"]
+    else:
+        cmd_delay = []
+
     # A throwaway profile: without one, a browser already running as the
     # user's own window refuses to start a second instance and the call
     # returns success having done nothing.
@@ -116,8 +145,9 @@ def capture(
             "--hide-scrollbars",
             f"--user-data-dir={profile}",
             f"--window-size={width},{height}",
+            *cmd_delay,
             f"--screenshot={out}",
-            page.resolve().as_uri(),
+            uri,
         ]
         try:
             result = runner(
