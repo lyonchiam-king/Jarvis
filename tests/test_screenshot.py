@@ -294,3 +294,78 @@ class TestASiteThatOnlyExistsAtAUrl:
         assert outreach_draft.capture_site_shot(
             cfg, {"Business Name": "X"}, "a", ""
         ) is None
+
+
+class TestNoScreenshotFailureCanKillADraft:
+    """The regression that produced nothing at all.
+
+    capture_site_shot caught only ScreenshotError. Anything else -- a
+    permissions error writing the file, an OSError from the browser process,
+    anything Windows-specific -- escaped into the per-lead error guard and
+    killed that lead's draft. When it happened for every lead the run
+    produced no messages whatsoever.
+    """
+
+    @pytest.mark.parametrize(
+        "boom",
+        [
+            OSError("permission denied"),
+            RuntimeError("something odd"),
+            ValueError("bad path"),
+            MemoryError(),
+        ],
+    )
+    def test_any_exception_is_swallowed(self, tmp_path, monkeypatch, boom):
+        from outreach.config import load_config
+        from outreach import screenshot as shot_mod
+        from outreach.stages import outreach_draft
+
+        cfg = load_config("config/campaigns/penang-my.yaml", env_file=None)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            outreach_draft, "site_page_for", lambda *a, **k: None
+        )
+
+        def explode(*a, **k):
+            raise boom
+
+        monkeypatch.setattr(shot_mod, "capture", explode)
+
+        assert (
+            outreach_draft.capture_site_shot(
+                cfg, {"Business Name": "X"}, "a", "https://example.test"
+            )
+            is None
+        )
+
+    def test_a_whole_draft_survives_a_broken_screenshot(self, tmp_path, monkeypatch):
+        """The end-to-end version: the message is still written."""
+        import sys
+
+        sys.path.insert(0, str(Path(__file__).parent))
+        from test_outreach_draft import (  # noqa: E402
+            FakeGmail,
+            FakeSheets,
+            FakeWriter,
+            cfg,
+            index,
+            lead,
+            research_row,
+        )
+
+        from outreach.stages import outreach_draft
+
+        def explode(*a, **k):
+            raise OSError("the browser exploded")
+
+        monkeypatch.setattr(outreach_draft.screenshot, "capture", explode)
+        monkeypatch.setattr(
+            outreach_draft, "site_page_for", lambda *a, **k: None
+        )
+
+        sheets = FakeSheets(index([lead("a")]), index([research_row("a")]))
+        report = outreach_draft.run(cfg(), sheets, FakeWriter(), FakeGmail())
+
+        assert report.errors == 0, "a failed picture must not be logged as a lead error"
+        row = sheets.upserts[0][1][0]
+        assert row["WhatsApp Message"].startswith("Hi!"), "the message still exists"

@@ -43,7 +43,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             990 tests, pytest, no CI -- the suite is the only gate
+tests/             995 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -113,6 +113,13 @@ Preview URL -- so a screenshot that looked solely for
 `sites/<slug>/index.html` silently photographed nothing for every
 externally built site. `screenshot.capture` takes either, and the draft
 falls back to the Preview URL.
+
+**"Never fatal" means catching every exception, not the one you named.**
+`capture_site_shot` caught only `ScreenshotError`, so a permissions error or
+an OSError from the browser escaped into the per-lead guard and killed that
+lead's draft -- when it happened for every lead the run produced no messages
+at all. An optional step catches `Exception` and reports the reason in the
+summary, because the only other trace was a log nobody reads.
 
 **The screenshot is never worth the message.** Every way photographing the
 site can fail -- no browser, no page, a hung browser, a browser that exits 0

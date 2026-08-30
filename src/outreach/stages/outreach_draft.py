@@ -48,6 +48,8 @@ class OutreachReport:
     drafts_created: int = 0
     whatsapp_only: int = 0
     screenshots: int = 0
+    screenshot_failures: int = 0
+    screenshot_reason: str = ""
     errors: int = 0
     llm_calls: int = 0
     checkpoints: int = 0
@@ -64,6 +66,10 @@ class OutreachReport:
             f"  WhatsApp only (no email){self.whatsapp_only:>4}",
             f"  with a site screenshot  {self.screenshots:>4}"
             if self.screenshots
+            else "",
+            f"  no screenshot           {self.screenshot_failures:>4}  "
+            f"({self.screenshot_reason})"
+            if self.screenshot_failures
             else "",
             f"Errors logged             {self.errors}",
             "",
@@ -173,10 +179,28 @@ def capture_site_shot(
 
     try:
         return screenshot.capture(
-            source, out, browser=getattr(config.build, "screenshot_browser", "")
+            source,
+            out,
+            browser=getattr(config.build, "screenshot_browser", ""),
+            timeout=float(getattr(config.build, "screenshot_timeout", 20.0)),
         ).path
-    except screenshot.ScreenshotError as exc:
-        log.warning("No screenshot for %s: %s", lead.get("Business Name", lead_id), exc)
+    except Exception as exc:  # noqa: BLE001 -- deliberately everything
+        # Every exception, not just ScreenshotError. Catching only the one
+        # this module raises left every other failure -- a permissions error
+        # writing the file, an OSError from the browser process, anything
+        # Windows-specific -- to escape into the per-lead error guard and
+        # kill that lead's draft. When it happened for every lead the whole
+        # run produced nothing, message included, which is the exact
+        # opposite of "the picture is never worth the message".
+        log.warning(
+            "No screenshot for %s: %s: %s",
+            lead.get("Business Name", lead_id),
+            type(exc).__name__,
+            exc,
+        )
+        # Handed back so the run summary can say why, once, rather than
+        # leaving the only trace in a log Lyon does not read.
+        capture_site_shot.last_error = f"{type(exc).__name__}: {exc}"
         return None
 
 
@@ -296,8 +320,12 @@ def run(
             if not dry_run and can_whatsapp(
                 lead, research_row, config.compliance.country_code
             ):
+                capture_site_shot.last_error = ""
                 if capture_site_shot(config, lead, lead_id, preview_url) is not None:
                     report.screenshots += 1
+                elif capture_site_shot.last_error:
+                    report.screenshot_failures += 1
+                    report.screenshot_reason = capture_site_shot.last_error
 
             if recipient and gmail is not None and not dry_run:
                 draft = gmail.create_draft(
@@ -455,3 +483,7 @@ def regenerate_one(
         "email_body": copy.email_body,
         "whatsapp_message": copy.whatsapp_message,
     }
+
+
+# Set on every failure so the run summary can report one reason.
+capture_site_shot.last_error = ""

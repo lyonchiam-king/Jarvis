@@ -244,6 +244,9 @@ class BuildSettings:
     screenshot: bool = True
     # Only needed when Edge and Chrome are somewhere this cannot find them.
     screenshot_browser: str = ""
+    # Seconds to wait for one page. Deliberately short: the picture is
+    # optional and a slow one must never make a run look frozen.
+    screenshot_timeout: float = 20.0
     url_context: bool = False
     public_base_url: str = ""
     max_versions: int = 5
@@ -556,6 +559,7 @@ def load_config(
         output_dir=str(b.get("output_dir", "sites")),
         screenshot=bool(b.get("screenshot", True)),
         screenshot_browser=str(b.get("screenshot_browser", "")),
+        screenshot_timeout=float(b.get("screenshot_timeout", 20.0)),
         url_context=bool(b.get("url_context", False)),
         public_base_url=str(b.get("public_base_url", "")),
         max_versions=int(b.get("max_versions", 5)),
