@@ -259,7 +259,7 @@ class TestIsMobileNumber:
 # ----------------------------------------------------------- dashboard API
 
 
-def _make_client(monkeypatch, *, sheets=None, whatsapp_enabled=True):
+def _make_client(monkeypatch, *, sheets=None, whatsapp_enabled=True, output_dir=None):
     """Create a Flask test client with the outreach dashboard.
 
     Uses the real penang-my config as a base, then overrides WhatsApp settings
@@ -275,6 +275,10 @@ def _make_client(monkeypatch, *, sheets=None, whatsapp_enabled=True):
     # sheet_id comes from .env, not the YAML, so it is None when env_file=None.
     # Set a fake one so the queue/send endpoints don't bail out early.
     object.__setattr__(config.secrets, "sheet_id", "fake-sheet-id")
+    # Where built sites and their screenshots live. Overridable so a test
+    # can use tmp_path without chdir'ing away from the campaign file.
+    if output_dir is not None:
+        object.__setattr__(config.build, "output_dir", str(output_dir))
 
     if sheets is not None:
         monkeypatch.setattr(dash, "_sheets_client", lambda c: sheets)
@@ -1438,3 +1442,71 @@ class TestTheScreenshotReachesWhatsApp:
             body = _j.loads(rsps.calls[0].request.body)
 
         assert "image" not in body
+
+
+class TestSeeingTheScreenshotBeforeSending:
+    """Until this existed the picture was invisible.
+
+    It is a file on disk, deliberately not a Sheet column, so the only way
+    to find out whether one had been taken was to send the message and look
+    at your phone -- which is the wrong order for something you might want
+    to stop.
+    """
+
+    def _sheets(self, lead):
+        from outreach import schema
+
+        class FakeSheets:
+            def read_rows(self, tab):
+                if tab is schema.LEADS:
+                    return {"lead-1": (2, lead)}
+                return {}
+
+        return FakeSheets()
+
+    def test_a_missing_screenshot_is_reported_not_served_blank(self, monkeypatch):
+        client = _make_client(
+            monkeypatch,
+            sheets=self._sheets({"Lead ID": "lead-1", "Business Name": "Salon"}),
+        )
+        resp = client.get("/api/screenshot/lead-1")
+
+        assert resp.status_code == 404
+        assert "No screenshot" in json.loads(resp.data)["error"]
+
+    def test_an_unknown_lead_is_refused(self, monkeypatch):
+        client = _make_client(
+            monkeypatch,
+            sheets=self._sheets({"Lead ID": "lead-1", "Business Name": "Salon"}),
+        )
+        assert client.get("/api/screenshot/nope").status_code == 404
+
+    def test_the_path_comes_from_the_lead_never_from_the_url(
+        self, monkeypatch, tmp_path
+    ):
+        """A filename off the wire would let any file on disk be read. The
+        lead id only selects a row; the path is derived from its slug."""
+        client = _make_client(
+            monkeypatch,
+            sheets=self._sheets({"Lead ID": "lead-1", "Business Name": "Salon"}),
+            output_dir=tmp_path,
+        )
+
+        resp = client.get("/api/screenshot/..%2F..%2Fetc%2Fpasswd")
+        assert resp.status_code == 404
+
+    def test_a_real_screenshot_is_served(self, monkeypatch, tmp_path):
+        from outreach.slug import site_slug
+
+        lead = {"Lead ID": "lead-1", "Business Name": "Salon"}
+        shot = tmp_path / site_slug("Salon", "lead-1") / "screenshot.png"
+        shot.parent.mkdir(parents=True)
+        shot.write_bytes(b"\x89PNG-bytes")
+
+        client = _make_client(
+            monkeypatch, sheets=self._sheets(lead), output_dir=tmp_path
+        )
+        resp = client.get("/api/screenshot/lead-1")
+
+        assert resp.status_code == 200
+        assert resp.data == b"\x89PNG-bytes"

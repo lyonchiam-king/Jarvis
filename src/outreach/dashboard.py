@@ -1256,6 +1256,49 @@ def create_app(config: Config) -> Flask:
             }
         )
 
+    def _shot_for(cfg, lead, lead_id):
+        """The lead's screenshot on disk, or None.
+
+        Both homes: beside a page this pipeline generated, and in the lead's
+        slug directory when the site exists only at a URL.
+        """
+        from . import screenshot as shot_mod
+        from .stages.outreach_draft import shot_dir_for, site_page_for
+
+        candidates = []
+        page = site_page_for(cfg, lead, lead_id)
+        if page is not None:
+            candidates.append(shot_mod.shot_path_for(page))
+        candidates.append(shot_dir_for(cfg, lead, lead_id) / "screenshot.png")
+        for path in candidates:
+            if path.exists() and path.stat().st_size:
+                return path
+        return None
+
+    @app.route("/api/screenshot/<lead_id>")
+    def api_screenshot(lead_id: str):
+        """Serve one lead's screenshot so it can be checked before sending.
+
+        Resolved from the lead's own slug, never from a path supplied by the
+        page -- a filename off the wire would let any file on disk be read.
+        """
+        from flask import send_file
+
+        c = current()
+        try:
+            leads = _sheets_client(c).read_rows(schema.LEADS)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
+
+        entry = leads.get(lead_id)
+        if entry is None:
+            return jsonify({"error": "No such lead"}), 404
+
+        path = _shot_for(c, entry[1], lead_id)
+        if path is None:
+            return jsonify({"error": "No screenshot for this lead yet"}), 404
+        return send_file(path.resolve(), mimetype="image/png")
+
     @app.route("/api/whatsapp/queue")
     def api_whatsapp_queue():
         """Leads waiting for WhatsApp send, with phone + message text."""
@@ -1375,6 +1418,10 @@ def create_app(config: Config) -> Flask:
                         phone, _country_of(lead, c.compliance.country_code)
                     ),
                     "message": row.get("WhatsApp Message", ""),
+                    # Whether a picture of the site will be attached. Shown
+                    # in the queue because until now the only way to find
+                    # out was to send the message and look at your phone.
+                    "has_shot": _shot_for(c, lead, lead_id) is not None,
                 }
             )
 
@@ -1427,20 +1474,8 @@ def create_app(config: Config) -> Flask:
             # The screenshot taken at draft time, if the page is still
             # there. Looked up here rather than trusted from the browser:
             # a path from the page could point anywhere on disk.
-            shot = None
             lead_row = leads_for_shot.get(lead_id)
-            if lead_row is not None:
-                page = site_page_for(c, lead_row, lead_id)
-                # Both homes: beside a page this pipeline generated, or in
-                # the lead's slug directory when the site is only a URL --
-                # which is every site built in AI Studio or Lovable.
-                candidates = [shot_dir_for(c, lead_row, lead_id) / "screenshot.png"]
-                if page is not None:
-                    candidates.insert(0, screenshot.shot_path_for(page))
-                for candidate in candidates:
-                    if candidate.exists() and candidate.stat().st_size:
-                        shot = candidate
-                        break
+            shot = _shot_for(c, lead_row, lead_id) if lead_row is not None else None
 
             result = client.send_message(phone, message, send_country, shot)
         except WhatsAppError as exc:
@@ -1676,6 +1711,10 @@ PAGE = """<!doctype html>
   .wa-msg-card .wa-row { display:flex; justify-content:space-between; align-items:center;
                          gap:10px; }
   .wa-msg-card .wa-state { font-size:13px; }
+  .wa-shot { display:flex; align-items:center; gap:8px; margin:6px 0;
+             text-decoration:none; color:var(--muted); font-size:12px; }
+  .wa-shot img { width:52px; height:70px; object-fit:cover; object-position:top;
+                 border:1px solid var(--line); border-radius:4px; }
   .wa-msg-card .wa-state.ok { color:var(--ok); }
   .wa-msg-card .wa-state.err { color:var(--accent); }
   button.wa-send { background:var(--ok); border-color:var(--ok); color:#fff; }
@@ -2006,9 +2045,21 @@ async function loadWhatsAppInline() {
           <button class="wa-send" onclick="sendWhatsApp(${i}, '${esc(m.lead_id)}', '${esc(m.phone)}')">Send</button>
         </div>`;
       }
+      // The picture that will ride with the message. Shown small, and
+      // clickable, because the only way to check it before was to send it
+      // and look at your phone.
+      const shot = m.has_shot
+        ? `<a href="/api/screenshot/${encodeURIComponent(m.lead_id)}" target="_blank"
+              rel="noopener" class="wa-shot" title="Open the screenshot full size">
+             <img src="/api/screenshot/${encodeURIComponent(m.lead_id)}" alt="">
+             <span>Site screenshot attached</span></a>`
+        : '<div class="sub" style="margin:6px 0">No screenshot &mdash; the text '
+          + 'will send on its own.</div>';
+
       return `<div class="wa-msg-card" id="wa-msg-${i}">
         <div class="wa-name">${esc(m.name)}</div>
         <div class="wa-phone">${esc(m.phone)}</div>
+        ${shot}
         <textarea class="wa-edit" id="wa-text-${i}" rows="4">${msgText}</textarea>
         <div class="wa-row">${actions}</div>
       </div>`;
