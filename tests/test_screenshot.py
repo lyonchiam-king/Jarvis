@@ -475,3 +475,95 @@ class TestHeadlessModesAreTriedUntilOneWorks:
 
         assert "Every renderer" not in str(err.value)
         assert "nothing explaining why" in str(err.value)
+
+
+class TestTheOutputPathIsAlwaysAbsolute:
+    """Why nothing was ever written on Lyon's machine.
+
+    A browser resolves a relative --screenshot path against its own working
+    directory, not the caller's. ".cache/shot.png" therefore named a
+    directory it could not find, and it wrote nothing -- reporting
+    "The system cannot find the path specified" from only one of the three
+    modes, while the other two showed unrelated sync noise.
+    """
+
+    def test_a_relative_path_reaches_the_browser_absolute(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        page = _page(tmp_path)
+        seen = {}
+
+        def run(cmd, **kw):
+            import subprocess as sp
+
+            seen["shot"] = next(
+                a for a in cmd if a.startswith("--screenshot=")
+            ).split("=", 1)[1]
+            Path(seen["shot"]).write_bytes(b"\x89PNG")
+            return sp.CompletedProcess(cmd, 0, b"", b"")
+
+        exe = tmp_path / "msedge"
+        exe.write_text("")
+        screenshot.capture(page, Path(".cache/shot.png"), browser=str(exe), runner=run)
+
+        assert Path(seen["shot"]).is_absolute(), (
+            "a relative path is resolved by the browser, not by us"
+        )
+
+    def test_the_directory_is_created_before_the_browser_runs(
+        self, tmp_path, monkeypatch
+    ):
+        """The browser will not create it, and reports only that the path
+        cannot be found."""
+        monkeypatch.chdir(tmp_path)
+        page = _page(tmp_path)
+        existed = {}
+
+        def run(cmd, **kw):
+            import subprocess as sp
+
+            target = Path(
+                next(a for a in cmd if a.startswith("--screenshot=")).split("=", 1)[1]
+            )
+            existed["parent"] = target.parent.is_dir()
+            target.write_bytes(b"\x89PNG")
+            return sp.CompletedProcess(cmd, 0, b"", b"")
+
+        exe = tmp_path / "msedge"
+        exe.write_text("")
+        screenshot.capture(page, Path("deep/nested/shot.png"), browser=str(exe), runner=run)
+
+        assert existed["parent"] is True
+
+    def test_the_returned_path_is_the_one_that_was_written(self, tmp_path, monkeypatch):
+        """The caller stores this path and reads it back at send time, so a
+        relative one that resolved elsewhere would be a file nobody finds."""
+        monkeypatch.chdir(tmp_path)
+        page = _page(tmp_path)
+
+        def run(cmd, **kw):
+            import subprocess as sp
+
+            target = next(a for a in cmd if a.startswith("--screenshot=")).split("=", 1)[1]
+            Path(target).write_bytes(b"\x89PNG")
+            return sp.CompletedProcess(cmd, 0, b"", b"")
+
+        exe = tmp_path / "msedge"
+        exe.write_text("")
+        shot = screenshot.capture(
+            page, Path(".cache/shot.png"), browser=str(exe), runner=run
+        )
+
+        assert shot.path.is_absolute() and shot.path.exists()
+
+
+def test_chrome_sync_natter_is_not_reported_as_the_cause():
+    """Two of the three modes reported only this, which says nothing about
+    screenshots at all and sent the search in the wrong direction."""
+    class R:
+        stderr = (
+            b"[ERROR:components\\sync\\engine\\get_updates_processor.cc:424] "
+            b"PostClientToServerMessage() failed during GetUpdates with error "
+            b"Network error (ERR_ABORTED)"
+        )
+
+    assert "nothing explaining why" in screenshot._why(R())

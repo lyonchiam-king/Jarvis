@@ -116,6 +116,10 @@ _NOISE = (
     "Fontconfig",
     "DEPRECATED_ENDPOINT",
     "voice_transcription",
+    "get_updates_processor",
+    "PostClientToServerMessage",
+    "components\\sync",
+    "components/sync",
 )
 
 
@@ -155,6 +159,11 @@ def capture(
             "installed somewhere unusual."
         )
 
+    # Absolute, always. A browser resolves a relative --screenshot path
+    # against its own working directory, not ours, so ".cache/shot.png"
+    # became a path it could not find and it wrote nothing -- reporting only
+    # "the system cannot find the path specified" from one of three modes.
+    out = Path(out).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
     # A remote page needs time to load before it is worth photographing;
     # a local file is painted immediately.

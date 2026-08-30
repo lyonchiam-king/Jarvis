@@ -43,7 +43,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1004 tests, pytest, no CI -- the suite is the only gate
+tests/             1008 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -133,6 +133,12 @@ an OSError from the browser escaped into the per-lead guard and killed that
 lead's draft -- when it happened for every lead the run produced no messages
 at all. An optional step catches `Exception` and reports the reason in the
 summary, because the only other trace was a log nobody reads.
+
+**A browser resolves `--screenshot` against its own working directory.** A
+relative path wrote nothing and reported only "the system cannot find the
+path specified", from one of three modes -- the other two showed unrelated
+Chrome sync noise. Always pass an absolute path, and create the directory
+first: the browser will not.
 
 **Which headless mode honours `--screenshot` depends on the build.**
 `--headless=new` exited 0 on Lyon's Edge and wrote nothing. The modes are
