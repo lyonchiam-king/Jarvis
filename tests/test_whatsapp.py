@@ -1377,29 +1377,41 @@ class TestSentMeansAcknowledged:
         assert result.status == "sent"
         assert result.dialled == "447450225230"
 
-    def test_an_unacknowledged_message_is_not_reported_as_sent(self):
-        """The exact failure: relay accepted it, WhatsApp never confirmed."""
-        with responses.RequestsMock() as rsps:
-            self._reply(rsps, {"status": "pending", "message_id": "m1",
-                               "timestamp": "t", "dialled": "447450225230",
-                               "ack": None, "error": "not acknowledged"})
-            with pytest.raises(WhatsAppError, match="not acknowledged"):
-                WhatsAppClient().send_message("447450225230", "Hi", "")
+    def test_an_unconfirmed_message_is_not_treated_as_a_failure(self):
+        """This rule was briefly the other way round and stopped the queue.
 
-    def test_an_unregistered_number_is_refused_before_sending(self):
+        Requiring an ack turned every send into an error whenever WhatsApp
+        confirmed late -- which it routinely does for a first message to a
+        new contact. Silence is missing evidence, not evidence of nothing,
+        so the send stands and the uncertainty is carried on the result.
+        """
+        with responses.RequestsMock() as rsps:
+            self._reply(rsps, {"status": "unconfirmed", "message_id": "m1",
+                               "timestamp": "t", "dialled": "447450225230",
+                               "ack": None,
+                               "note": "WhatsApp has not confirmed delivery yet."})
+            result = WhatsAppClient().send_message("447450225230", "Hi", "")
+
+        assert result.status == "unconfirmed"
+        assert "not confirmed" in result.note
+
+    def test_a_real_relay_failure_is_still_raised(self):
+        """Softening the ack must not soften an actual refusal."""
         with responses.RequestsMock() as rsps:
             self._reply(rsps, {"status": "failed", "dialled": "447450225230",
-                               "error": "447450225230 is not registered on WhatsApp"})
-            with pytest.raises(WhatsAppError, match="not registered"):
+                               "error": "WhatsApp is not connected"})
+            with pytest.raises(WhatsAppError, match="not connected"):
                 WhatsAppClient().send_message("447450225230", "Hi", "")
 
-    def test_the_pending_error_names_the_number_it_tried(self):
-        """So a wrong number is visible rather than deduced from silence."""
+    def test_the_dialled_number_comes_back_either_way(self):
+        """So a wrong number stays visible rather than being deduced from a
+        message that never arrives."""
         with responses.RequestsMock() as rsps:
-            self._reply(rsps, {"status": "pending", "message_id": "m1",
+            self._reply(rsps, {"status": "unconfirmed", "message_id": "m1",
                                "timestamp": "t", "dialled": "60447450225230"})
-            with pytest.raises(WhatsAppError, match="60447450225230"):
-                WhatsAppClient().send_message("60447450225230", "Hi", "")
+            result = WhatsAppClient().send_message("60447450225230", "Hi", "")
+
+        assert result.dialled == "60447450225230"
 
 
 class TestTheScreenshotReachesWhatsApp:
@@ -1510,3 +1522,91 @@ class TestSeeingTheScreenshotBeforeSending:
 
         assert resp.status_code == 200
         assert resp.data == b"\x89PNG-bytes"
+
+
+class TestAnUnconfirmedSendStillCountsAsSent:
+    """The regression that stopped the queue.
+
+    Requiring a delivery acknowledgement turned working sends into errors:
+    WhatsApp confirms late often enough -- particularly a first message to a
+    new contact -- that within the eight-second window there is frequently
+    nothing to hear. The send stands; the uncertainty is reported.
+    """
+
+    def _send(self, monkeypatch, relay_reply):
+        from outreach import dashboard as dash
+        from outreach.providers.whatsapp import SendResult
+
+        written = {}
+
+        class FakeClient:
+            def __init__(self, port=4099):
+                pass
+
+            def send_message(self, phone, text, country="", image_path=None):
+                return SendResult(**relay_reply)
+
+        class FakeSheets:
+            def read_rows(self, tab):
+                return {}
+
+            def update_column(self, tab, column, values, **k):
+                written[column] = values
+                return 1
+
+        monkeypatch.setattr(dash, "_sheets_client", lambda c: FakeSheets())
+        import outreach.providers.whatsapp as wa
+
+        monkeypatch.setattr(wa, "WhatsAppClient", FakeClient)
+        client = _make_client(monkeypatch, sheets=FakeSheets())
+        resp = client.post(
+            "/api/whatsapp/send",
+            data=json.dumps(
+                {"lead_id": "L1", "phone": "012-345 6789",
+                 "phone_e164": "60123456789", "message": "Hi"}
+            ),
+            content_type="application/json",
+        )
+        return json.loads(resp.data), written
+
+    def test_it_is_not_reported_as_an_error(self, monkeypatch):
+        body, _written = self._send(
+            monkeypatch,
+            {"message_id": "m1", "status": "unconfirmed", "timestamp": "t",
+             "dialled": "60123456789",
+             "note": "WhatsApp has not confirmed delivery yet."},
+        )
+
+        assert "error" not in body, "an unconfirmed send is not a failure"
+        assert body["ok"] is True
+
+    def test_the_uncertainty_reaches_the_page(self, monkeypatch):
+        """Silently calling it sent would be the older bug returning."""
+        body, _written = self._send(
+            monkeypatch,
+            {"message_id": "m1", "status": "unconfirmed", "timestamp": "t",
+             "dialled": "60123456789",
+             "note": "WhatsApp has not confirmed delivery yet."},
+        )
+
+        assert "not confirmed" in body["note"]
+
+    def test_the_lead_is_marked_done_so_it_leaves_the_queue(self, monkeypatch):
+        """It was sent. Leaving it queued invites sending it twice."""
+        _body, written = self._send(
+            monkeypatch,
+            {"message_id": "m1", "status": "unconfirmed", "timestamp": "t",
+             "dialled": "60123456789", "note": "not confirmed"},
+        )
+
+        assert written["WhatsApp Status"] == {"L1": "unconfirmed"}
+
+    def test_a_confirmed_send_carries_no_note(self, monkeypatch):
+        body, _written = self._send(
+            monkeypatch,
+            {"message_id": "m1", "status": "sent", "timestamp": "t",
+             "dialled": "60123456789"},
+        )
+
+        assert body["status"] == "sent"
+        assert not body["note"]

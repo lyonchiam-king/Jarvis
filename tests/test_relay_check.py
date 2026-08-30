@@ -96,13 +96,19 @@ def test_sent_is_only_claimed_with_an_acknowledgement():
     assert '"pending"' in block, "an unacknowledged send must not be called sent"
 
 
-def test_the_recipient_is_checked_before_a_message_is_sent():
-    """WhatsApp accepts a message for any well-formed JID, so sending blind
-    to an unregistered number looks exactly like success."""
+def test_the_recipient_is_checked_but_the_check_does_not_block():
+    """The check is worth making and not worth failing on.
+
+    The queue only offers leads whose cached verdict is already yes, so a
+    live "no" at send time contradicts an earlier answer from the same API
+    and is more likely a hiccup than the truth. Refusing on it stopped
+    sending outright, so it is reported alongside the result instead.
+    """
     block = source().split('app.post("/send"', 1)[1].split("app.post(", 1)[0]
 
-    assert "onWhatsApp" in block
-    assert "not registered on WhatsApp" in block
+    assert "onWhatsApp" in block, "the check is still made"
+    assert "did not recognise" in block, "and reported"
+    assert "status: \"failed\"" not in block.split("unregistered")[-1][:400]
 
 
 def test_a_bad_attachment_never_costs_the_message():

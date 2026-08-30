@@ -54,11 +54,13 @@ class WhatsAppError(Exception):
 @dataclass(frozen=True)
 class SendResult:
     message_id: str
-    status: str  # "sent" | "pending" | "failed"
+    status: str  # "sent" | "unconfirmed" | "failed"
     timestamp: str
     # The digits the relay actually addressed. Surfaced so a wrong number is
     # visible in the Sheet rather than inferred from a message never arriving.
     dialled: str = ""
+    # Anything the relay wants the user to know without failing the send.
+    note: str = ""
 
 
 class WhatsAppClient:
@@ -173,22 +175,19 @@ class WhatsAppClient:
         status = data.get("status", "failed")
         if status == "failed":
             raise WhatsAppError(data.get("error", "Unknown relay error"))
-        if status == "pending":
-            # WhatsApp never acknowledged it. Reporting this as sent is what
-            # made a message that reached nobody look like a success, so it
-            # is raised -- the Sheet records a failure and the lead stays in
-            # the queue rather than being marked done.
-            raise WhatsAppError(
-                data.get("error")
-                or f"WhatsApp did not acknowledge the message to "
-                   f"{data.get('dialled', 'that number')}."
-            )
+        # "unconfirmed" means the relay sent it and WhatsApp has not said
+        # anything back yet. That was briefly treated as a failure, which
+        # stopped the queue: WhatsApp routinely confirms late, especially a
+        # first message to a new contact, so silence is missing evidence
+        # rather than evidence of nothing. The lead is marked done and the
+        # uncertainty is carried on the result for the page to show.
 
         return SendResult(
             message_id=data.get("message_id", ""),
             status=status,
             timestamp=data.get("timestamp", ""),
             dialled=data.get("dialled", ""),
+            note=data.get("note") or data.get("warning") or "",
         )
 
     # ------------------------------------------------------------------ check

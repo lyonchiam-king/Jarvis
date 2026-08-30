@@ -43,7 +43,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1008 tests, pytest, no CI -- the suite is the only gate
+tests/             1012 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -157,14 +157,16 @@ Chrome headless rather than adding Playwright: a 150MB browser download is a
 real cost to a non-programmer on Windows, and every Windows machine already
 has Edge. A zero exit code is not proof; bytes on disk are.
 
-**"Sent" must mean WhatsApp acknowledged it.** `sendMessage()` resolving only
-means the socket accepted the message; a half-open connection queues it,
-resolves, and transmits nothing -- so the dashboard reported success while
-the sender's own phone showed no chat at all. The relay waits for a server
-ack and reports `pending` otherwise, which the client raises, so the lead
-stays in the queue instead of being marked done. It also asks `onWhatsApp`
-before sending: WhatsApp accepts a message for any well-formed JID, so
-sending blind to an unregistered number is indistinguishable from success.
+**An acknowledgement is evidence, not a gate.** `sendMessage()` resolving
+only means the socket accepted the message, so the relay waits for a
+delivery ack -- but *requiring* one stopped the queue dead, because WhatsApp
+confirms late often enough (a first message to a new contact especially)
+that there is frequently nothing to hear inside the window. Silence is
+missing evidence, not evidence of nothing: the send stands, the status is
+`unconfirmed`, and the page says so. The `onWhatsApp` pre-send check is the
+same shape -- it reports, it does not refuse, since the queue only offers
+leads already cached as `yes` and a live `no` contradicting that is more
+likely a hiccup than the truth.
 
 **Normalise a number once, and only where its country is known.** The send
 path normalised twice -- in the dashboard queue with the lead's country, then

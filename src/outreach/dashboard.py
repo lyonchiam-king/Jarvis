@@ -1478,6 +1478,9 @@ def create_app(config: Config) -> Flask:
             shot = _shot_for(c, lead_row, lead_id) if lead_row is not None else None
 
             result = client.send_message(phone, message, send_country, shot)
+            # Carried through so the page can say "sent, not yet confirmed"
+            # rather than either lying or failing.
+            note = result.note
         except WhatsAppError as exc:
             # Record the failure so the user sees it in the Sheet.
             try:
@@ -1519,6 +1522,7 @@ def create_app(config: Config) -> Flask:
                 "ok": True,
                 "message_id": result.message_id,
                 "status": result.status,
+                "note": note,
                 "timestamp": result.timestamp,
             }
         )
@@ -2035,7 +2039,9 @@ async function loadWhatsAppInline() {
       if (sending) {
         actions = `<span class="wa-state"><span class="wa-spin"></span>Sending\\u2026</span>`;
       } else if (sent) {
-        actions = `<span class="wa-state ok">Sent \\u2714</span>`;
+        actions = m._note
+          ? `<span class="wa-state ok" title="${esc(m._note)}">Sent \\u2714 (not yet confirmed)</span>`
+          : `<span class="wa-state ok">Sent \\u2714</span>`;
       } else if (failed) {
         actions = `<span class="wa-state err">${esc(m._error || 'Failed')}</span>
           <button class="wa-send" onclick="retryWhatsApp(${i})">Retry</button>`;
@@ -2151,7 +2157,7 @@ function sendWhatsApp(idx, leadId, phone) {
   }).then(r => r.json()).then(d => {
     msg._sending = false;
     if (d.error) { msg._failed = true; msg._error = d.error; }
-    else { msg._sent = true; }
+    else { msg._sent = true; msg._note = d.note || ''; }
     loadWhatsAppInline();
     refresh();  // update counts
   }).catch(e => {

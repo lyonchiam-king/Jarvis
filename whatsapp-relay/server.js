@@ -253,15 +253,12 @@ app.post("/send", async (req, res) => {
         // A failed check is not proof of absence, so the send still goes.
         logger.warn({ err, phone }, "Pre-send check failed; sending anyway");
       }
-      if (registered === false) {
-        lastSendTime = Date.now();
-        return res.json({
-          status: "failed",
-          error: `${digits} is not registered on WhatsApp`,
-          dialled: digits,
-          timestamp: new Date().toISOString(),
-        });
-      }
+      // Deliberately does not block. The queue only offers leads whose
+      // cached verdict is already "yes", so a live "no" here contradicts an
+      // earlier answer from the same API and is far more likely a hiccup
+      // than the truth -- and refusing on it stops the send outright. It is
+      // reported alongside the result instead.
+      const unregistered = registered === false;
 
       let payload = { text: message };
       if (image) {
@@ -285,16 +282,25 @@ app.post("/send", async (req, res) => {
       // returned. Without an ack the honest answer is "pending": the message
       // may be sitting in a socket that never transmitted it.
       const ack = await waitForAck(key?.id);
+      // An ack is evidence, not a gate. WhatsApp does not always emit
+      // messages.update promptly -- a first message to a new contact often
+      // confirms late -- and treating silence as failure turned working
+      // sends into errors and stopped the queue dead. Report what is known:
+      // "sent" when confirmed, "unconfirmed" when the message left but
+      // nothing came back yet. Neither is a failure.
       res.json({
-        status: ack === null ? "pending" : "sent",
+        status: ack === null ? "unconfirmed" : "sent",
         message_id: key?.id || "",
         dialled: digits,
         ack: ack,
-        error:
+        warning: unregistered
+          ? `WhatsApp did not recognise ${digits} just now, though it was `
+            + "confirmed earlier. The message was still sent."
+          : undefined,
+        note:
           ack === null
-            ? "WhatsApp did not acknowledge this message. It may not have left "
-              + "the relay -- check the relay is still paired, then look for the "
-              + "chat on your phone before resending."
+            ? "WhatsApp has not confirmed delivery yet. The message was "
+              + "accepted; check the chat on your phone if it matters."
             : undefined,
         timestamp: new Date().toISOString(),
       });
