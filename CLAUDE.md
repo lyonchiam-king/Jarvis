@@ -45,7 +45,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1029 tests, pytest, no CI -- the suite is the only gate
+tests/             1032 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -121,6 +121,14 @@ Lyon runs Ollama. New spec fields go in `properties` but not `required`, with
 the prompt block rendered conditionally, so a model that skips one produces
 the previous prompt rather than a broken one. `layout_system` is the worked
 example.
+
+**A Pages deployment is a snapshot, not an addition.** Uploading one
+business's folder would publish a site containing only that business, and
+every page published before it would vanish from the main address. The whole
+sites repo goes up in one deployment and each business keeps a stable path,
+`<base>/<slug>/`. Workers is the wrong tool here for the same reason it is
+the wrong shape: these are static pages with no logic to run, and routing
+them by hand would be work Pages does for nothing.
 
 **A site can exist only at a URL.** Pages this pipeline generates sit on
 disk, but one built in Google AI Studio or Lovable exists only at its

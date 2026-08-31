@@ -86,7 +86,57 @@ class TestChoosingWhatToPublish:
         report = publish.run(config(tmp_path), sheets, cf)
 
         assert report.published == 1
-        assert cf.published == [("coai-sites", site_slug("Salon A", "a"))]
+        # The whole repo, not one business's folder -- see the test below.
+        assert cf.published == [("coai-sites", tmp_path.name)]
+
+    def test_the_whole_repo_is_uploaded_not_one_business(self, tmp_path):
+        """A Pages deployment is a snapshot of the site, not an addition to
+        it. Uploading a single business would produce a live site containing
+        only that business, and every page published before it would vanish
+        from the main address."""
+        make_site(tmp_path, "Salon A", "a")
+        make_site(tmp_path, "Salon B", "b")
+        leads = {
+            "a": (2, {"Lead ID": "a", "Business Name": "Salon A"}),
+            "b": (3, {"Lead ID": "b", "Business Name": "Salon B"}),
+        }
+        briefs = {
+            k: (i + 2, {"Lead ID": k, "Approval Status": "Approved",
+                        "Preview URL": ""})
+            for i, k in enumerate(("a", "b"))
+        }
+        cf = FakeCloudflare()
+
+        publish.run(config(tmp_path), FakeSheets(leads, briefs), cf)
+
+        assert len(cf.published) == 1, "one upload covers every waiting lead"
+        assert cf.published[0][1] == tmp_path.name
+
+    def test_each_business_gets_its_own_path_under_one_project(self, tmp_path):
+        make_site(tmp_path, "Salon A", "a")
+        sheets = FakeSheets(*rows())
+
+        publish.run(config(tmp_path), sheets, FakeCloudflare())
+
+        _tab, _col, values = sheets.column_writes[0]
+        assert values["a"] == (
+            f"https://coai-sites.pages.dev/{site_slug('Salon A', 'a')}/"
+        )
+
+    def test_a_custom_domain_is_used_when_set(self, tmp_path):
+        """So the demo link can be a COAI address rather than pages.dev."""
+        from dataclasses import replace
+
+        cfg = config(tmp_path)
+        cfg = replace(cfg, build=replace(cfg.build,
+                                         public_base_url="https://demos.coai.international"))
+        make_site(tmp_path, "Salon A", "a")
+        sheets = FakeSheets(*rows())
+
+        publish.run(cfg, sheets, FakeCloudflare())
+
+        _tab, _col, values = sheets.column_writes[0]
+        assert values["a"].startswith("https://demos.coai.international/")
 
     def test_an_unapproved_site_is_left_alone(self, tmp_path):
         make_site(tmp_path, "Salon A", "a")
@@ -129,22 +179,17 @@ class TestChoosingWhatToPublish:
         assert tab is schema.SITE_BRIEFS and column == "Preview URL"
         assert values["a"].startswith("https://")
 
-    def test_one_failure_does_not_stop_the_rest(self, tmp_path):
+    def test_a_failed_upload_writes_no_urls_at_all(self, tmp_path):
+        """One upload serves every waiting lead, so if it fails nobody got a
+        page. Recording addresses anyway would put dead links in messages."""
         make_site(tmp_path, "Salon A", "a")
-        make_site(tmp_path, "Salon B", "b")
-        leads = {
-            "a": (2, {"Lead ID": "a", "Business Name": "Salon A"}),
-            "b": (3, {"Lead ID": "b", "Business Name": "Salon B"}),
-        }
-        briefs = {
-            k: (i + 2, {"Lead ID": k, "Approval Status": "Approved", "Preview URL": ""})
-            for i, k in enumerate(("a", "b"))
-        }
-        cf = FakeCloudflare(fail={site_slug("Salon A", "a")})
+        sheets = FakeSheets(*rows())
+        cf = FakeCloudflare(fail={tmp_path.name})
 
-        report = publish.run(config(tmp_path), FakeSheets(leads, briefs), cf)
+        report = publish.run(config(tmp_path), sheets, cf)
 
-        assert report.failed == 1 and report.published == 1
+        assert report.failed == 1 and report.published == 0
+        assert sheets.column_writes == [], "no URL may be written for a failed publish"
 
 
 class TestSettingsThatAreNotReadyYet:

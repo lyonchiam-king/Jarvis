@@ -79,10 +79,14 @@ def site_files(folder: Path) -> list[Path]:
             f"Nothing publishable in {folder}. A site needs at least an "
             "index.html."
         )
+    # Somewhere in the tree, not necessarily at the top: the whole sites
+    # repo is published in one go, with each business in its own folder, so
+    # the root is a directory of sites rather than a site itself.
     if not any(p.name.lower() == "index.html" for p in out):
         raise CloudflareError(
-            f"{folder} has no index.html, so Cloudflare would serve nothing "
-            "at the site's address."
+            f"{folder} contains no index.html anywhere, so Cloudflare would "
+            "serve nothing. Check the folder is the sites repo and that AI "
+            "Studio has pushed at least one site into it."
         )
     return out
 
