@@ -858,6 +858,69 @@ def shot_check(ctx: click.Context, source: str) -> None:
     click.echo("Screenshots work. Open that file to check it looks right.")
 
 
+@main.command("whatsapp-send-test")
+@click.argument("number")
+@click.option("--text", default="Test from Jarvis. Ignore this.", help="What to send.")
+@click.option("--image", default="", help="Optional path to a picture to attach.")
+@click.pass_context
+def whatsapp_send_test(ctx: click.Context, number: str, text: str, image: str) -> None:
+    """Send one message through the real relay and print exactly what came back.
+
+    Aim it at your own number. It uses the same path the dashboard uses --
+    the same normalisation, the same relay call -- so whatever it prints is
+    what the Send button is doing, without a Sheet or a queue in the way.
+
+        outreach whatsapp-send-test +60123456789
+    """
+    import json as _json
+
+    from . import phone as phone_lib
+    from .providers.whatsapp import WhatsAppClient, WhatsAppError
+
+    config = _load(ctx.obj["config_path"])
+    client = WhatsAppClient(port=config.outreach.whatsapp_relay_port)
+
+    status = client.get_status()
+    click.echo(f"Relay:    {'connected' if status.get('connected') else 'NOT connected'}")
+    if not status.get("connected"):
+        click.echo(f"          {_json.dumps(status)[:200]}")
+        raise click.ClickException(
+            "The relay is not connected. Start Dashboard.bat and scan the QR "
+            "code, then run this again."
+        )
+
+    home = config.compliance.country_code
+    dialled = phone_lib.normalise(number, phone_lib.resolve_country(number, home))
+    click.echo(f"Dialling: {dialled or '(could not resolve a country)'}")
+    if not dialled:
+        raise click.ClickException(
+            "Pass the number in full international form, e.g. +60123456789."
+        )
+
+    try:
+        # country="" -- the number is already E.164, exactly as the dashboard
+        # sends it, so this exercises the same path rather than a tidier one.
+        result = client.send_message(dialled, text, "", image or None)
+    except WhatsAppError as exc:
+        click.echo("")
+        raise click.ClickException(f"The relay refused it: {exc}")
+
+    click.echo("")
+    click.echo(f"Status:   {result.status}")
+    click.echo(f"Message:  {result.message_id or '(none returned)'}")
+    if result.note:
+        click.echo(f"Note:     {result.note}")
+    click.echo("")
+    if result.status == "sent":
+        click.echo("WhatsApp confirmed delivery. Check the chat on your phone.")
+    else:
+        click.echo(
+            "The relay accepted it but WhatsApp has not confirmed yet. Look "
+            "for the chat on your phone -- if it is there, sending works and "
+            "only the confirmation is slow."
+        )
+
+
 @main.command("whatsapp-probe")
 @click.argument("numbers", nargs=-1, required=True)
 @click.pass_context

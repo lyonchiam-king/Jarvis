@@ -1907,9 +1907,24 @@ function card(n, label, note) {
     <div class="sub">${note}</div></div>`;
 }
 
+// A panel that cannot reach the server must say so. Returning quietly
+// leaves it on "Loading..." for ever, which reads as the whole dashboard
+// being broken with nothing at all to go on -- and the server is usually
+// fine, having simply been stopped or not started.
+function panelDead(sel, what) {
+  const el = $(sel);
+  if (el) {
+    el.innerHTML = '<div class="card"><span class="err">Cannot reach the '
+      + 'dashboard server for ' + esc(what) + '.</span>'
+      + '<p class="hint">The page is open but nothing is answering it. '
+      + 'Check the Dashboard.bat window is still running, then reload. '
+      + 'If it closed, the error will be in that window.</p></div>';
+  }
+}
+
 async function refresh() {
   let d;
-  try { d = await (await fetch('/api/summary')).json(); } catch { return; }
+  try { d = await (await fetch('/api/summary')).json(); } catch { panelDead('#totals', 'the totals'); return; }
 
   if (d.error) {
     $('#totals').innerHTML = `<span class="err">${esc(d.error)}</span>`;
@@ -2259,7 +2274,7 @@ bindRunButtons();
 let modelInfo = null;
 
 async function loadModel() {
-  try { modelInfo = await (await fetch('/api/model')).json(); } catch { return; }
+  try { modelInfo = await (await fetch('/api/model')).json(); } catch { panelDead('#model', 'the model settings'); return; }
   drawModel();
 }
 
@@ -2368,7 +2383,7 @@ async function loadNextUp() {
   let d;
   const want = parseInt($('#howmany') && $('#howmany').value, 10);
   const q = want > 0 ? ('?limit=' + want) : '';
-  try { d = await (await fetch('/api/next-up' + q)).json(); } catch { return; }
+  try { d = await (await fetch('/api/next-up' + q)).json(); } catch { panelDead('#nextup', 'what needs you today'); return; }
   const el = $('#nextup');
   if (!el || d.error || !d.queues) { if (el) el.innerHTML = ''; return; }
 
@@ -2426,7 +2441,7 @@ async function dropLead(leadId, btn) {
 let target = null;
 
 async function loadTarget() {
-  try { target = await (await fetch('/api/campaign')).json(); } catch { return; }
+  try { target = await (await fetch('/api/campaign')).json(); } catch { panelDead('#target', 'the campaign'); return; }
   drawTarget();
 }
 
@@ -2730,7 +2745,8 @@ async function decide(decision) {
 async function loadReach() {
   const el = $('#reach');
   let d;
-  try { d = await (await fetch('/api/reachability')).json(); } catch { return; }
+  try { d = await (await fetch('/api/reachability')).json(); }
+  catch { panelDead('#reach', 'the WhatsApp check'); return; }
   if (d.error) { el.innerHTML = `<span class="err">${esc(d.error)}</span>`; return; }
 
   const c = d.counts || {};
