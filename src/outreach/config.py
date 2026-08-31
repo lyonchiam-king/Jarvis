@@ -251,6 +251,13 @@ class BuildSettings:
     # Seconds to wait for one page. Deliberately short: the picture is
     # optional and a slow one must never make a run look frozen.
     screenshot_timeout: float = 20.0
+    # Where the sites live once AI Studio has pushed them to GitHub: a local
+    # clone of that repository, with one folder per business. Jarvis reads
+    # from it and never writes to it -- what is in git stays git's.
+    sites_repo_dir: str = ""
+    # The Cloudflare Pages project every site is published under. One
+    # project serves them all, each at its own path.
+    cloudflare_project: str = ""
     url_context: bool = False
     public_base_url: str = ""
     max_versions: int = 5
@@ -286,6 +293,10 @@ class Secrets:
     # which needs none.
     llm_api_key: str = ""
     gemini_api_key: str = ""
+    # Cloudflare Pages. The token is a secret and lives in .env; the
+    # project and the repo folder are settings and live in the campaign.
+    cloudflare_api_token: str = ""
+    cloudflare_account_id: str = ""
     firebase_site_id: str = ""
     firebase_project_id: str = ""
     firebase_service_account_file: str = ""
@@ -583,6 +594,8 @@ def load_config(
         screenshot=bool(b.get("screenshot", True)),
         screenshot_browser=str(b.get("screenshot_browser", "")),
         screenshot_timeout=float(b.get("screenshot_timeout", 20.0)),
+        sites_repo_dir=str(b.get("sites_repo_dir", "")),
+        cloudflare_project=str(b.get("cloudflare_project", "")),
         url_context=bool(b.get("url_context", False)),
         public_base_url=str(b.get("public_base_url", "")),
         max_versions=int(b.get("max_versions", 5)),
@@ -619,6 +632,8 @@ def load_config(
             PROVIDER_KEY_ENV.get(provider, "ANTHROPIC_API_KEY"), ""
         ),
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+        cloudflare_api_token=os.getenv("CLOUDFLARE_API_TOKEN", ""),
+        cloudflare_account_id=os.getenv("CLOUDFLARE_ACCOUNT_ID", ""),
         firebase_site_id=os.getenv("FIREBASE_SITE_ID", ""),
         firebase_project_id=os.getenv("FIREBASE_PROJECT_ID", ""),
         firebase_service_account_file=os.getenv(

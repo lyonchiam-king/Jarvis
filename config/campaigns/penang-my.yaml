@@ -172,6 +172,14 @@ lovable:
   auto_approve: false
 
 build:
+  # Publishing to Cloudflare Pages. The sites are built in Google AI Studio
+  # and pushed from there into a GitHub repository; point this at your local
+  # clone of it, with one folder per business. Jarvis only ever reads it.
+  #   sites_repo_dir: "C:/Users/you/coai-sites"
+  # The Pages project they are all published under -- run
+  # `outreach cloudflare-check` to see the names on your account.
+  #   cloudflare_project: "coai-sites"
+  # CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID go in .env, not here.
   # Which pipeline builds the demo site.
   #   lovable   the OAuth/MCP path above -- the one running today.
   #   firebase  fully automated: Gemini writes one self-contained HTML file

@@ -36,14 +36,16 @@ src/outreach/
   campaign_edit.py surgical YAML rewriting that preserves comments
   env_edit.py      writes keys into .env without ever reading them back
   modelcheck.py    proves a model can produce every required shape
-  stages/          discovery, research, site_brief, outreach_draft
-  providers/       places, sheets auth, llm, social, web, lovable, sitegen
+  stages/          discovery, research, reachability, site_brief,
+                   outreach_draft, publish
+  providers/       places, sheets auth, llm, social, web, lovable, sitegen,
+                   whatsapp, cloudflare
   images.py        generated page imagery -- mood and texture, never the premises
   sitecheck.py     refuses a generated page that would embarrass you
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1017 tests, pytest, no CI -- the suite is the only gate
+tests/             1029 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs

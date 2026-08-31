@@ -812,6 +812,78 @@ def run_research(ctx: click.Context, limit: int | None, social_first: bool | Non
     _echo_sheet_link(config)
 
 
+@main.command("cloudflare-check")
+@click.option("--folder", default="", help="A site folder to dry-run the file list for.")
+@click.pass_context
+def cloudflare_check(ctx: click.Context, folder: str) -> None:
+    """Prove the Cloudflare connection before anything is published.
+
+    Checks the token and account id, lists the Pages projects they can see,
+    and -- with --folder -- shows exactly which files a publish would upload
+    without uploading anything.
+    """
+    from pathlib import Path
+
+    from .providers.cloudflare import CloudflareClient, CloudflareError, site_files
+
+    config = _load(ctx.obj["config_path"])
+
+    click.echo(f"Campaign config  {ctx.obj['config_path'] or '(default)'}")
+    click.echo(
+        f"[{'OK' if config.secrets.cloudflare_api_token else '  '}] "
+        "CLOUDFLARE_API_TOKEN"
+    )
+    click.echo(
+        f"[{'OK' if config.secrets.cloudflare_account_id else '  '}] "
+        "CLOUDFLARE_ACCOUNT_ID"
+    )
+
+    if folder:
+        # Deliberately first, and offline: a wrong folder is the likeliest
+        # mistake and costs nothing to catch here.
+        try:
+            files = site_files(Path(folder))
+        except CloudflareError as exc:
+            raise click.ClickException(str(exc))
+        click.echo("")
+        click.echo(f"Would publish {len(files)} file(s) from {folder}:")
+        for path in files[:20]:
+            click.echo(f"  {path.relative_to(Path(folder)).as_posix()}")
+        if len(files) > 20:
+            click.echo(f"  ... and {len(files) - 20} more")
+
+    try:
+        client = CloudflareClient(
+            config.secrets.cloudflare_api_token,
+            config.secrets.cloudflare_account_id,
+        )
+        projects = client.list_projects()
+    except CloudflareError as exc:
+        raise click.ClickException(str(exc))
+    except Exception as exc:  # noqa: BLE001 -- the raw failure is the point
+        raise click.ClickException(f"{type(exc).__name__}: {exc}")
+
+    click.echo("")
+    click.echo("[ OK ] Cloudflare answered. Pages projects on this account:")
+    for name in projects or ["(none yet -- create one in the Cloudflare dashboard)"]:
+        click.echo(f"  {name}")
+
+    wanted = config.build.cloudflare_project
+    click.echo("")
+    if not wanted:
+        click.echo(
+            "Set build.cloudflare_project to one of those names, then run "
+            "this again."
+        )
+    elif wanted in projects:
+        click.echo(f"[ OK ] build.cloudflare_project is {wanted}, and it exists.")
+    else:
+        click.echo(
+            f"build.cloudflare_project is {wanted!r}, which is not in that "
+            "list. Publishing would fail."
+        )
+
+
 @main.command("shot-check")
 @click.argument("source", required=False, default="")
 @click.pass_context
@@ -974,6 +1046,33 @@ def whatsapp_probe(ctx: click.Context, numbers: tuple[str, ...]) -> None:
         "                     If those digits are the ones that work on your\n"
         "                     phone, the lookup is at fault, not the number."
     )
+
+
+@run.command("publish")
+@click.option("--limit", type=int, default=0, help="Publish fewer than all of them.")
+@click.pass_context
+def run_publish(ctx: click.Context, limit: int) -> None:
+    """Put approved sites on Cloudflare and record their addresses.
+
+    Reads each site out of your local clone of the repository AI Studio
+    pushes to, uploads it, and writes the URL back to the Sheet. It never
+    writes to the repository.
+    """
+    from .providers.cloudflare import CloudflareError
+    from .stages import publish as publish_stage
+
+    config = _load(ctx.obj["config_path"])
+    sheets = _sheets_client(config)
+
+    try:
+        report = publish_stage.run(config, sheets, limit=limit)
+    except CloudflareError as exc:
+        raise click.ClickException(str(exc))
+
+    click.echo("")
+    for line in report.lines():
+        click.echo(line)
+    click.echo("")
 
 
 @run.command("reachability")

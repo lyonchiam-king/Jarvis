@@ -52,6 +52,7 @@ STAGE_COMMANDS = {
     "site-brief-rewrite": ["run", "site-brief", "--rewrite"],
     "site-build": ["run", "site-build"],
     "site-generate": ["run", "site-generate"],
+    "publish": ["run", "publish"],
     "outreach-draft": ["run", "outreach-draft"],
     "preflight": ["preflight"],
     "test-model": ["test-model"],
@@ -65,6 +66,7 @@ FULL_RUN = ["discovery", "research", "site-brief", "outreach-draft"]
 # number would be meaningless there.
 TAKES_LIMIT = {
     "discovery",
+    "publish",
     "discovery-refresh",
     "research",
     "reachability",
@@ -1809,6 +1811,7 @@ PAGE = """<!doctype html>
         <button data-run="reachability-recheck">Re-check WhatsApp</button>
         <button data-run="site-brief">Write briefs</button>
         <button data-run="site-build">Build approved</button>
+        <button data-run="publish">Publish to Cloudflare</button>
         <button data-run="outreach-draft">Draft messages</button>
       </div>
       <p class="hint"><b>How many</b> above applies to these too &mdash; set it to
