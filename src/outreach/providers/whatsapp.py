@@ -159,9 +159,26 @@ class WhatsAppClient:
                 "WhatsApp relay is not running. Start it with Dashboard.bat "
                 "or run: node whatsapp-relay/server.js"
             )
+        except ValueError:
+            # Not JSON. Express answers its own errors in HTML, so the status
+            # is the only thing worth reporting.
+            raise WhatsAppError(
+                f"The relay answered {resp.status_code} with something that "
+                "is not a reply. Check the relay window for the error."
+            )
         except Exception as exc:
             raise WhatsAppError(f"Relay request failed: {exc}")
 
+        if resp.status_code == 413:
+            # The picture pushed the request past what the relay accepts.
+            # This arrived as an unparseable error page and was reported as
+            # a transport failure, which said nothing about the size -- and
+            # the size was the whole problem.
+            raise WhatsAppError(
+                "The message and its screenshot are too large for the relay. "
+                "The text alone would send: remove the picture, or raise "
+                "MAX_BODY in the relay's environment."
+            )
         if resp.status_code == 429:
             raise WhatsAppError(
                 f"Daily cap reached: {data.get('error', 'too many messages')}"

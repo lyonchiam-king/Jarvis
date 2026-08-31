@@ -43,7 +43,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1012 tests, pytest, no CI -- the suite is the only gate
+tests/             1017 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -156,6 +156,14 @@ having written nothing -- ends with the text still sending. It drives Edge or
 Chrome headless rather than adding Playwright: a 150MB browser download is a
 real cost to a non-programmer on Windows, and every Windows machine already
 has Edge. A zero exit code is not proof; bytes on disk are.
+
+**A relay body limit is a feature's real constraint.** `express.json()`
+defaults to 100kb. A text message never approached it and a 900x1200 PNG
+always exceeds it -- base64 adds a third on top -- so Express answered 413
+before the send route ran, and sending broke the day messages started
+carrying a picture. The limit is explicit now, and an oversized body comes
+back as JSON naming the screenshot rather than Express's HTML error page,
+which the client could only report as a transport failure.
 
 **An acknowledgement is evidence, not a gate.** `sendMessage()` resolving
 only means the socket accepted the message, so the relay waits for a

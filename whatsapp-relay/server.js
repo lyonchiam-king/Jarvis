@@ -162,7 +162,27 @@ async function connect() {
 // ---------------------------------------------------------------------------
 
 const app = express();
-app.use(express.json());
+// The default body limit is 100kb, which a text message never approached
+// and a screenshot always exceeds: a 900x1200 PNG is a few hundred KB and
+// base64 adds a third on top. Express rejected those requests with 413
+// before the send route ran at all, so sending worked perfectly until the
+// day messages started carrying a picture.
+app.use(express.json({ limit: process.env.MAX_BODY || "25mb" }));
+
+// A body that is still too large must not come back as Express's HTML
+// error page, which the caller cannot parse and reports as a transport
+// failure -- saying nothing about the size being the problem.
+app.use((err, _req, res, next) => {
+  if (err && (err.type === "entity.too.large" || err.status === 413)) {
+    return res.status(413).json({
+      status: "failed",
+      error:
+        "The message and its picture are larger than the relay accepts. "
+        + "Send without the screenshot, or raise MAX_BODY.",
+    });
+  }
+  return next(err);
+});
 
 // GET /status — connection state + daily counters
 app.get("/status", (_req, res) => {

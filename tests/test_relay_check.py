@@ -118,3 +118,27 @@ def test_a_bad_attachment_never_costs_the_message():
 
     assert "caption" in block, "the text must travel with the image"
     assert "sending text only" in block, "a bad image must fall back, not throw"
+
+
+def test_the_body_limit_is_large_enough_for_a_screenshot():
+    """The bug that stopped sending the day pictures were added.
+
+    express.json() defaults to a 100kb body. A text message never came near
+    it; a 900x1200 PNG always exceeds it, and base64 adds a third on top. So
+    Express rejected the request with 413 before the send route ran, and
+    sending -- which had worked perfectly for weeks -- broke the moment a
+    message started carrying a picture.
+    """
+    text = source()
+
+    assert "express.json()" not in text, "the default 100kb limit is too small"
+    assert "limit:" in text, "the body limit must be set explicitly"
+
+
+def test_an_oversized_body_answers_json_not_an_html_error_page():
+    """Express's own 413 page is unparseable by the caller, which reported
+    it as a transport failure and said nothing about size."""
+    text = source()
+
+    assert "entity.too.large" in text
+    assert "larger than the relay accepts" in text

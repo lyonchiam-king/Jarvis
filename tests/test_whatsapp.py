@@ -1610,3 +1610,39 @@ class TestAnUnconfirmedSendStillCountsAsSent:
 
         assert body["status"] == "sent"
         assert not body["note"]
+
+
+class TestAnOversizedSendIsExplained:
+    """413 used to surface as "Relay request failed: Expecting value...",
+    which named the JSON parser rather than the picture that caused it."""
+
+    def test_a_413_names_the_screenshot_as_the_cause(self):
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST, "http://127.0.0.1:4099/send",
+                status=413,
+                json={"status": "failed", "error": "too large"},
+            )
+            with pytest.raises(WhatsAppError, match="too large for the relay"):
+                WhatsAppClient().send_message("60123456789", "Hi", "")
+
+    def test_it_says_the_text_alone_would_work(self):
+        """So there is an action, not just a diagnosis."""
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST, "http://127.0.0.1:4099/send",
+                status=413, json={"error": "too large"},
+            )
+            with pytest.raises(WhatsAppError, match="text alone would send"):
+                WhatsAppClient().send_message("60123456789", "Hi", "")
+
+    def test_a_non_json_reply_reports_the_status_not_a_parser_error(self):
+        """Express answers its own errors in HTML."""
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST, "http://127.0.0.1:4099/send",
+                status=500, body="<!DOCTYPE html><title>Error</title>",
+                content_type="text/html",
+            )
+            with pytest.raises(WhatsAppError, match="answered 500"):
+                WhatsAppClient().send_message("60123456789", "Hi", "")
