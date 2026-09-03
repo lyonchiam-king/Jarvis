@@ -10,6 +10,7 @@
  */
 
 const express = require("express");
+const fs = require("fs");
 const {
   makeWASocket,
   useMultiFileAuthState,
@@ -150,6 +151,12 @@ async function connect() {
       } else {
         qrCode = null;
         console.log("[whatsapp-relay] Logged out — waiting for new QR scan");
+        // The session on disk is dead: WhatsApp answers its credentials with
+        // 401 before the QR flow can begin, so while they stay on disk every
+        // reconnect replays them and is rejected again -- the relay sits here
+        // claiming to wait for a scan it can never offer. Wipe them so the
+        // reconnect below starts genuinely fresh and a QR actually appears.
+        fs.rmSync(AUTH_DIR, { recursive: true, force: true });
         // Reconnect anyway so a new QR is generated.
         setTimeout(connect, 5000);
       }

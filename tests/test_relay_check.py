@@ -142,3 +142,20 @@ def test_an_oversized_body_answers_json_not_an_html_error_page():
 
     assert "entity.too.large" in text
     assert "larger than the relay accepts" in text
+
+
+def test_a_logged_out_session_is_wiped_before_reconnecting():
+    """A revoked session must be removed, not replayed.
+
+    WhatsApp answers the dead credentials with 401 before the QR flow can
+    begin, so while the stale auth folder stays on disk the relay loops
+    forever logging that it is "waiting for new QR scan" while never
+    offering one -- the dashboard shows nothing, and re-pairing is
+    impossible without a hand-wiped session directory.
+    """
+    block = source().split("Logged out", 1)[1].split("setTimeout(connect, 5000)", 1)[0]
+
+    assert "rmSync" in block, (
+        "the logged-out path must wipe the stale auth state before "
+        "reconnecting, or the 401 loop never offers a QR"
+    )
