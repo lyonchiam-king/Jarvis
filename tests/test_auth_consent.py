@@ -104,6 +104,7 @@ class TestNonInteractiveCredentials:
 
     def test_the_cli_default_still_allows_consent(self, tmp_path, monkeypatch):
         """The terminal path is unchanged -- somebody is watching it."""
+        waited = []
         token = _token(tmp_path, refresh_token=None)
         client = tmp_path / "client.json"
         client.write_text("{}", encoding="utf-8")
@@ -113,8 +114,11 @@ class TestNonInteractiveCredentials:
             def from_client_secrets_file(path, scopes):
                 return FakeFlow()
 
-            def run_local_server(self, port=0):
+            # Mirrors the real signature: a fake that refused the keyword
+            # the production call passes would fail for the wrong reason.
+            def run_local_server(self, port=0, timeout_seconds=None):
                 from google.oauth2.credentials import Credentials
+                waited.append(timeout_seconds)
                 return Credentials(
                     token="consented",
                     refresh_token="r-2",
@@ -128,3 +132,39 @@ class TestNonInteractiveCredentials:
 
         creds = auth.get_credentials(client, token)
         assert creds.token == "consented"
+        # Unbounded in the terminal on purpose: somebody is sitting there,
+        # and cutting their sign-in short mid-flow helps nobody.
+        assert waited == [None]
+
+    def test_a_bounded_consent_that_times_out_says_what_to_do(
+        self, tmp_path, monkeypatch
+    ):
+        """The dashboard's first-run button has to allow consent -- there is
+        no token yet -- so it bounds the wait instead. What comes back has to
+        be readable by someone who just closed the wrong tab, not a
+        WSGITimeoutError."""
+        token = _token(tmp_path, refresh_token=None)
+        client = tmp_path / "client.json"
+        client.write_text("{}", encoding="utf-8")
+
+        class TimingOutFlow:
+            @staticmethod
+            def from_client_secrets_file(path, scopes):
+                return TimingOutFlow()
+
+            def run_local_server(self, port=0, timeout_seconds=None):
+                assert timeout_seconds == 5, "the bound must reach the flow"
+                raise auth.WSGITimeoutError(
+                    "Timed out waiting for response from authorization server"
+                )
+
+        monkeypatch.setattr(auth, "InstalledAppFlow", TimingOutFlow)
+
+        with pytest.raises(auth.AuthError) as exc:
+            auth.get_credentials(client, token, consent_timeout=5)
+
+        message = str(exc.value)
+        assert "never finished" in message
+        assert "Press the button again" in message
+        # Not the library's wording, which reads like a server fault.
+        assert "WSGITimeout" not in message

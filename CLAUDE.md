@@ -45,7 +45,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1032 tests, pytest, no CI -- the suite is the only gate
+tests/             1042 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -285,6 +285,23 @@ raise.
 because Lyon asked for it. Within that, sheet order is preserved -- a queue he
 can predict beats a marginally better-sorted one. Anything else goes behind
 `research.order` as an opt-in.
+
+**The first thing a new user does must not be a manual step.** Setup asked
+someone who is not a programmer to create a spreadsheet by hand, find its ID
+inside a web address, and paste it into a file -- three chances to fail before
+anything worked, and the one step nobody could be talked through over a
+message. Signing in already proves whose Google account it is, so
+`/api/create-sheet` makes the Sheet in *their* Drive, adds every tab, and
+writes `SHEET_ID` itself. It refuses once a Sheet exists: a second, empty one
+would make every lead already gathered look lost.
+
+**Consent in a request thread must be bounded.** `run_local_server` opens a
+browser and blocks until somebody finishes -- forever, if they close the tab.
+Everywhere the dashboard reuses an existing token it passes
+`allow_consent=False`, but the first-run button cannot: there is no token yet.
+It passes `consent_timeout` instead, so an abandoned sign-in becomes an error
+on the page and a button they can press again, rather than a panel that
+quietly stops answering.
 
 **Secrets are write-only.** `env_edit.set_key` writes; `is_set` reports presence
 and never the value. No key is ever echoed to a page, a log, or a report.

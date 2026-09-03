@@ -79,20 +79,35 @@ You also need a model key, either:
 
 ---
 
-## 5. Put the keys in
+## 5. Make your own Sheet
 
 Double-click `Dashboard.bat` again. This time the dashboard opens in your
-browser.
+browser, and the first thing on the page is a short setup list.
 
-Use the **Settings** panel on the page to paste your keys. You do not need
-to edit any file -- the page writes them for you.
+Press **Create my Google Sheet**. A Google window opens; sign in with your
+own account and allow access. The spreadsheet is made **in your Drive**,
+with all five tabs already set up, and the dashboard remembers it. You never
+have to create a spreadsheet or copy an ID out of a web address.
+
+> If you close that Google window without finishing, nothing is created.
+> Just press the button again.
+
+Your leads live in that Sheet. Nobody else can see it -- not Lyon, not
+anyone you got this from.
+
+---
+
+## 6. Put the keys in
+
+Use the **Settings** and **Model** panels on the page to paste your keys.
+You do not need to edit any file -- the page writes them for you.
 
 Then press **Check setup**. It tells you, in plain English, anything still
 missing. Keep fixing until it is happy.
 
 ---
 
-## 6. Connect your WhatsApp
+## 7. Connect your WhatsApp
 
 In section 4 of the dashboard, a **QR code** appears.
 
@@ -104,7 +119,7 @@ only do this once.
 
 ---
 
-## 7. Your first run
+## 8. Your first run
 
 Set **How many** to `5` -- small, so a mistake is cheap.
 

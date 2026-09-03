@@ -70,6 +70,35 @@ build if anyone ever changes that binding.
 
 ---
 
+## Giving it to someone else
+
+Everything in this tool is per-person. Someone you hand it to runs their own
+copy end to end: their Google account, their Sheet, their keys, their
+WhatsApp. Nothing is shared, and nothing of theirs comes back to you.
+
+Send them the folder (or the repository) and `SETUP.md`. **Never send your
+`.env`, your `credentials/` folder, or your `.whatsapp-session/` folder** —
+those are your keys, your Google account and your WhatsApp, and anyone
+holding them can spend your money and message as you.
+
+On their first run the dashboard opens onto a short setup list instead of the
+usual numbers:
+
+1. **Their own Google Sheet.** They press **Create my Google Sheet**, sign in
+   with their own Google account, and the spreadsheet is created in *their*
+   Drive with all five tabs already set up. The ID is saved for them — no
+   spreadsheet to make by hand, no ID to copy out of a web address. If they
+   close the Google window without finishing, nothing is created and they can
+   just press it again.
+2. **Their own keys.** Pasted into the Settings and Model panels on the page.
+3. **Their own WhatsApp.** Section 4 shows a QR code; they scan it from
+   WhatsApp → Linked devices, on their own phone, once.
+
+The button refuses to run a second time once a Sheet is set up — a second,
+empty Sheet would make every lead already gathered look lost.
+
+---
+
 ## Your first test run
 
 About twenty minutes, and it costs roughly a dollar. Do it once before you

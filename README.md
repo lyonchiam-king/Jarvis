@@ -108,7 +108,8 @@ Either way, your prompt should gain a `(.venv)` prefix. Then, in order:
 ```bash
 outreach preflight            # checks key, billing, OAuth, Sheet access
 outreach init-sheet           # creates the spreadsheet, prints SHEET_ID
-# paste SHEET_ID into .env
+# paste SHEET_ID into .env    # (or press "Create my Google Sheet" in the
+                              #  dashboard, which does both for you)
 
 outreach run discovery --dry-run   # see what you'd get, write nothing
 outreach run discovery             # write to the Sheet

@@ -1847,3 +1847,229 @@ def test_the_leads_to_research_count_excludes_refused_leads(monkeypatch):
 
     # The reachable one and the unchecked one; never the refused one.
     assert summary.to_research == 2
+
+
+# ------------------------------------------- first run: their own Sheet
+
+
+def _first_run_config():
+    """A config as a brand-new user has it: signed in to nothing, no Sheet.
+
+    Category and location are pinned, not inherited from the live campaign
+    file, because the Sheet's title is built from them.
+    """
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    return replace(
+        config,
+        campaign=replace(config.campaign, category="hair salon", location="Penang"),
+        secrets=replace(config.secrets, sheet_id=""),
+    )
+
+
+class _FakeNewSheets:
+    """Stands in for SheetsClient on a Sheet that does not exist yet."""
+
+    made: list = []
+
+    def __init__(self, credentials, spreadsheet_id=""):
+        self.credentials = credentials
+        self.spreadsheet_id = spreadsheet_id
+        self.tabs = None
+
+    def create_spreadsheet(self, title):
+        self.spreadsheet_id = "new-sheet-id"
+        _FakeNewSheets.made.append(title)
+        return self.spreadsheet_id
+
+    def ensure_tabs(self, tabs):
+        self.tabs = tuple(tabs)
+        return []
+
+    @property
+    def url(self):
+        return f"https://docs.google.com/spreadsheets/d/{self.spreadsheet_id}/edit"
+
+
+@pytest.fixture
+def new_user(monkeypatch, tmp_path):
+    """The dashboard as a new user meets it, with Google and .env faked out.
+
+    The .env write is redirected into tmp_path deliberately: a test that
+    wrote SHEET_ID into the real file would break every command on the
+    machine running the suite, which is the bug conftest.py exists to catch.
+    """
+    from outreach import auth, env_edit, sheets
+
+    _FakeNewSheets.made = []
+    written = {}
+    env = tmp_path / ".env"
+
+    monkeypatch.setattr(
+        auth, "get_credentials", lambda *a, **kw: "creds-for-this-person"
+    )
+    monkeypatch.setattr(sheets, "SheetsClient", _FakeNewSheets)
+    monkeypatch.setattr(
+        env_edit, "set_key",
+        lambda path, name, value: written.__setitem__(name, (path, value)),
+    )
+    monkeypatch.delenv("SHEET_ID", raising=False)
+    monkeypatch.setattr(dash, "load_config", lambda *a, **kw: _first_run_config())
+    yield {"written": written, "env": env}
+
+
+def test_a_new_user_gets_their_own_sheet_made_for_them(new_user):
+    """Signing in is the only step; the spreadsheet and its tabs follow.
+
+    Before this, the first thing a new user had to do was create a
+    spreadsheet by hand and copy an id out of its URL.
+    """
+    client = create_app(_first_run_config()).test_client()
+
+    body = client.post("/api/create-sheet").get_json()
+
+    assert body["ok"] is True
+    assert body["url"].endswith("/new-sheet-id/edit")
+    # In their own account: the credentials the endpoint used are the ones
+    # the sign-in returned, not a shared key from anywhere.
+    assert _FakeNewSheets.made == ["Outreach -- hair salon in Penang"]
+
+
+def test_the_new_sheet_gets_every_tab_the_pipeline_writes_to(new_user):
+    """An empty spreadsheet is not a usable one -- discovery writes to Leads,
+    research to Research, and a missing tab fails mid-run."""
+    holder = {}
+    real_init = _FakeNewSheets.__init__
+
+    def capture(self, credentials, spreadsheet_id=""):
+        real_init(self, credentials, spreadsheet_id)
+        holder["client"] = self
+
+    _FakeNewSheets.__init__ = capture
+    try:
+        client = create_app(_first_run_config()).test_client()
+        client.post("/api/create-sheet")
+    finally:
+        _FakeNewSheets.__init__ = real_init
+
+    assert holder["client"].tabs == schema.ALL_TABS
+
+
+def test_the_new_sheet_id_is_saved_so_tomorrow_finds_it(new_user):
+    """Held only in memory, the Sheet would be lost the moment the dashboard
+    closed -- and the CLI would never see it at all."""
+    client = create_app(_first_run_config()).test_client()
+
+    client.post("/api/create-sheet")
+
+    assert new_user["written"]["SHEET_ID"][1] == "new-sheet-id"
+
+
+def test_a_second_press_never_makes_a_second_sheet(new_user):
+    """A new Sheet would be empty, and every lead already gathered would
+    look lost. Refuse, and say how to do it deliberately."""
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, sheet_id="already"))
+    client = create_app(config).test_client()
+
+    response = client.post("/api/create-sheet")
+
+    assert response.status_code == 400
+    assert "already" in response.get_json()["error"].lower()
+    assert _FakeNewSheets.made == []
+
+
+def test_an_abandoned_google_sign_in_is_reported_not_waited_on(new_user,
+                                                              monkeypatch):
+    """Consent opens a browser and blocks. Someone who closes that tab would
+    otherwise park this request thread on a callback that never arrives."""
+    from outreach import auth
+
+    def refuse(*a, **kw):
+        assert kw.get("consent_timeout"), "consent must be bounded here"
+        raise auth.AuthError("The Google sign-in was never finished")
+
+    monkeypatch.setattr(auth, "get_credentials", refuse)
+    client = create_app(_first_run_config()).test_client()
+
+    response = client.post("/api/create-sheet")
+
+    assert response.status_code == 400
+    assert "never finished" in response.get_json()["error"]
+    assert _FakeNewSheets.made == []
+
+
+def test_a_sheet_that_could_not_be_saved_still_tells_them_where_it_is(
+    new_user, monkeypatch
+):
+    """The spreadsheet exists by then. A bare failure message would leave an
+    orphan in their Drive and no way back to it."""
+    from outreach import env_edit
+
+    def fail(path, name, value):
+        raise env_edit.EnvEditError("Could not write .env: read-only")
+
+    monkeypatch.setattr(env_edit, "set_key", fail)
+    client = create_app(_first_run_config()).test_client()
+
+    error = client.post("/api/create-sheet").get_json()["error"]
+
+    assert "new-sheet-id" in error, "the id and URL must survive the failure"
+
+
+def test_the_first_run_card_offers_to_make_the_sheet(client):
+    """A stage Lyon cannot reach from the dashboard does not exist, and the
+    same is true of a step a new user cannot reach from the first screen."""
+    page = client.get("/").get_data(as_text=True)
+
+    assert "createSheet()" in page
+    assert "/api/create-sheet" in page
+
+
+def test_a_failed_reload_still_stops_a_second_sheet(new_user, monkeypatch):
+    """The reload after creating is allowed to fail -- the Sheet exists and
+    .env is written by then, which is what matters. But the guard must not
+    then wave a second press through and make a second, empty Sheet."""
+    monkeypatch.setattr(
+        dash, "load_config",
+        lambda *a, **kw: (_ for _ in ()).throw(OSError("campaign file vanished")),
+    )
+    app = create_app(_first_run_config()).test_client()
+
+    assert app.post("/api/create-sheet").get_json()["ok"] is True
+    second = app.post("/api/create-sheet")
+
+    assert second.status_code == 400
+    assert _FakeNewSheets.made == ["Outreach -- hair salon in Penang"]
+
+
+def test_two_presses_at_once_only_ever_make_one_sheet(new_user, monkeypatch):
+    """Flask serves these on separate threads, and the guard that refuses a
+    second Sheet is checked *before* a consent flow that blocks for minutes.
+    Two presses inside that window would both walk past it."""
+    from outreach import auth
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_consent(*a, **kw):
+        started.set()
+        release.wait(5)
+        return "creds"
+
+    monkeypatch.setattr(auth, "get_credentials", slow_consent)
+    app = create_app(_first_run_config())
+
+    first = []
+    thread = threading.Thread(
+        target=lambda: first.append(app.test_client().post("/api/create-sheet"))
+    )
+    thread.start()
+    assert started.wait(5), "the first press should have reached consent"
+
+    second = app.test_client().post("/api/create-sheet")
+    release.set()
+    thread.join(5)
+
+    assert second.status_code == 409
+    assert first[0].get_json()["ok"] is True
+    assert _FakeNewSheets.made == ["Outreach -- hair salon in Penang"]

@@ -103,6 +103,18 @@ MAX_LIMIT = 500
 # a wall, not a list, so it stops here and says so.
 PREVIEW_CAP = 25
 
+# Long enough to find the right Google account, read the consent screen and
+# think about it; short enough that a tab someone closed does not hold a
+# request thread until the dashboard is restarted.
+CONSENT_TIMEOUT = 300
+
+# One Sheet creation at a time. The guard that refuses a second Sheet is
+# checked before a consent flow that then blocks for minutes, so two presses
+# arriving in that window would both pass it -- and Flask serves them on
+# separate threads. The button disables itself, but a page reload mid-consent
+# brings it back.
+_create_sheet_lock = threading.Lock()
+
 
 def stage_args(
     stage: str, limit: int | None = None, *, social_first: bool | None = None
@@ -1301,6 +1313,99 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": "No screenshot for this lead yet"}), 404
         return send_file(path.resolve(), mimetype="image/png")
 
+    @app.route("/api/create-sheet", methods=["POST"])
+    def api_create_sheet():
+        """Make this person their own Sheet, in their own Google account.
+
+        The first thing a new user needed to do was create a spreadsheet by
+        hand, find its ID in the URL, and paste it into a file -- three
+        chances to go wrong before anything worked. Signing in already
+        proves whose account it is, so the Sheet may as well be made for
+        them and the ID written where it belongs.
+        """
+        if not _create_sheet_lock.acquire(blocking=False):
+            return jsonify({
+                "error": "Still working on the last one. Finish the Google "
+                         "sign-in in the window that opened, or wait a moment "
+                         "and press again."
+            }), 409
+        try:
+            return _make_the_sheet()
+        finally:
+            _create_sheet_lock.release()
+
+    def _make_the_sheet():
+        from .auth import AuthError, get_credentials
+        from .env_edit import EnvEditError, set_key
+        from .sheets import SheetsClient, SheetsError
+
+        c = current()
+        # Both, because they can disagree: the reload at the end of a
+        # successful run is allowed to fail, and if the guard trusted only
+        # the in-memory config a second press would then make a second,
+        # empty Sheet -- which is the one thing this guard exists to stop.
+        if c.secrets.sheet_id or os.environ.get("SHEET_ID"):
+            return jsonify({
+                "error": "A Sheet is already set up. Clear SHEET_ID in .env "
+                         "first if you really want a new, empty one."
+            }), 400
+
+        try:
+            # Consent has to be allowed here -- on a first run there is no
+            # token to reuse -- but it is bounded, so a sign-in someone walks
+            # away from fails the request instead of parking this thread on a
+            # callback that will never arrive.
+            creds = get_credentials(
+                c.secrets.oauth_client_file,
+                c.secrets.token_file,
+                consent_timeout=CONSENT_TIMEOUT,
+            )
+        except AuthError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        # Named the way its owner would search for it, not after the
+        # campaign slug: this Sheet lands in someone else's Drive alongside
+        # everything else they own, and "penang-hair-salons" means nothing
+        # there a month later.
+        title = f"Outreach -- {c.campaign.category} in {c.campaign.location}"
+        try:
+            sheets = SheetsClient(creds)
+            sheet_id = sheets.create_spreadsheet(title)
+            sheets.ensure_tabs(schema.ALL_TABS)
+        except SheetsError as exc:
+            return jsonify({"error": str(exc)}), 502
+        except Exception as exc:  # noqa: BLE001 -- surfaced on the page
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
+
+        # Written to .env, not held in memory: the CLI and tomorrow's run
+        # both read it from there, and a Sheet nobody can find again would
+        # be worse than not creating one.
+        try:
+            set_key(Path(".env"), "SHEET_ID", sheet_id)
+        except (EnvEditError, OSError) as exc:
+            # The Sheet exists at this point, so the URL goes in the message.
+            # Losing it here would mean an orphaned spreadsheet and a button
+            # that just says it failed.
+            return jsonify({
+                "error": f"Your Sheet was created -- {sheets.url} -- but the "
+                         f"ID could not be saved: {exc}. Put SHEET_ID="
+                         f"{sheet_id} in your .env file by hand."
+            }), 200
+
+        # Both, and in this order: the env var so this process sees it at
+        # once, then a reload so every panel is rebuilt against the new
+        # config rather than the one captured at startup.
+        os.environ["SHEET_ID"] = sheet_id
+        try:
+            state["config"] = load_config(current().source_path)
+        except Exception:  # noqa: BLE001
+            # Every exception, not just ConfigError: the Sheet exists and
+            # .env is written by now, so anything raised here is a worse
+            # outcome reported than swallowed. A restart picks it up.
+            log.warning("Sheet created, but reloading config failed", exc_info=True)
+
+        return jsonify({"ok": True, "url": sheets.url, "title": title})
+
     @app.route("/api/whatsapp/queue")
     def api_whatsapp_queue():
         """Leads waiting for WhatsApp send, with phone + message text."""
@@ -1925,6 +2030,25 @@ function panelDead(sel, what) {
   }
 }
 
+async function createSheet() {
+  const btn = $('#mk-sheet');
+  const note = $('#mk-sheet-note');
+  btn.disabled = true;
+  note.textContent = 'Opening Google to sign in\u2026 finish in the browser window.';
+  try {
+    const r = await fetch('/api/create-sheet', {method: 'POST'});
+    const d = await r.json();
+    if (d.error) { note.innerHTML = '<span class="err">' + esc(d.error) + '</span>'; return; }
+    note.innerHTML = 'Made it \u2014 <a href="' + esc(d.url) +
+      '" target="_blank" rel="noopener">open your Sheet</a>';
+    refresh();
+  } catch (e) {
+    note.innerHTML = '<span class="err">Could not reach the dashboard.</span>';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function refresh() {
   let d;
   try { d = await (await fetch('/api/summary')).json(); } catch { panelDead('#totals', 'the totals'); return; }
@@ -1936,14 +2060,41 @@ async function refresh() {
 
   if (d.setup_needed) {
     $('#totals').innerHTML = '<span class="err">Not set up yet</span>';
+
+    // The Sheet is the one missing piece we can just make for them. The
+    // keys have to be pasted, but nobody should have to create a
+    // spreadsheet by hand and copy an id out of a URL.
+    const needsSheet = d.setup_needed.includes('SHEET_ID');
+    const keys = d.setup_needed.filter(k => k !== 'SHEET_ID');
+
     $('#todo').innerHTML = `<div class="card" style="grid-column:1/-1">
-      <div class="what"><b>Before this can run, three keys need filling in.</b></div>
-      <div class="sub" style="margin:8px 0">
-        Still missing from your <code>.env</code> file:
-        <b>${d.setup_needed.join('</b>, <b>')}</b></div>
-      <div class="sub">The <a href="/guide#getting-it-onto-your-computer"
-        target="_blank" rel="noopener">handbook</a> shows where each one comes
-        from. Fill them in, save, then reload this page.</div></div>`;
+      <div class="what"><b>First run &mdash; three things to set up.</b></div>
+
+      <div class="sub" style="margin:10px 0 4px"><b>1. Your own Google Sheet</b></div>
+      ${needsSheet
+        ? `<div class="sub">This is where your leads live. Press the button and
+             sign in with your own Google account &mdash; the Sheet is made in
+             your account, with the right tabs, and remembered for you.</div>
+           <div class="row" style="margin:8px 0 14px">
+             <button class="primary" onclick="createSheet()" id="mk-sheet">Create my Google Sheet</button>
+             <span class="hint" id="mk-sheet-note"></span>
+           </div>`
+        : '<div class="sub" style="margin-bottom:14px">Done.</div>'}
+
+      <div class="sub" style="margin:0 0 4px"><b>2. Your keys</b></div>
+      ${keys.length
+        ? `<div class="sub">Still missing: <b>${keys.join('</b>, <b>')}</b>.
+             Put them in the <b>Model</b> and settings panels on this page &mdash;
+             they are written for you, no file to edit. The
+             <a href="/guide#getting-it-onto-your-computer" target="_blank"
+                rel="noopener">handbook</a> says where each one comes from.</div>`
+        : '<div class="sub">Done.</div>'}
+
+      <div class="sub" style="margin:14px 0 4px"><b>3. Your WhatsApp</b></div>
+      <div class="sub">Once the two above are done, section 4 shows a QR code.
+        Scan it from WhatsApp &rarr; Linked devices. It links your own phone,
+        and only needs doing once.</div>
+      </div>`;
     $('#funnel').innerHTML = '';
     $('#send').innerHTML = '<div class="sub">Nothing yet.</div>';
     return;
