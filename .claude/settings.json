@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./config/**/*.local.yaml)",
+      "Read(./token.json)",
+      "Read(./credentials.json)"
+    ],
+    "allow": [
+      "Bash(.venv/bin/pytest:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)"
+    ]
+  }
+}

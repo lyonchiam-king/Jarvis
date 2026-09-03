@@ -1,0 +1,77 @@
+# Example of expanding beyond Malaysia -- proves the pipeline is region-agnostic.
+# Nothing here differs structurally from penang-my.yaml except the values.
+#
+# NOTE: the UK is a flagged jurisdiction (UK GDPR + PECR). Running an outreach
+# stage against this config will refuse to start until you read the warning
+# compliance.py prints and set `acknowledged: true` below.
+
+campaign:
+  name: manchester-barbers
+  category: "barber shop"
+  location: "Manchester, United Kingdom"
+  language: en
+  # Google caps a single text query at about 60 results, so one area is a
+  # finite well. Discovery walks this list, skipping businesses already on the
+  # Sheet, until the batch is full.
+  areas:
+    - "Manchester city centre, United Kingdom"
+    - "Chorlton, Manchester, United Kingdom"
+    - "Didsbury, Manchester, United Kingdom"
+    - "Levenshulme, Manchester, United Kingdom"
+    - "Salford, United Kingdom"
+    - "Stockport, United Kingdom"
+
+limits:
+  batch_size: 60
+
+research:
+  model: claude-opus-5
+  effort: medium
+  max_reviews: 8
+  social_lookup: true
+  email_discovery: true
+  checkpoint_every: 10
+
+discovery:
+  max_results: 60
+  page_size: 20
+  min_rating: 0.0
+  min_review_count: 5
+  allowed_business_status:
+    - OPERATIONAL
+  treat_social_as_no_website: true
+  social_domains:
+    - facebook.com
+    - fb.com
+    - instagram.com
+    - linktr.ee
+    - wa.me
+    - tiktok.com
+    - business.site
+
+outreach:
+  sender_name: "Lyon Chiam"
+  sender_title: "Founder"
+  company: "COAI"
+  # Required before Stage 5 runs. For a UK campaign this must be a real
+  # address a recipient could actually write to -- PECR and UK GDPR both
+  # expect the sender to be identifiable and contactable.
+  postal_address: ""
+  channel_priority:
+    - email
+    - whatsapp
+
+lovable:
+  enabled: false
+  require_confirmation: true
+
+build:
+  # See penang-my.yaml for what this block does. Left at the Lovable default
+  # here too -- this file exists to prove a region swap needs no code change,
+  # not to demonstrate the Firebase path.
+  target: lovable
+  enabled: false
+
+compliance:
+  country_code: GB
+  acknowledged: false

@@ -1,0 +1,36 @@
+# Secrets and credentials -- never commit
+.env
+credentials/
+*.json.secret
+token.json
+oauth_client.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Local run artifacts
+.cache/
+*.log
+logs/
+scripts/morning-run.ps1
+
+# Your live campaign settings. The dashboard writes here so a `git pull`
+# never collides with what you have configured; the tracked *.yaml beside it
+# stays the starting template.
+config/campaigns/*.local.yaml
+
+# Generated demo pages. Build output, never edited by hand, and CLAUDE.md
+# forbids runtime writes to tracked files.
+sites/
+
+# Node
+node_modules/
+
+# WhatsApp session credentials -- the relay persists auth state here so a
+# restart does not require re-pairing the phone. Never commit.
+.whatsapp-session/
