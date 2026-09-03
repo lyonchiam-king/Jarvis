@@ -363,12 +363,16 @@ def load_config(
     if not path.exists() and not config_path and from_env:
         fallback = Path(DEFAULT_CAMPAIGN)
         if fallback.exists():
+            # Named with the value as the environment carried it, not as a
+            # Path renders it: the user will search .env for what they typed,
+            # and on Windows a normalised path shows backslashes the message
+            # then never matches.
             log.warning(
                 "CAMPAIGN_CONFIG points at %s, which does not exist. Falling "
                 "back to %s -- any settings saved from the dashboard are not "
                 "being applied. Save one again to recreate the file, or "
                 "remove CAMPAIGN_CONFIG from .env.",
-                path,
+                from_env,
                 fallback,
             )
             path = fallback
