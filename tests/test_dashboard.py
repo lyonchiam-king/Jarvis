@@ -376,6 +376,56 @@ def test_record_build_rejects_a_non_http_url(client):
     assert "http" in r.get_json()["error"]
 
 
+def _client_with_leads(rows, monkeypatch):
+    """A test client whose Sheet holds exactly these Leads rows, so a
+    record-build can be observed end to end without a real Sheet."""
+    writes = []
+
+    class FakeSheets:
+        url = "https://sheet"
+
+        def read_rows(self, tab):
+            return {rid: (i + 2, row) for i, (rid, row) in enumerate(rows)} \
+                if tab is schema.LEADS else {}
+
+        def update_column(self, tab, column, values, **k):
+            writes.append((tab, column, dict(values)))
+            return len(values)
+
+    monkeypatch.setattr(dash, "_sheets_client", lambda config: FakeSheets())
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, sheet_id="s"))
+    return create_app(config).test_client(), writes
+
+
+def test_record_build_refuses_a_disqualified_lead(monkeypatch):
+    """Recording the build anyway would drop them straight back into the
+    outreach queue with a live site behind the message -- the one outcome
+    "do not contact this business" exists to prevent."""
+    c, writes = _client_with_leads([("a", {"Lead ID": "a", "Stage": "Disqualified"})],
+                                   monkeypatch)
+
+    body = c.post(
+        "/api/record-build",
+        json={"lead_id": "a", "preview_url": "https://p/a"},
+    ).get_json()
+
+    assert "disqualified" in body["error"]
+    assert writes == [], "nothing written for a lead who asked to be left alone"
+
+
+def test_record_build_never_moves_a_lead_backwards(monkeypatch):
+    """The button lands after the message has gone out by hand sometimes; a
+    lead already at Email Drafted must not be dragged back to Site Built."""
+    c, writes = _client_with_leads([("a", {"Lead ID": "a", "Stage": "Email Drafted"})],
+                                   monkeypatch)
+
+    body = c.post("/api/record-build", json={"lead_id": "a"}).get_json()
+    assert body == {"ok": True}
+    stage_writes = [w for w in writes if w[1] == "Stage"]
+    assert stage_writes == [(schema.LEADS, "Stage", {"a": "Email Drafted"})]
+
+
 def test_build_queue_is_empty_without_a_sheet(client):
     assert client.get("/api/build-queue").get_json() == {"queue": []}
 
@@ -813,8 +863,13 @@ def test_a_configured_install_reports_numbers_not_a_setup_prompt(monkeypatch):
     from dataclasses import replace
 
     from outreach import dashboard as dash
+    from outreach import env_edit
 
     monkeypatch.setattr(dash, "_load_summary", lambda config: dash.Summary(total=7))
+    # The endpoint also checks the campaign's model key with is_set, which
+    # reads the real .env on this machine -- patch it so the test does not
+    # depend on what happens to be in that file.
+    monkeypatch.setattr(env_edit, "is_set", lambda path, name: True)
     config = load_config("config/campaigns/penang-my.yaml", env_file=None)
     config = replace(
         config,
@@ -1030,7 +1085,10 @@ def test_the_preview_shows_who_the_next_run_would_take():
             queued_lead("fresh", "Discovered", social=True),
         ]
     )
-    preview = queue_preview(leads, set(), set())
+    # old and new_fb have Research rows (the normal case); nobody has been
+    # briefed yet. A past-stage lead with NO output row is healed into the
+    # queue rather than skipped -- that contract lives in test_selection.py.
+    preview = queue_preview(leads, {"old", "new_fb"}, set())
 
     assert [q["name"] for q in preview["site-brief"]] == ["Biz new_fb", "Biz old"]
     assert preview["site-brief"][0]["social"] is True
@@ -1593,6 +1651,130 @@ def test_the_page_javascript_actually_parses():
         )
 
 
+def test_the_page_never_calls_an_undefined_function():
+    """node --check above catches syntax, not this. A misspelled function name
+    parses perfectly and dies only when its panel calls it -- which on this
+    page means that section sits on "Loading..." with no error the server log
+    would show. This walks the rendered script and holds every bare call
+    against the names actually defined on the page.
+
+    Deliberately approximate: strings (and the ${...} inside them) are stripped
+    first so a name in a template literal cannot lie, and anything defined is
+    collected generously. The risk this runs is a false alarm on a name it
+    could not see defined -- a fixable false positive, never a silent pass.
+    """
+    import re
+    from flask import Flask, render_template_string
+
+    from outreach.config import load_config
+    from outreach.dashboard import PAGE
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    app = Flask(__name__)
+    with app.app_context():
+        page = render_template_string(
+            PAGE,
+            campaign=config.campaign,
+            build=config.build,
+            whatsapp_enabled=config.outreach.whatsapp_enabled,
+        )
+
+    builtins = {
+        "$", "document", "window", "location", "navigator", "history",
+        "fetch", "alert", "confirm", "encodeURIComponent", "decodeURIComponent",
+        "setTimeout", "setInterval", "clearTimeout", "clearInterval",
+        "requestAnimationFrame", "parseInt", "parseFloat", "isNaN", "Number",
+        "String", "Boolean", "Object", "Array", "JSON", "Math", "Date", "Set",
+        "Map", "URL", "URLSearchParams", "URLPattern", "AbortController",
+        "FormData", "Blob", "FileReader", "Error", "TypeError", "Promise",
+        "localStorage", "sessionStorage", "structuredClone", "crypto",
+        "escape", "unescape", "Event", "CustomEvent", "HTMLElement",
+        "getComputedStyle", "matchMedia", "queueMicrotask",
+    }
+    keywords = {
+        "if", "for", "while", "switch", "catch", "return", "await", "typeof",
+        "function", "do", "else", "yield", "new", "delete", "void", "case",
+        "async",
+    }
+
+    defined = set()
+    calls = set()
+    for js in re.findall(r"<script>(.*?)</script>", page, re.S):
+        # Strip strings, comments and declarations-as-calls so only real call
+        # sites remain. Anything lost here only shrinks the check, never
+        # breaks it -- but note that stripping `${...}` also drops code inside
+        # template literals, so a helper *defined* only inside a backtick
+        # would be under-counted. The page defines none that way.
+        js = re.sub(r"`(?:\\.|[^`])*`", " ", js)
+        js = re.sub(r'"(?:\\.|[^"\\\n])*"', " ", js)
+        js = re.sub(r"'(?:\\.|[^'\\\n])*'", " ", js)
+        js = re.sub(r"//[^\n]*", " ", js)
+        js = re.sub(r"/\*.*?\*/", " ", js, flags=re.S)
+
+        defined |= set(re.findall(r"\bclass\s+([A-Za-z_$][\w$]*)\b", js))
+        defined |= set(re.findall(r"\b(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\b", js))
+        defined |= set(re.findall(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\b", js))
+        # Lowercase identifiers followed by (...) and a brace are almost
+        # always a declaration site (method shorthand, if/for/catch); count
+        # them as defined rather than chased -- over-approximating definitions
+        # is safe, under-approximating calls is not.
+        defined |= {
+            m.group(1)
+            for m in re.finditer(r"([A-Za-z_$][\w$]*)\s*\([^()]{0,200}\)\s*\{", js)
+        }
+        calls |= {
+            m.group(1)
+            for m in re.finditer(r"(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(", js)
+        }
+
+    unknown = sorted(calls - defined - builtins - keywords)
+    assert not unknown, (
+        "the page calls names nothing defines; in one script block that is "
+        f"a dead panel: {unknown}"
+    )
+
+
+def test_every_stage_button_is_gated_until_setup_finishes():
+    """A new user's first click on "Run everything" must be stopped while
+    there is no Sheet to write to, so the page names the stage buttons in
+    SETUP_LOCKED and disables them until first-run setup is done. The list is
+    hand-written, though -- a button renamed on the page without updating the
+    list silently escapes the gate. This holds both directions: every locked
+    name is a real button, and the read-only buttons stay clickable."""
+    import re
+    from flask import Flask, render_template_string
+
+    from outreach.config import load_config
+    from outreach.dashboard import PAGE
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    app = Flask(__name__)
+    with app.app_context():
+        page = render_template_string(
+            PAGE,
+            campaign=config.campaign,
+            build=config.build,
+            whatsapp_enabled=config.outreach.whatsapp_enabled,
+        )
+
+    match = re.search(r"SETUP_LOCKED = new Set\(\[([^\]]+)\]\)", page, re.S)
+    assert match, "SETUP_LOCKED is gone from the page"
+    locked = set(re.findall(r"['\"]([^'\"]+)['\"]", match.group(1)))
+
+    buttons = set(re.findall(r'data-run=["\']([^"\']+)["\']', page))
+    assert locked <= buttons, (
+        f"locked names that match no button, so the gate is dead weight: "
+        f"{sorted(locked - buttons)}"
+    )
+
+    # Reading costs nothing and needs no setup: these must never be gated.
+    unlocked = {"preview-leads", "preview-messages", "preflight", "test-model"}
+    assert unlocked <= buttons
+    assert not (locked & unlocked), (
+        f"read-only buttons gated behind setup: {sorted(locked & unlocked)}"
+    )
+
+
 class TestSharedSheetsCache:
     """The dashboard reads the same five tabs from four panels on one tick.
 
@@ -1726,6 +1908,30 @@ class TestSharedSheetsCache:
 
         assert runner.running is None, "run did not finish"
         assert cleared, "a finished run must drop the cached reads"
+
+    def test_a_run_starts_with_no_readable_stdin(self, monkeypatch):
+        """A subprocess that inherits this console can be asked a question
+        the page never shows: the build's y/n prompt hung a whole run for
+        ever. With stdin at the null device the CLI's confirm helper sees no
+        terminal and skips instead of waiting for an answer nobody can give."""
+        captured = {}
+
+        def fake_popen(*args, **kwargs):
+            captured.update(kwargs)
+            return _FakePopen(*args, **kwargs)
+
+        monkeypatch.setattr(dash, "_invalidate_sheets_cache", lambda: None)
+        monkeypatch.setattr(dash.subprocess, "Popen", fake_popen)
+
+        runner = dash.Runner()
+        runner.start("draft", ["outreach-draft"])
+        for _ in range(200):
+            if runner.running is None:
+                break
+            time.sleep(0.01)
+
+        assert runner.running is None, "run did not finish"
+        assert captured["stdin"] is dash.subprocess.DEVNULL
 
 
 class _FakePopen:

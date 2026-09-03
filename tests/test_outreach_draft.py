@@ -337,6 +337,44 @@ def test_lead_with_no_email_and_no_whatsapp_is_unreachable():
     assert row["Status"] == "Drafted"
 
 
+def test_an_unchecked_lead_is_held_not_retired():
+    """A lead with no email and no answer from the check yet must not be
+    drafted as Unreachable: that row retires it for good, and when the check
+    later comes back yes nothing would ever regenerate the message. Hold
+    costs nothing -- the next run picks it up after the check ran."""
+    sheets = FakeSheets(
+        index([lead("a")]), index([research_row("a", whatsapp="")])
+    )
+    writer = FakeWriter()
+    gmail = FakeGmail()
+
+    report = outreach_draft.run(cfg(), sheets, writer, gmail)
+
+    assert report.held_for_check == 1
+    assert writer.call_count == 0, "no model call for a lead we cannot reach yet"
+    assert gmail.drafted == []
+    assert sheets.upserts == [], "nothing written -- the lead is simply held"
+
+
+def test_holding_stops_when_whatsapp_is_off():
+    """A campaign without WhatsApp has no check to wait for, so an
+    unchecked, email-less lead is Unreachable as it always was."""
+    sheets = FakeSheets(
+        index([lead("a")]), index([research_row("a", whatsapp="")])
+    )
+    gmail = FakeGmail()
+
+    report = outreach_draft.run(
+        config(whatsapp_enabled=False,
+               postal_address="12 Some Road, 10450 Penang", require_site=False),
+        sheets, FakeWriter(), gmail,
+    )
+
+    assert report.held_for_check == 0
+    row = sheets.upserts[0][1][0]
+    assert row["Channel"] == "Unreachable"
+
+
 def test_lead_with_email_and_landline_phone_still_gets_email():
     sheets = FakeSheets(
         index([lead("a", phone="04-1234567")]),

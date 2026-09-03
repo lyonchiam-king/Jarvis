@@ -953,6 +953,69 @@ class TestWhatsAppSendEndpoint:
             assert updates.get("WhatsApp Status") == {"lead-1": "failed"}
 
 
+class TestTheDailyCap:
+    """The cap in the campaign YAML was read and never applied -- only the
+    relay's own MAX_PER_DAY bound anything, so the number Lyon set did
+    nothing. The dashboard now counts today's sends off the Outreach Log and
+    refuses past it."""
+
+    def _log_client(self, monkeypatch, sent):
+        from outreach import dashboard as dash
+        from outreach import schema
+        from outreach.models import utc_now
+
+        today = utc_now()[:10]
+        rows = {
+            f"lead-{i}": (i + 2, {"Lead ID": f"lead-{i}",
+                                  "WhatsApp Sent At": f"{today} 09:0{i}:00Z"})
+            for i in range(sent)
+        }
+
+        class FakeSheets:
+            url = "https://sheet"
+
+            def read_rows(self, tab):
+                return rows if tab is schema.OUTREACH_LOG else {}
+
+            def update_column(self, tab, col, mapping):
+                return len(mapping)
+
+        return _make_client(monkeypatch, sheets=FakeSheets())
+
+    def test_a_full_cap_refuses_the_next_send(self, monkeypatch):
+        # Penang's cap is 30; sending #31 must be refused before the relay
+        # is touched at all.
+        client = self._log_client(monkeypatch, sent=30)
+        with responses.RequestsMock() as rsps:
+            # No relay call registered: if the endpoint reaches the relay the
+            # mock raises and the test fails for the wrong reason -- so the
+            # 429 below proves the send was refused at the dashboard.
+            resp = client.post(
+                "/api/whatsapp/send",
+                json={"lead_id": "new", "phone": "+60123456789", "message": "Hi"},
+            )
+            assert resp.status_code == 429
+            assert "Daily cap reached" in json.loads(resp.data)["error"]
+            # CallList does not compare equal to [] in this responses
+            # version even when empty -- check by length.
+            assert len(rsps.calls) == 0
+
+    def test_one_under_the_cap_still_sends(self, monkeypatch):
+        client = self._log_client(monkeypatch, sent=29)
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST,
+                "http://127.0.0.1:4099/send",
+                json={"status": "sent", "message_id": "m1", "timestamp": "t"},
+            )
+            resp = client.post(
+                "/api/whatsapp/send",
+                json={"lead_id": "new", "phone": "+60123456789", "message": "Hi"},
+            )
+            assert resp.status_code == 200
+            assert json.loads(resp.data)["status"] == "sent"
+
+
 class TestTheNumberThatActuallyGetsDialled:
     """The relay used to force a "60" onto any number without one, so a US
     lead became a Malaysian stranger. It now refuses anything that is not

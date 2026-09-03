@@ -147,6 +147,23 @@ class TestChoosingWhatToPublish:
 
         assert report.published == 0 and cf.published == []
 
+    def test_a_disqualified_lead_is_never_published(self, tmp_path):
+        """The site may already exist from before the owner said stop, but the
+        moment a page goes live the outside world can find it. Publish is the
+        last gate that can stop it, so it refuses a disqualified lead too."""
+        make_site(tmp_path, "Salon A", "a")
+        leads = {"a": (2, {"Lead ID": "a", "Business Name": "Salon A",
+                           "Stage": "Disqualified"})}
+        sheets = FakeSheets(leads, rows()[1])
+        cf = FakeCloudflare()
+
+        report = publish.run(config(tmp_path), sheets, cf)
+
+        assert report.disqualified == 1
+        assert report.published == 0
+        assert cf.published == []
+        assert sheets.column_writes == []
+
     def test_a_site_already_published_is_not_published_again(self, tmp_path):
         """A second publish makes a new address, and the message may already
         have gone out carrying the old one."""
