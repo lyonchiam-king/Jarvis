@@ -55,6 +55,18 @@ understanding how it works.
 
 ---
 
+## Giving it to someone else
+
+Each person runs their own copy: their own Google project, their own Sheet,
+their own keys, their own WhatsApp. Nothing is shared and nothing is
+central -- one relay holds exactly one WhatsApp session, so a second person
+scanning would replace the first.
+
+Send them **[SETUP.md](SETUP.md)**, which is written for someone who has
+never opened a terminal. Never send them your `.env`, `credentials/` or
+`.whatsapp-session/` -- those are your keys, your Google account and your
+WhatsApp.
+
 ## Quick start
 
 Needs **Python 3.10 or newer**. macOS ships 3.9 — if that's what you have,

@@ -116,12 +116,24 @@ set "RELAY_DIR=whatsapp-relay"
 REM Check for Node.js -- needed for the relay, not for the dashboard itself.
 where node >nul 2>&1
 if "%ERRORLEVEL%"=="0" (
+    REM Install the relay's dependencies on first run rather than telling
+    REM the user to type a command. "Run npm install" is a wall for anyone
+    REM who has not used a terminal, and it meant WhatsApp silently did not
+    REM work on a fresh machine.
+    if not exist "%RELAY_DIR%\node_modules" (
+        echo   WhatsApp relay: first run, installing it. This takes a minute...
+        pushd "%RELAY_DIR%"
+        call npm install --no-audit --no-fund >..\relay-install-log.txt 2>&1
+        popd
+    )
     if exist "%RELAY_DIR%\node_modules" (
+        del relay-install-log.txt >nul 2>&1
         echo   WhatsApp relay: starting on port %RELAY_PORT%...
         start "WhatsApp Relay" /MIN cmd /c "node %RELAY_DIR%/server.js"
     ) else (
-        echo   WhatsApp relay: node_modules not found. Run:
-        echo     cd %RELAY_DIR% ^&^& npm install
+        echo   WhatsApp relay: could not install it. Details in:
+        echo     %cd%\relay-install-log.txt
+        echo   The dashboard still works - only WhatsApp sending is off.
     )
 ) else (
     echo   WhatsApp relay: Node.js not found -- install it from nodejs.org
