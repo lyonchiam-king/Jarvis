@@ -114,6 +114,49 @@ let lastError = "";
 // out, then no QR, then relay not working" sequence.
 let generation = 0;
 
+// Reconnection, which must never be allowed to stop.
+//
+// connect() awaits fetchLatestBaileysVersion(), which is a network call, so
+// it can reject on nothing worse than a patchy minute. Every call site used
+// to drop that rejection on the floor -- `setTimeout(connect, 3000)` keeps no
+// reference to the promise -- and before the process-level handlers existed
+// that killed the relay, which at least made the failure obvious and got it
+// restarted. Swallowing the rejection instead turned it into something worse:
+// a relay that stays up, never reconnects, and answers every send with "not
+// connected" for as long as it is left running.
+//
+// So a failed attempt schedules the next one, backing off to a cap, and the
+// delay resets the moment a connection opens.
+const RECONNECT_MIN_MS = 3000;
+const RECONNECT_MAX_MS = 60000;
+let reconnectTimer = null;
+let reconnectDelay = RECONNECT_MIN_MS;
+let reconnectAt = 0;
+
+function scheduleReconnect(reason, delay = reconnectDelay) {
+  // One pending attempt at a time: a close event and a failed connect can
+  // both ask, and two timers means two sockets.
+  if (reconnectTimer || resetting) return;
+  reconnectAt = Date.now() + delay;
+  console.log(
+    `[whatsapp-relay] Reconnecting in ${Math.round(delay / 1000)}s (${reason})`
+  );
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
+    connectSafely();
+  }, delay);
+}
+
+// The only way connect() should ever be called from a timer or at startup.
+function connectSafely() {
+  return connect().catch((err) => {
+    lastError = `Could not reach WhatsApp: ${err && err.message ? err.message : err}`;
+    logger.error({ err }, "Connect failed");
+    scheduleReconnect("last attempt failed");
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Logger — pino but quiet (Baileys is chatty at info level)
 // ---------------------------------------------------------------------------
@@ -242,6 +285,9 @@ async function connect() {
     if (connection === "open") {
       connected = true;
       qrCode = null;
+      lastError = "";
+      reconnectDelay = RECONNECT_MIN_MS;
+      reconnectAt = 0;
       console.log("[whatsapp-relay] Connected to WhatsApp");
     }
 
@@ -260,7 +306,7 @@ async function connect() {
       if (resetting) return;
 
       if (!loggedOut) {
-        setTimeout(connect, 3000);
+        scheduleReconnect(`socket closed (code ${statusCode})`);
         return;
       }
 
@@ -276,7 +322,7 @@ async function connect() {
       console.log("[whatsapp-relay] Logged out — clearing session, new QR to follow");
       clearSession()
         .catch((err) => logger.error({ err }, "Could not clear session folder"))
-        .finally(() => setTimeout(connect, 3000));
+        .finally(() => scheduleReconnect("re-pairing after logout"));
     }
   });
 }
@@ -318,6 +364,11 @@ app.get("/status", (_req, res) => {
     daily_cap: MAX_PER_DAY,
     port: PORT,
     resetting,
+    // A relay working its way back is not a relay that has given up, and the
+    // page should not describe them the same way.
+    reconnecting: reconnectTimer !== null,
+    ...(reconnectAt ? { retry_in_seconds: Math.max(
+      0, Math.round((reconnectAt - Date.now()) / 1000)) } : {}),
     // Only when there is one, so the page shows a reason rather than an
     // empty field.
     ...(lastError ? { last_error: lastError } : {}),
@@ -614,7 +665,8 @@ app.post("/logout", async (_req, res) => {
       // leave the user pressing a button that silently changes nothing.
       logger.error({ err }, "Could not delete the session folder");
       lastError = `Could not delete ${AUTH_DIR}: ${err.message || err}`;
-      connect().catch((e) => logger.error({ e }, "Reconnect failed"));
+      resetting = false;
+      scheduleReconnect("session could not be cleared");
       return res.status(500).json({
         ok: false,
         error:
@@ -633,6 +685,8 @@ app.post("/logout", async (_req, res) => {
   } catch (err) {
     logger.error({ err }, "Reset failed");
     lastError = `Reset failed: ${err.message || err}`;
+    resetting = false;  // released before scheduling, or the schedule is refused
+    scheduleReconnect("reset could not reconnect");
     return res.status(500).json({
       ok: false,
       error:
@@ -672,8 +726,12 @@ process.on("unhandledRejection", (err) => {
 // Start
 // ---------------------------------------------------------------------------
 
-connect().then(() => {
-  app.listen(PORT, "127.0.0.1", () => {
-    console.log(`[whatsapp-relay] Listening on http://127.0.0.1:${PORT}`);
-  });
+// Listen first, connect second, and never the other way round. Waiting for
+// WhatsApp before opening the port meant one failed first attempt left no
+// HTTP server at all -- so the dashboard could not even ask what was wrong
+// and reported the relay as not running, which is a different problem with a
+// different fix. The port answering is what lets /status explain itself.
+app.listen(PORT, "127.0.0.1", () => {
+  console.log(`[whatsapp-relay] Listening on http://127.0.0.1:${PORT}`);
+  connectSafely();
 });

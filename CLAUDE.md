@@ -45,7 +45,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1121 tests, pytest, no CI -- the suite is the only gate
+tests/             1133 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -405,6 +405,31 @@ belonged, and nothing failed because the page still parsed.
 `node --check`: the script was valid throughout. The page's script is now
 executed under node against a stub DOM, driving the send state machine
 directly -- which is what caught the duplicate `dropLead` in the same run.
+
+**Swallowing a rejection is only half of "never disappear".** The
+`unhandledRejection` handler stopped the relay dying -- and turned a passing
+network blip into permanent death. `connect()` awaits
+`fetchLatestBaileysVersion()`, a network call, and every caller dropped the
+promise: `setTimeout(connect, 3000)` keeps no reference to it. Before the
+handler existed that rejection killed the process, which at least made the
+failure obvious and got it restarted; after, the relay stayed up, never
+reconnected, and answered every send with "not connected" until someone
+restarted it by hand. Degrading has to mean *recovering*: `connectSafely()`
+catches and `scheduleReconnect` backs off to a cap, resetting the delay on
+open, with one timer pending at a time. `app.listen` comes first and the
+connection second -- a failed first attempt used to leave no HTTP server at
+all, so the page could not even ask what was wrong.
+
+**"Reconnecting" and "not connected" are different sentences.** One needs the
+user to do nothing and the other needs a restart, and describing both the same
+way made a blip look like a broken install.
+
+**Not this one.** A drafted message you do not want to send now has a button,
+which sets the Outreach Log's manual `Status` to `Skipped` -- with
+`user_edit=True`, the exception the manual-column rule names. Nothing else is
+written: the message and its screenshot cost money to make, so skipping keeps
+them and **Send again** is one press. That reversibility is why it does not
+stop to confirm.
 
 **Secrets are write-only.** `env_edit.set_key` writes; `is_set` reports presence
 and never the value. No key is ever echoed to a page, a log, or a report.

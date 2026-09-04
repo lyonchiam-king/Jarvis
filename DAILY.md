@@ -648,6 +648,17 @@ the message stayed stuck for ever — on the recipient's phone as much as yours.
 again). New messages will be readable. The four already stuck cannot be
 recovered; re-send those.
 
+### A message you do not want to send
+
+Every message in the send list has **Not this one** next to Send, and next to
+Retry if it failed. It takes that business off the list without sending
+anything.
+
+It is not a disqualification — the lead keeps its research, its site and its
+written message. The row moves down to the list at the bottom marked
+*Skipped*, and **Send again** there puts it straight back. That is why it does
+not stop to ask.
+
 ### "Sent, but it stayed in the list"
 
 Fixed. WhatsApp often does not confirm delivery straight away — a first
@@ -680,6 +691,17 @@ Two things to know. It asks once before acting, because nothing brings a
 disqualified lead back. And a row marked **has email** can still be reached
 that way, so removing it gives up a lead you could have contacted; the button
 says so when that is the case.
+
+### It says "Reconnecting..."
+
+That is the relay working its way back after the connection dropped, and it
+needs nothing from you. It retries on its own, waiting a little longer each
+time up to a minute, and the line tells you when the next attempt is due. It
+goes back to **Connected** by itself.
+
+Previously a dropped connection could leave the relay up but permanently
+stuck, saying it was not connected and failing every send until you restarted
+it. That is fixed — it now keeps trying for as long as it is running.
 
 ### The relay says "not working" and nothing explains why
 

@@ -1708,6 +1708,46 @@ def create_app(config: Config) -> Flask:
             }), 200
         return jsonify({"ok": True, "cleared": cleared})
 
+    @app.route("/api/whatsapp/skip", methods=["POST"])
+    def api_whatsapp_skip():
+        """Take one message out of the send list without sending it.
+
+        Not a disqualification: the lead keeps its research, its site and its
+        drafted message, and the row moves down to the excluded list where
+        **Send again** puts it straight back. It is the answer to "not this
+        one, not now", which previously meant either sending it anyway or
+        editing the Sheet by hand.
+        """
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+
+        c = current()
+        try:
+            sheets = _sheets_client(c)
+            rows = sheets.read_rows(schema.OUTREACH_LOG)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+
+        if lead_id not in rows:
+            return jsonify({
+                "error": "No drafted message for this lead, so there is "
+                         "nothing to skip."
+            }), 200
+
+        try:
+            # Status is manual, and this is the exception the rule names: one
+            # named row the user has just clicked. "Skipped" is not a stage,
+            # only a note in the Status cell -- what actually removes the row
+            # from the queue is that it no longer reads "Drafted".
+            sheets.update_column(
+                schema.OUTREACH_LOG, "Status", {lead_id: "Skipped"}, user_edit=True
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+        return jsonify({"ok": True})
+
     @app.route("/api/whatsapp/send", methods=["POST"])
     def api_whatsapp_send():
         """Send one WhatsApp message and record the result in the Sheet."""
@@ -2018,6 +2058,10 @@ PAGE = """<!doctype html>
   /* Small, and inside the cell it acts on, so there is never a question of
      which business a press applies to. */
   .wa-undo { margin-top:6px; font-size:11.5px; padding:3px 8px; width:100%; }
+  /* Quieter than Send, and never beside it without a gap: this sits next to
+     the button that spends the message. */
+  .wa-skip { color:var(--muted); margin-right:6px; }
+  .wa-skip:hover:not(:disabled) { color:var(--accent); border-color:var(--accent); }
   .reach-drop { font-size:11.5px; padding:2px 8px; color:var(--muted); }
   .reach-drop:hover:not(:disabled) { color:var(--accent); border-color:var(--accent); }
   .reach-note { font-size:12.5px; color:var(--muted); padding:2px 0 2px 10px; }
@@ -2445,13 +2489,21 @@ async function loadWhatsAppInline() {
   }
 
   // Connection indicator
-  const dot = waState.connected ? 'on' : waState.paired === false ? 'wait' : 'off';
+  const dot = waState.connected ? 'on'
+    : (waState.reconnecting || waState.resetting) ? 'wait'
+    : waState.paired === false ? 'wait' : 'off';
   // last_error is the relay's own account of what went wrong, and it beats
   // "Relay not running" -- which describes the symptom of a crash, a wrong
   // port and a relay never started all in the same four words.
+  // A relay working its way back is not one that has given up, and saying
+  // "not connected" for both is what made a passing network blip look like
+  // something broken that needed a restart.
   const label = waState.connected
     ? `Connected \\u2014 ${waState.daily_sent || 0} / ${waState.daily_cap || 30} sent today`
     : waState.resetting ? 'Resetting\\u2026'
+    : waState.reconnecting
+      ? `Reconnecting\\u2026 next try in ${waState.retry_in_seconds || 0}s`
+        + (waState.last_error ? ' \\u2014 ' + waState.last_error : '')
     : waState.last_error || waState.error || 'Relay not running';
   // Offered whenever the relay itself answered -- connected or not. An
   // unpaired relay showing a QR that has gone stale is exactly when someone
@@ -2499,10 +2551,14 @@ async function loadWhatsAppInline() {
           : `<span class="wa-state ok">Sent \\u2714</span>`;
       } else if (u.failed) {
         actions = `<span class="wa-state err">${esc(u.error || 'Failed')}</span>
-          <button class="wa-send" onclick="retryWhatsApp('${esc(m.lead_id)}')">Retry</button>`;
+          <button class="wa-send" onclick="retryWhatsApp('${esc(m.lead_id)}')">Retry</button>
+          <button class="wa-skip" onclick="skipWhatsApp('${esc(m.lead_id)}')"
+            title="Take this one off the list without sending. It keeps its message and its site, and Send again below puts it back.">Not this one</button>`;
       } else {
         actions = `<div class="wa-actions">
           <button class="wa-rewrite" onclick="rewriteWhatsApp('${esc(m.lead_id)}')">Rewrite</button>
+          <button class="wa-skip" onclick="skipWhatsApp('${esc(m.lead_id)}')"
+            title="Take this one off the list without sending. It keeps its message and its site, and Send again below puts it back.">Not this one</button>
           <button class="wa-send" onclick="sendWhatsApp('${esc(m.lead_id)}')">Send</button>
         </div>`;
       }
@@ -2560,8 +2616,11 @@ async function loadWhatsAppInline() {
         `Channel: ${x.channel || 'blank'}`,
         `The Channel cell says \\u2018${x.channel || ''}\\u2019, which isn\\u2019t WhatsApp, Email or Unreachable. Fix it in the Sheet and this lead comes back.`],
       status_not_drafted: (x) => [
-        `Status: ${x.status || 'blank'}`,
-        `This lead has a drafted message, but its Status cell says \\u2018${x.status || ''}\\u2019 rather than \\u2018Drafted\\u2019. Set it back to Drafted and it returns to the send list.`],
+        (x.status || '').toLowerCase() === 'skipped'
+          ? 'Skipped' : `Status: ${x.status || 'blank'}`,
+        (x.status || '').toLowerCase() === 'skipped'
+          ? 'You took this one off the send list. Nothing was sent, and it still has its message and its site \\u2014 press Send again to put it back.'
+          : `This lead has a drafted message, but its Status cell says \\u2018${x.status || ''}\\u2019 rather than \\u2018Drafted\\u2019. Press Send again to put it back in the list.`],
     };
     // Only these two are undoable by clearing a cell. The rest -- no phone,
     // no Leads row, drafted as email -- need a different fix each, and a
@@ -2756,6 +2815,35 @@ function sendWhatsApp(leadId) {
     u.failed = true;
     u.error = e.message || 'Network error';
     loadWhatsAppInline();
+  });
+}
+
+// Take one message off the send list without sending it.
+//
+// Not a disqualification: the lead keeps everything, the row moves down to
+// the excluded list, and Send again there puts it straight back. That undo
+// is why this does not stop to confirm.
+function skipWhatsApp(leadId) {
+  const card = $(`#wa-msg-${waKey(leadId)}`);
+  const btn = card && card.querySelector('.wa-skip');
+  if (btn) { btn.disabled = true; btn.textContent = 'Skipping\\u2026'; }
+
+  fetch('/api/whatsapp/skip', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({lead_id: leadId}),
+  }).then(r => r.json()).then(d => {
+    if (d.error) {
+      const row = card && card.querySelector('.wa-row');
+      if (row) row.innerHTML = `<span class="wa-state err">${esc(d.error)}</span>`;
+      return;
+    }
+    // Nothing of this card's state should follow it into the excluded list.
+    delete waUi[leadId];
+    loadWhatsAppInline();
+    refresh();
+  }).catch(e => {
+    if (btn) { btn.disabled = false; btn.textContent = 'Not this one'; }
   });
 }
 

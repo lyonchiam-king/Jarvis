@@ -2869,3 +2869,77 @@ def test_no_two_page_functions_share_a_name():
         seen.add(name)
 
     assert not dupes, f"declared more than once on the page: {sorted(dupes)}"
+
+
+# ------------------------------- not this one: skipping without sending
+
+
+def test_skipping_takes_a_message_off_the_list_without_sending(monkeypatch):
+    """"Not this one" -- the answer that previously meant either sending it
+    anyway or editing the Sheet by hand."""
+    sheets = _GuardedSheets(
+        outreach=_sent_row(**{"WhatsApp Status": "", "WhatsApp Sent At": ""}),
+        leads={"a": (2, {"Lead ID": "a", "Business Name": "Kedai Kopi",
+                         "Phone": "+60123456789", "WhatsApp Reachable": "yes"})},
+    )
+    client = _wa_client(monkeypatch, sheets)
+    assert [m["lead_id"] for m in client.get("/api/whatsapp/queue").get_json()["queue"]] == ["a"]
+
+    body = client.post("/api/whatsapp/skip", json={"lead_id": "a"}).get_json()
+
+    assert body["ok"] is True
+    after = client.get("/api/whatsapp/queue").get_json()
+    assert after["queue"] == []
+    assert [e["reason"] for e in after["excluded"]] == ["status_not_drafted"]
+
+
+def test_skipping_keeps_the_message_and_the_screenshot(monkeypatch):
+    """It is not a disqualification. Everything that cost money to produce
+    stays, so Send again is a single press rather than a rebuild."""
+    sheets = _GuardedSheets(
+        outreach=_sent_row(**{"WhatsApp Status": "", "WhatsApp Sent At": ""}),
+    )
+    client = _wa_client(monkeypatch, sheets)
+
+    client.post("/api/whatsapp/skip", json={"lead_id": "a"})
+
+    touched = {column for column, _ in sheets.writes}
+    assert touched == {"Status"}, f"skip wrote more than the Status cell: {touched}"
+    assert sheets._outreach["a"][1]["WhatsApp Message"] == "hello"
+
+
+def test_a_skipped_message_can_be_sent_again(monkeypatch):
+    """The undo is why skipping does not stop to confirm."""
+    sheets = _GuardedSheets(
+        outreach=_sent_row(**{"WhatsApp Status": "", "WhatsApp Sent At": ""}),
+        leads={"a": (2, {"Lead ID": "a", "Business Name": "Kedai Kopi",
+                         "Phone": "+60123456789", "WhatsApp Reachable": "yes"})},
+    )
+    client = _wa_client(monkeypatch, sheets)
+    client.post("/api/whatsapp/skip", json={"lead_id": "a"})
+
+    client.post("/api/whatsapp/undo-send", json={"lead_id": "a"})
+
+    queue = client.get("/api/whatsapp/queue").get_json()["queue"]
+    assert [m["lead_id"] for m in queue] == ["a"]
+
+
+def test_skipping_a_lead_with_no_draft_says_so(monkeypatch):
+    sheets = _GuardedSheets(outreach={})
+    client = _wa_client(monkeypatch, sheets)
+
+    body = client.post("/api/whatsapp/skip", json={"lead_id": "ghost"}).get_json()
+
+    assert "nothing to skip" in body["error"]
+    assert sheets.writes == []
+
+
+def test_the_skip_button_sits_beside_send_and_beside_retry(client):
+    """Both states need it: a message you do not want to send and a message
+    that just failed are the same decision."""
+    page = client.get("/").get_data(as_text=True)
+
+    assert "skipWhatsApp('${esc(m.lead_id)}')" in page
+    assert "/api/whatsapp/skip" in page
+    # Once in the failed branch, once in the normal one.
+    assert page.count('class="wa-skip"') == 2

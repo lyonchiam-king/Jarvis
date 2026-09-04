@@ -18,6 +18,21 @@ def source() -> str:
     return RELAY.read_text()
 
 
+def code() -> str:
+    """The relay's source with its line comments stripped.
+
+    Assertions about what the code *does* must not be satisfiable by prose:
+    a test for "maxRetries" once passed against the comment explaining why
+    Windows needs it, with the option itself deleted. Anything checking for
+    the absence of a pattern especially needs this, since the comment
+    describing a bug quotes the very line the fix removed.
+    """
+    return "\n".join(
+        line for line in RELAY.read_text().splitlines()
+        if not line.lstrip().startswith("//")
+    )
+
+
 def test_the_relay_still_parses():
     """Same guard as the dashboard page: a syntax error here is silent until
     the process refuses to start."""
@@ -362,3 +377,80 @@ def test_the_relay_reports_why_it_is_unhappy():
     assert "let lastError" in src
     status = src.split('app.get("/status"', 1)[1].split("});", 1)[0]
     assert "last_error" in status
+
+
+# --------------------------------- the relay that stopped reconnecting
+
+
+def test_the_http_server_starts_before_the_connection_is_attempted():
+    """One failed first attempt used to leave no HTTP server at all.
+
+    connect() awaits a network call, so it can reject on a patchy minute.
+    Waiting for it before app.listen meant the dashboard could not even ask
+    what was wrong, and reported the relay as not running -- a different
+    problem with a different fix.
+    """
+    src = source()
+
+    listen = src.index("app.listen(PORT")
+    assert "connect().then(" not in code(), (
+        "the port must not wait on a WhatsApp connection that may never come"
+    )
+    # And the connect happens inside the listen callback, after the port is up.
+    tail = src[listen:]
+    assert "connectSafely()" in tail
+
+
+def test_every_reconnect_path_can_survive_a_failed_attempt():
+    """`setTimeout(connect, 3000)` keeps no reference to the promise, so a
+    rejection went nowhere. With the process-level handlers swallowing it,
+    that turned into a relay that stays up and never reconnects -- answering
+    every send with "not connected" for as long as it is left running."""
+    src = source()
+
+    assert "function connectSafely()" in src
+    assert re.search(r"connect\(\)\.catch\(", src), (
+        "connectSafely must catch, or a failed attempt is the last attempt"
+    )
+    # Nothing may call connect() bare from a timer any more.
+    assert "setTimeout(connect," not in code(), (
+        "a timer calling connect() directly drops its rejection"
+    )
+
+
+def test_a_failed_attempt_schedules_the_next_one():
+    block = source().split("function connectSafely()", 1)[1][:500]
+    assert "scheduleReconnect(" in block, (
+        "a failed connect must schedule another, or the relay is done"
+    )
+
+
+def test_reconnects_back_off_but_are_capped():
+    """A relay retrying every three seconds for an hour is its own problem,
+    and one retrying every hour is no use when the wifi returns."""
+    src = source()
+
+    assert "RECONNECT_MIN_MS" in src and "RECONNECT_MAX_MS" in src
+    assert re.search(r"Math\.min\(\s*reconnectDelay \* 2,\s*RECONNECT_MAX_MS\s*\)", src)
+
+
+def test_a_successful_connection_resets_the_backoff():
+    """Otherwise one bad afternoon leaves every later blip waiting the
+    maximum, long after the connection came back."""
+    block = source().split('if (connection === "open")', 1)[1][:400]
+    assert "reconnectDelay = RECONNECT_MIN_MS" in block
+
+
+def test_only_one_reconnect_is_ever_pending():
+    """A close event and a failed attempt can both ask for one. Two timers
+    means two sockets fighting over the same account."""
+    block = source().split("function scheduleReconnect(", 1)[1][:400]
+    assert "if (reconnectTimer" in block
+
+
+def test_the_status_says_reconnecting_rather_than_dead():
+    """"Not connected" describes a passing blip and a dead relay the same
+    way, and only one of them needs the user to do anything."""
+    status = source().split('app.get("/status"', 1)[1].split("});", 1)[0]
+    assert "reconnecting" in status
+    assert "retry_in_seconds" in status
