@@ -23,7 +23,7 @@ from ..errors import ErrorLog
 from ..models import utc_now
 from ..providers import gmail as gmail_provider
 from ..providers.llm import BriefWriter, build_outreach_prompt
-from .reachability import can_whatsapp
+from .reachability import can_whatsapp, is_waiting_on_a_check
 from ..selection import ORDERS, select_pending
 from ..sheets import SheetsClient
 from .. import screenshot
@@ -47,6 +47,7 @@ class OutreachReport:
     copy_written: int = 0
     drafts_created: int = 0
     whatsapp_only: int = 0
+    held_for_check: int = 0
     screenshots: int = 0
     screenshot_failures: int = 0
     screenshot_reason: str = ""
@@ -60,6 +61,10 @@ class OutreachReport:
             f"  already drafted         {self.already_done}  (skipped)",
             f"  not ready yet           {self.not_ready}  (skipped)",
             f"  selected this run       {self.selected}",
+            "",
+            f"Held for the WhatsApp check{self.held_for_check:>5}"
+            if self.held_for_check
+            else "",
             "",
             f"Messages written          {self.copy_written}",
             f"  Gmail drafts created    {self.drafts_created}",
@@ -273,6 +278,23 @@ def run(
                 )
             _row, research_row = found
 
+            # A lead with no email and no answer from the reachability check
+            # is held, not drafted. The old code let it fall into the
+            # Unreachable branch below, which retired it for good: a Draft
+            # row was written and the Stage advanced, so when the check
+            # later came back yes nothing would ever regenerate the message.
+            # Holding costs nothing -- the run just leaves it for the next
+            # one, after the check has run.
+            if config.outreach.whatsapp_enabled and is_waiting_on_a_check(
+                research_row, lead
+            ):
+                report.held_for_check += 1
+                log.info(
+                    "  held: the WhatsApp check has not answered yet -- "
+                    "run the check, then draft again."
+                )
+                continue
+
             preview_url = ""
             brief = site_briefs.get(lead_id)
             if brief is not None:
@@ -339,9 +361,10 @@ def run(
             elif can_whatsapp(lead, research_row, config.compliance.country_code):
                 report.whatsapp_only += 1
             else:
-                # No email and no mobile number -- a landline can't receive
-                # WhatsApp, so there is nothing to send. Mark it done so it is
-                # not re-selected, and say why in Notes.
+                # No email, and the check has answered no -- or WhatsApp is
+                # switched off and there was never a check to wait for. That
+                # is a dead end, not a wait: mark it done so it is not
+                # re-selected, and say why in Notes.
                 channel = "Unreachable"
                 notes = "Unreachable: no email and not reachable on WhatsApp"
 

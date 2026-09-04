@@ -18,6 +18,7 @@ from pathlib import Path
 from .. import schema
 from ..providers.cloudflare import CloudflareClient, CloudflareError
 from ..slug import site_slug
+from ..stage import Stage
 
 log = logging.getLogger("outreach")
 
@@ -26,6 +27,7 @@ log = logging.getLogger("outreach")
 class PublishReport:
     approved: int = 0
     already_live: int = 0
+    disqualified: int = 0
     no_folder: int = 0
     published: int = 0
     failed: int = 0
@@ -37,8 +39,12 @@ class PublishReport:
         out = [
             f"Approved and built      {self.approved}",
             f"  already published     {self.already_live}  (skipped)",
-            f"  published this run    {self.published}",
         ]
+        if self.disqualified:
+            out.append(
+                f"  lead disqualified     {self.disqualified}  (skipped)"
+            )
+        out.append(f"  published this run    {self.published}")
         if self.no_folder:
             out.append(
                 f"  no folder in the repo {self.no_folder}  (skipped -- push "
@@ -130,7 +136,14 @@ def run(config, sheets, client=None, *, limit: int = 0) -> PublishReport:
             report.already_live += 1
             continue
 
+        # A lead disqualified after its brief was approved must not get a
+        # public address. Publishing is the step where the outside world
+        # starts seeing the page, so this is the last gate that can stop it.
         entry = leads.get(lead_id)
+        if entry is not None:
+            if (entry[1].get("Stage") or "").strip() == Stage.DISQUALIFIED.value:
+                report.disqualified += 1
+                continue
         name = (entry[1].get("Business Name") if entry else "") or lead_id
         folder = folder_for(repo, name, lead_id)
         if folder is None:

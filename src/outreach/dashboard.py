@@ -408,6 +408,12 @@ class Runner:
                 self.lines.append(f"$ outreach {' '.join(args)}")
                 process = subprocess.Popen(
                     [sys.executable, "-m", "outreach", *args],
+                    # No stdin: a stage that tries to prompt (spending
+                    # credits, say) would otherwise inherit this console and
+                    # wait on a question the page never shows. With the null
+                    # device the CLI's confirm helper sees no terminal and
+                    # skips instead of hanging the run.
+                    stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -856,15 +862,24 @@ def create_app(config: Config) -> Flask:
         # Distinguish "set up but empty" from "not set up yet". Without this
         # the page says "no leads yet, press Find leads" at someone whose keys
         # aren't filled in, and the button they press just fails.
+        from .config import PROVIDER_KEY_ENV
+        from .env_edit import is_set
+
         missing = [
             name
             for name, value in (
                 ("SHEET_ID", c.secrets.sheet_id),
                 ("PLACES_API_KEY", c.secrets.places_api_key),
-                ("ANTHROPIC_API_KEY", c.secrets.anthropic_api_key),
             )
             if not value
         ]
+        # Which model key matters depends on the provider in use. The old
+        # list hardcoded ANTHROPIC_API_KEY, so an Ollama run was told it was
+        # "not set up" over a key it should never have been asked for, and an
+        # OpenRouter run was waved through while its own key was missing.
+        env_name = PROVIDER_KEY_ENV.get(c.research.provider, "")
+        if env_name and not is_set(Path(".env"), env_name):
+            missing.append(env_name)
         if missing:
             return jsonify({"setup_needed": missing})
 
@@ -1086,7 +1101,7 @@ def create_app(config: Config) -> Flask:
         URL in the outreach email, and with require_site on, a lead that is
         never marked built is never written to at all.
         """
-        from .stage import Stage
+        from .stage import Stage, advance
 
         payload = request.json or {}
         lead_id = (payload.get("lead_id") or "").strip()
@@ -1098,6 +1113,17 @@ def create_app(config: Config) -> Flask:
 
         try:
             sheets = _sheets_client(current())
+            # Same gate as the CLI's briefs-record: a disqualified lead's
+            # build must not be recorded, or they drop straight back into
+            # the outreach queue with a live site behind the message.
+            leads = sheets.read_rows(schema.LEADS)
+            entry = leads.get(lead_id)
+            current_stage = (entry[1].get("Stage") if entry else "") or ""
+            if current_stage.strip() == Stage.DISQUALIFIED.value:
+                return jsonify(
+                    {"error": "This lead is disqualified -- the build will not "
+                    "be recorded for it."}
+                ), 200
             sheets.update_column(
                 schema.SITE_BRIEFS, "Lovable Project ID", {lead_id: "built-by-hand"}
             )
@@ -1105,8 +1131,11 @@ def create_app(config: Config) -> Flask:
                 sheets.update_column(
                     schema.SITE_BRIEFS, "Preview URL", {lead_id: preview_url}
                 )
+            # advance(), not a bare Stage value: never move a lead backwards.
             sheets.update_column(
-                schema.LEADS, "Stage", {lead_id: Stage.SITE_BUILT.value}
+                schema.LEADS,
+                "Stage",
+                {lead_id: advance(current_stage, Stage.SITE_BUILT).value},
             )
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
@@ -1587,6 +1616,36 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": "phone is required"}), 400
         if not message:
             return jsonify({"error": "message is required"}), 400
+
+        # The cap in the campaign config was read and never applied -- the
+        # relay enforces only its own MAX_PER_DAY, so the number Lyon set in
+        # his campaign YAML did nothing. Count what today has already sent
+        # and refuse past it. Timestamps are ISO, so the date is the first
+        # ten characters.
+        from .models import utc_now
+
+        cap = c.outreach.whatsapp_max_per_day
+        if cap > 0:
+            today = utc_now()[:10]
+            try:
+                # A set comprehension over row dicts once raised
+                # "unhashable type" on every call and was swallowed into
+                # sent_today = 0, so the cap never tripped. Count in one
+                # pass instead.
+                sent_today = sum(
+                    1 for row in _sheets_client(c).read_rows(schema.OUTREACH_LOG).values()
+                    if (row[1].get("WhatsApp Sent At") or "")[:10] == today
+                )
+            except Exception:  # noqa: BLE001 -- never let bookkeeping stop a send
+                sent_today = 0
+            if sent_today >= cap:
+                return jsonify(
+                    {
+                        "error": f"Daily cap reached: {sent_today} of {cap} WhatsApp "
+                        "messages already sent today. Wait until tomorrow, or "
+                        "raise outreach.max_per_day in your campaign."
+                    }
+                ), 429
 
         from . import screenshot
         from .providers.whatsapp import WhatsAppClient, WhatsAppError
@@ -2090,6 +2149,7 @@ async function refresh() {
   }
 
   if (d.setup_needed) {
+    setupReady = false;
     $('#totals').innerHTML = '<span class="err">Not set up yet</span>';
 
     // The Sheet is the one missing piece we can just make for them. The
@@ -2130,6 +2190,10 @@ async function refresh() {
     $('#send').innerHTML = '<div class="sub">Nothing yet.</div>';
     return;
   }
+
+  // Setup is complete: the next poll tick re-arms the stage buttons it
+  // disabled when the page was still missing its keys.
+  setupReady = true;
   $('#totals').innerHTML = d.total
     ? `${d.total} leads &middot; ${d.disqualified} disqualified &middot;
        <a href="${d.sheet_url}" target="_blank" rel="noopener">Open Sheet</a>`
@@ -2489,6 +2553,16 @@ if (WA_ENABLED) {
   setInterval(loadWhatsAppInline, 30000);
 }
 
+// First-run setup state. While keys or the Sheet are missing, the stage
+// buttons stay dead -- pressing one only fails at the stage with an error
+// naming a key, which reads like the app is broken. The setup card above
+// is the way out. Checking setup and testing the model are exempt: they
+// are part of getting set up.
+const SETUP_LOCKED = new Set(['full', 'discovery', 'discovery-refresh', 'research',
+  'reachability', 'reachability-recheck', 'site-brief', 'site-build',
+  'publish', 'outreach-draft', 'site-brief-rewrite', 'site-generate']);
+let setupReady = true;
+
 async function poll() {
   let d;
   try { d = await (await fetch('/api/log')).json(); } catch { return; }
@@ -2497,6 +2571,10 @@ async function poll() {
   const busy = !!d.running;
   $('#running').textContent = busy ? `Running ${d.running}\\u2026` : '';
   document.querySelectorAll('button[data-run]').forEach(b => b.disabled = busy);
+  document.querySelectorAll('button[data-run]').forEach(b => {
+    if (!SETUP_LOCKED.has(b.dataset.run)) return;
+    b.disabled = busy || !setupReady;
+  });
   if (!busy && poll.wasBusy) {
     loadModel();
     loadNextUp();
@@ -2698,7 +2776,7 @@ async function dropLead(leadId, btn) {
   }
   // Redraw rather than just hiding the row: dropping one pulls the next lead
   // up into the list, and seeing that happen is the point of the preview.
-  await drawNextUp();
+  await loadNextUp();
   await refresh();
 }
 
@@ -3065,7 +3143,7 @@ async function loadQueue() {
   }
   el.innerHTML = d.queue.map((q, i) => `
     <div class="card q">
-      <h3>${q.name}</h3>
+      <h3>${esc(q.name)}</h3>
       <textarea id="p${i}" readonly>${q.prompt.replace(/</g,'&lt;')}</textarea>
       <div class="row" style="margin-top:10px">
         <button onclick="copyPrompt(${i})">Copy prompt</button>

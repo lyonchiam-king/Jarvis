@@ -45,7 +45,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1054 tests, pytest, no CI -- the suite is the only gate
+tests/             1072 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs

@@ -22,10 +22,10 @@ from .auth import AuthError, get_credentials
 from .config import Config, ConfigError, load_config
 from .providers.gmail import GmailClient
 from .providers.llm import LLMError, make_writer
-from .providers.lovable import LovableAdapter, LovableUnavailable
+from .providers.lovable import LovableAdapter, LovableSkipped, LovableUnavailable
 from .providers.places import PlacesClient, PlacesError
 from .sheets import SheetsClient, SheetsError
-from .stage import Stage
+from .stage import Stage, advance
 from .stages import discovery as discovery_stage
 from .stages import init_sheet as init_sheet_stage
 from .stages import outreach_draft as outreach_stage
@@ -710,6 +710,18 @@ def briefs_record(
     config = _load(ctx.obj["config_path"])
     sheets = _sheets_client(config)
 
+    # A lead disqualified after its brief was approved must not be moved
+    # back to Site Built -- recording a build for someone who asked not to
+    # be contacted would put them straight back in the outreach queue.
+    leads = sheets.read_rows(schema.LEADS)
+    entry = leads.get(lead_id)
+    current_stage = (entry[1].get("Stage") if entry else "") or ""
+    if current_stage.strip() == Stage.DISQUALIFIED.value:
+        raise click.ClickException(
+            f"{lead_id} is disqualified -- its site will not be recorded. "
+            "If this is wrong, fix the Stage on the Leads tab first."
+        )
+
     sheets.update_column(
         schema.SITE_BRIEFS,
         "Lovable Project ID",
@@ -717,7 +729,12 @@ def briefs_record(
     )
     if preview_url:
         sheets.update_column(schema.SITE_BRIEFS, "Preview URL", {lead_id: preview_url})
-    sheets.update_column(schema.LEADS, "Stage", {lead_id: Stage.SITE_BUILT.value})
+    # advance(), not a bare Stage value: never move a lead backwards.
+    sheets.update_column(
+        schema.LEADS,
+        "Stage",
+        {lead_id: advance(current_stage, Stage.SITE_BUILT).value},
+    )
 
     click.echo(f"Recorded {lead_id} as Site Built.")
     if preview_url:
@@ -1107,6 +1124,24 @@ def run_reachability(ctx: click.Context, limit: int, recheck: bool) -> None:
     click.echo("")
 
 
+def _confirm_interactive(prompt: str) -> bool:
+    """Ask before spending credits -- but only when someone could answer.
+
+    The dashboard and scheduled runs launch stages as subprocesses with no
+    readable stdin. A prompt there is not a question, it is a hang: nothing
+    on the page shows it and no keyboard is wired up to answer it. Raising
+    a skip instead turns the build into a per-lead skip the report counts,
+    and a run from a real terminal still gets the prompt.
+    """
+    if not sys.stdin or not sys.stdin.isatty():
+        raise LovableSkipped(
+            "build confirmation needed, but no terminal is attached to answer "
+            "it -- run site-build from a terminal, or set "
+            "lovable.require_confirmation to false in your campaign"
+        )
+    return click.confirm(prompt)
+
+
 @run.command("site-brief")
 @click.option("--limit", type=int, default=None, help="Process fewer than the batch size.")
 @click.option(
@@ -1139,7 +1174,7 @@ def run_site_brief(
     lovable = LovableAdapter(
         enabled=config.lovable.enabled,
         require_confirmation=config.lovable.require_confirmation,
-        confirm=click.confirm,
+        confirm=_confirm_interactive,
     )
     report = site_brief_stage.run(
         config, sheets, _writer(config), lovable,
@@ -1175,7 +1210,7 @@ def run_site_build(ctx: click.Context, limit: int | None) -> None:
     lovable = LovableAdapter(
         enabled=config.lovable.enabled,
         require_confirmation=config.lovable.require_confirmation,
-        confirm=click.confirm,
+        confirm=_confirm_interactive,
     )
     try:
         report = site_brief_stage.build_approved(config, sheets, lovable, limit=limit)

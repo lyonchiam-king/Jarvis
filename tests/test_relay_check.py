@@ -233,13 +233,23 @@ def test_a_reset_holds_off_the_reconnect_that_would_race_it():
     )
 
 
-def test_being_logged_out_from_the_phone_clears_the_dead_session_too():
-    """Unlinking from Linked devices on the phone kills the credentials just
-    as thoroughly. Reconnecting with them earns another 401 for ever."""
-    src = source()
-    close = src.split('if (connection === "close")', 1)[1].split("});", 1)[0]
+def test_a_logged_out_session_is_wiped_before_reconnecting():
+    """A revoked session must be removed, not replayed.
+
+    WhatsApp answers the dead credentials with 401 before the QR flow can
+    begin, so while the stale auth folder stays on disk the relay loops
+    forever logging that it is "waiting for new QR scan" while never
+    offering one -- the dashboard shows nothing, and re-pairing is
+    impossible without a hand-wiped session directory.
+
+    The guarantee is unchanged; only the mechanism moved. The wipe used to be
+    an inline `fs.rmSync` here and is now `clearSession()`, shared with the
+    /logout route -- awaited rather than blocking the event loop, and clearing
+    the ack and retry tables alongside the credentials.
+    """
+    close = source().split('if (connection === "close")', 1)[1].split("});", 1)[0]
 
     assert "clearSession()" in close, (
-        "a loggedOut disconnect must clear the dead credentials before "
-        "reconnecting, or no QR is ever produced"
+        "the logged-out path must wipe the stale auth state before "
+        "reconnecting, or the 401 loop never offers a QR"
     )

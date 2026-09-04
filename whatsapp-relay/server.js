@@ -216,10 +216,13 @@ async function connect() {
       }
 
       // Logged out somewhere else -- almost always the phone, via
-      // Linked devices > Log out. The stored credentials are dead now, and
-      // reconnecting with them just earns another 401: the relay would spin
-      // for ever and never show a QR, which looked exactly like a hung
-      // relay. Clear them first so the reconnect starts a fresh pairing.
+      // Linked devices > Log out. The session on disk is dead: WhatsApp
+      // answers those credentials with 401 before the QR flow can begin, so
+      // while they stay on disk every reconnect replays them and is rejected
+      // again. The relay sits there logging that it is waiting for a scan it
+      // can never offer, which reads as a hung relay and leaves re-pairing
+      // impossible without deleting the folder by hand. Wipe them first so
+      // the reconnect starts genuinely fresh and a QR actually appears.
       qrCode = null;
       console.log("[whatsapp-relay] Logged out — clearing session, new QR to follow");
       clearSession()

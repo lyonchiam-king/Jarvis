@@ -125,11 +125,19 @@ def _merge_existing(existing: dict[str, str], incoming: dict[str, object]) -> di
     """Refresh Places fields without rewriting history or regressing the stage.
 
     ``Discovered At`` is when we first saw the lead and must survive a refresh;
-    ``Stage`` may have been advanced by a later stage or by hand.
+    ``Stage`` may have been advanced by a later stage or by hand. The WhatsApp
+    verdict columns must survive too: a fresh row carries neither, and the
+    refresh upsert writes the whole automated run -- so without carrying them
+    over, every refresh blanked the verdicts of every existing lead, and the
+    reachability answer someone had already paid a lookup for was thrown away
+    (research re-ran the check, or the draft held the lead for a check that
+    would never come).
     """
     merged = dict(incoming)
     merged["Discovered At"] = existing.get("Discovered At") or incoming.get("Discovered At", "")
     merged["Stage"] = advance(existing.get("Stage"), Stage.DISCOVERED).value
+    merged["WhatsApp Reachable"] = existing.get("WhatsApp Reachable", "")
+    merged["WhatsApp Checked At"] = existing.get("WhatsApp Checked At", "")
     return merged
 
 
