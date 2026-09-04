@@ -2545,8 +2545,8 @@ def test_the_not_on_whatsapp_list_can_disqualify_a_lead(client):
     """Answered dead ends. Removing one stops it being researched or built."""
     page = client.get("/").get_data(as_text=True)
 
-    assert 'onclick="dropLead(' in page
-    assert "async function dropLead(" in page
+    assert 'onclick="dropUnreachable(' in page
+    assert "async function dropUnreachable(" in page
     # The rejected list gets the button; the verified one must not.
     assert "fold('Not on WhatsApp', d.rejected || [], true)" in page
     assert "fold('On WhatsApp', d.verified || [])" in page
@@ -2617,3 +2617,255 @@ def test_saving_the_level_keeps_the_campaign_files_comments(campaign_app):
     client.post("/api/design-level", json={"level": "standard"})
 
     assert local.read_text().count("#") == before
+
+
+def test_an_unconfirmed_send_leaves_the_queue(monkeypatch):
+    """The bug that kept a sent message at the top of the send list.
+
+    WhatsApp confirms delivery late often enough -- a first message to a new
+    contact especially -- that the relay reports `unconfirmed` whenever no ack
+    arrives in its window. That means the message left. Treating it as
+    still-to-send offered the same real business the same message again, with
+    nothing on the page to say it had already gone.
+    """
+    sheets = _GuardedSheets(
+        outreach=_sent_row(**{"WhatsApp Status": "unconfirmed"}),
+        leads={"a": (2, {"Lead ID": "a", "Business Name": "Kedai Kopi",
+                         "Phone": "+60123456789", "WhatsApp Reachable": "yes"})},
+    )
+    client = _wa_client(monkeypatch, sheets)
+
+    body = client.get("/api/whatsapp/queue").get_json()
+
+    assert body["queue"] == [], "an unconfirmed message must not be offered again"
+    assert [e["reason"] for e in body["excluded"]] == ["already_sent"]
+
+
+def test_an_unconfirmed_send_is_not_counted_as_still_waiting(monkeypatch):
+    """The count at the top and the queue below must agree -- a count that
+    disagrees with the list makes the page look broken."""
+    rows = _sent_row(**{"WhatsApp Status": "unconfirmed"})
+    summary = dash.summarise({}, set(), set(), rows, {})
+
+    assert summary.whatsapp_waiting == 0
+
+
+def test_a_failed_send_is_still_offered(monkeypatch):
+    """The opposite case. `failed` means it did not go, so it stays."""
+    sheets = _GuardedSheets(
+        outreach=_sent_row(**{"WhatsApp Status": "failed"}),
+        leads={"a": (2, {"Lead ID": "a", "Business Name": "Kedai Kopi",
+                         "Phone": "+60123456789", "WhatsApp Reachable": "yes"})},
+    )
+    client = _wa_client(monkeypatch, sheets)
+
+    body = client.get("/api/whatsapp/queue").get_json()
+
+    assert [m["lead_id"] for m in body["queue"]] == ["a"]
+
+
+# --------------- the send panel's state machine, actually executed
+
+
+def _page_script() -> str:
+    """The rendered page's single <script>, ready to run under node."""
+    import re as _re
+
+    from flask import Flask, render_template_string
+
+    from outreach.dashboard import PAGE
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    app = Flask(__name__)
+    with app.app_context():
+        page = render_template_string(
+            PAGE,
+            campaign=config.campaign,
+            build=config.build,
+            whatsapp_enabled=config.outreach.whatsapp_enabled,
+        )
+    blocks = _re.findall(r"<script>(.*?)</script>", page, _re.S)
+    assert blocks, "the page has no script block"
+    return max(blocks, key=len)
+
+
+def _run_in_node(harness: str) -> str:
+    """Run the page's script under node with a stub DOM, then the harness.
+
+    Parsing the page proved it was syntactically valid while the send flow was
+    still broken. These two bugs were both about state being discarded between
+    renders, which only executing it can show.
+    """
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+
+    stub = """
+    const els = {};
+    function fakeEl() {
+      return {innerHTML: '', textContent: '', value: '', disabled: false,
+              classList: {add(){}, remove(){}}, style: {},
+              querySelector: () => fakeEl(), hidden: false};
+    }
+    globalThis.document = {
+      querySelector: () => fakeEl(),
+      querySelectorAll: () => [],
+      getElementById: () => fakeEl(),
+      addEventListener(){},
+    };
+    globalThis.window = globalThis;
+    globalThis.setInterval = () => 0;
+    globalThis.setTimeout = (f) => { return 0; };
+    // Rejects by default so the page's own start-up calls all take their
+    // error paths and bail out. Each harness installs the fetch it needs
+    // afterwards; satisfying every panel's response shape here would be a
+    // second copy of the server, wrong the moment either changed.
+    globalThis.fetch = async () => { throw new Error('no network in this test'); };
+    process.on('unhandledRejection', () => {});
+    """
+    script = _page_script()
+    # The page's own bootstrap calls would fire network stubs and redraw; the
+    # harness drives the functions directly instead.
+    src = stub + "\n" + script + "\n" + harness
+    proc = subprocess.run(
+        [node, "--input-type=module", "-e", src],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    return proc.stdout
+
+
+def test_a_refresh_between_the_two_presses_does_not_lose_the_confirmation():
+    """Issue reported from a real run: "I clicked sending twice but it still
+    didn't go out at all."
+
+    The first press arms a confirmation; the second sends. The queue is
+    rebuilt from the server every 30 seconds, and the flag used to live on
+    the queue object -- so a refresh landing between the presses discarded
+    it, and the second press only armed it again.
+    """
+    out = _run_in_node("""
+    waQueue = [{lead_id: 'a', name: 'Kedai', phone: '+60123', message: 'hi'}];
+    let sent = 0;
+    globalThis.fetch = async (url) => {
+      if (url === '/api/whatsapp/send') sent += 1;
+      return {json: async () => ({ok: true})};
+    };
+    globalThis.loadWhatsAppInline = async () => {};
+    globalThis.refresh = async () => {};
+
+    sendWhatsApp('a');                       // press one: arm
+    waQueue = [{lead_id: 'a', name: 'Kedai', phone: '+60123', message: 'hi'}];
+    sendWhatsApp('a');                       // press two: must send
+    console.log(JSON.stringify({sent}));
+    """)
+    assert '"sent":1' in out, (
+        "the second press did not send -- the confirmation was lost when the "
+        "queue was replaced"
+    )
+
+
+def test_the_sent_state_survives_the_redraw_that_follows_it():
+    """The other half of the same bug: "it doesn't move it back down to the
+    sent column". The success flag was set on a queue object the redraw had
+    already replaced, so the card rendered as unsent again."""
+    out = _run_in_node("""
+    waQueue = [{lead_id: 'a', name: 'K', phone: '+60123', message: 'hi'}];
+    globalThis.fetch = async () => ({json: async () => ({ok: true, note: ''})});
+    globalThis.loadWhatsAppInline = async () => {
+      // What the real one does: fresh objects from the server.
+      waQueue = [{lead_id: 'a', name: 'K', phone: '+60123', message: 'hi'}];
+    };
+    globalThis.refresh = async () => {};
+
+    sendWhatsApp('a');
+    sendWhatsApp('a');
+    await new Promise(r => process.nextTick(r));
+    await new Promise(r => process.nextTick(r));
+    console.log(JSON.stringify({sent: !!waUi['a'].sent}));
+    """)
+    assert '"sent":true' in out
+
+
+def test_an_edit_is_not_wiped_by_the_background_refresh():
+    """The timer stands aside while a card is being typed into. Losing an
+    edited message to a 30-second tick is silent and unrecoverable."""
+    out = _run_in_node("""
+    noteEdit('a', 'my edited message');
+    console.log(JSON.stringify({busy: waBusy(), draft: waUi['a'].draft}));
+    """)
+    assert '"busy":true' in out
+    assert "my edited message" in out
+
+
+def test_the_edited_text_is_what_gets_sent():
+    out = _run_in_node("""
+    waQueue = [{lead_id: 'a', name: 'K', phone: '+60123', message: 'original'}];
+    let body = null;
+    globalThis.fetch = async (url, opts) => {
+      body = JSON.parse(opts.body);
+      return {json: async () => ({ok: true})};
+    };
+    globalThis.loadWhatsAppInline = async () => {};
+    globalThis.refresh = async () => {};
+
+    noteEdit('a', 'edited by hand');
+    sendWhatsApp('a');
+    sendWhatsApp('a');
+    await new Promise(r => process.nextTick(r));
+    console.log(JSON.stringify({message: body.message}));
+    """)
+    assert "edited by hand" in out
+
+
+def test_a_lead_is_addressed_by_id_never_by_its_position():
+    """The queue is rebuilt on a timer and a card's index moves the moment
+    anything enters or leaves the list. An index captured when the button was
+    drawn could address a different business by the time it was pressed."""
+    out = _run_in_node("""
+    waQueue = [
+      {lead_id: 'first', name: 'A', phone: '+601', message: 'a'},
+      {lead_id: 'second', name: 'B', phone: '+602', message: 'b'},
+    ];
+    let addressed = null;
+    globalThis.fetch = async (url, opts) => {
+      addressed = JSON.parse(opts.body).lead_id;
+      return {json: async () => ({ok: true})};
+    };
+    globalThis.loadWhatsAppInline = async () => {};
+    globalThis.refresh = async () => {};
+
+    sendWhatsApp('second');                  // arm the second card
+    waQueue.shift();                         // the first one leaves the queue
+    sendWhatsApp('second');                  // still the same business
+    await new Promise(r => process.nextTick(r));
+    console.log(JSON.stringify({addressed}));
+    """)
+    assert '"addressed":"second"' in out
+
+
+def test_no_two_page_functions_share_a_name():
+    """A second function of the same name silently replaces the first.
+
+    This shipped: a `dropLead` added for the WhatsApp-check panel replaced
+    the one the lead preview's "not this one" button calls, with a different
+    signature -- so that button started passing an index where a lead ID was
+    expected. Nothing failed, because the page still parsed.
+    """
+    import re as _re
+
+    names = _re.findall(
+        r"^\s*(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(",
+        _page_script(),
+        _re.M,
+    )
+    seen, dupes = set(), set()
+    for name in names:
+        if name in seen:
+            dupes.add(name)
+        seen.add(name)
+
+    assert not dupes, f"declared more than once on the page: {sorted(dupes)}"

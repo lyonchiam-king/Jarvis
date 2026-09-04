@@ -45,7 +45,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1112 tests, pytest, no CI -- the suite is the only gate
+tests/             1121 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -377,6 +377,34 @@ penalised for it. All four `render_lovable_prompt` call sites pass it -- run,
 `--rewrite`, `generate_sites` and `regenerate_one` -- and each has its own
 test, because three of them were unwired and every other test still passed:
 the prompt was valid, just not the one the campaign asked for.
+
+**`unconfirmed` means the message left.** It was missing from
+`WA_SENT_STATUSES`, so a send WhatsApp had not acknowledged inside the relay's
+window stayed at the top of the send queue with nothing to show it had gone --
+inviting the same real business to be messaged twice. The ack was softened
+from a gate into evidence for good reasons; the queue never learned. `pending`
+is the same state under the relay's older name and counts too.
+
+**Transient page state must not live on objects the page replaces.**
+`loadWhatsAppInline` rebuilds `waQueue` from the server, on a 30-second timer,
+so a `_confirming` flag set on a queue object was thrown away by the next
+refresh: the first press armed the confirmation, a tick discarded it, and the
+second press only armed it again -- "I clicked twice and nothing went out".
+The same discard is why Sending and Sent never appeared. It lives in `waUi`,
+keyed by Lead ID, and the timer stands aside while a card is mid-decision so
+an edited message is not lost to a tick either. Address a lead by its ID, never
+by its index: the queue is rebuilt underneath the buttons.
+
+**A duplicate function name on the page fails silently.** A `dropLead` added
+for the WhatsApp-check panel replaced the one the lead preview calls, with a
+different signature -- so that button began passing an index where a lead ID
+belonged, and nothing failed because the page still parsed.
+`test_no_two_page_functions_share_a_name` holds it.
+
+**Parsing the page is not running it.** Both send bugs above were invisible to
+`node --check`: the script was valid throughout. The page's script is now
+executed under node against a stub DOM, driving the send state machine
+directly -- which is what caught the duplicate `dropLead` in the same run.
 
 **Secrets are write-only.** `env_edit.set_key` writes; `is_set` reports presence
 and never the value. No key is ever echoed to a page, a log, or a report.

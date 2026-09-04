@@ -44,7 +44,20 @@ def is_mobile_number(phone: str, country: str = "") -> bool:
 # send queue and the "WhatsApp to send" count check this set, so the two views
 # can never drift apart -- the bug that had the top count show a lead section 4
 # had correctly hidden, making a drafted message look like it never landed.
-WA_SENT_STATUSES = frozenset({"sent", "delivered", "read"})
+# "unconfirmed" belongs here, and leaving it out is what kept a sent message
+# in the send queue for ever. WhatsApp confirms delivery late often enough --
+# a first message to a new contact especially -- that the relay reports
+# `unconfirmed` whenever no ack arrives inside its window. That means the
+# message left; it does not mean it failed. Treating it as still-to-send put
+# the lead back at the top of the queue with nothing to show it had already
+# gone, which invites sending a real business the same message twice.
+#
+# "pending" is the same state under the name the relay used before the ack
+# was softened from a gate into evidence. Rows carrying it are on the Sheet
+# already and were written by the same send path, so they mean the same thing.
+WA_SENT_STATUSES = frozenset(
+    {"sent", "delivered", "read", "unconfirmed", "pending"}
+)
 
 
 class WhatsAppError(Exception):

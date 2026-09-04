@@ -2382,6 +2382,40 @@ let waState = null;  // last /api/whatsapp/status response
 let waQueue = [];    // last /api/whatsapp/queue response
 let waExcluded = []; // drafted WhatsApp leads dropped from the queue, with reasons
 
+// Per-lead interface state, keyed by Lead ID: whether a card is waiting for
+// its confirm, mid-send, sent, failed, and any edit made to its text.
+//
+// It is keyed by lead rather than kept on the queue objects because
+// loadWhatsAppInline replaces the whole array with fresh objects from the
+// server -- so a flag set on a queue object was thrown away by the next
+// refresh, which runs on a 30-second timer. That is why pressing Send twice
+// sometimes did nothing at all: the first press armed the confirmation, a
+// refresh landed in between and discarded it, and the second press only
+// armed it again. The same discard is why the Sending and Sent states
+// never appeared.
+const waUi = {};
+
+function uiFor(leadId) {
+  if (!waUi[leadId]) waUi[leadId] = {};
+  return waUi[leadId];
+}
+
+// A DOM-safe id per lead. Lead IDs are Google place_ids, but they are not
+// ours to assume anything about, so anything outside the safe set is
+// replaced rather than trusted in an id or a selector.
+function waKey(leadId) {
+  return String(leadId || '').replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
+// True while any card is mid-interaction. The periodic refresh stands aside
+// for it: redrawing then would discard a pending confirmation and any edit
+// made to the message text.
+function waBusy() {
+  return Object.values(waUi).some(
+    u => u.confirming || u.sending || u.draft !== undefined
+  );
+}
+
 async function loadWhatsAppInline() {
   const el = $('#wa-inline');
   if (!el) return;
@@ -2446,25 +2480,30 @@ async function loadWhatsAppInline() {
 
   // Message cards — each has an editable textarea and a Send button
   if (waQueue.length) {
-    html += waQueue.map((m, i) => {
-      const msgText = esc(m.message || '');
-      const sending = m._sending;
-      const sent = m._sent;
-      const failed = m._failed;
+    html += waQueue.map((m) => {
+      const k = waKey(m.lead_id);
+      const u = uiFor(m.lead_id);
+      // The edit in progress wins over the server's copy, so a refresh
+      // landing mid-typing does not wipe what has been written.
+      const msgText = esc(u.draft !== undefined ? u.draft : (m.message || ''));
       let actions = '';
-      if (sending) {
+      if (u.confirming) {
+        actions = `<span class="wa-state">Send to ${esc(m.phone)}?</span>
+          <button class="wa-send confirm" onclick="sendWhatsApp('${esc(m.lead_id)}')">Yes, send</button>
+          <button onclick="cancelSend('${esc(m.lead_id)}')">Cancel</button>`;
+      } else if (u.sending) {
         actions = `<span class="wa-state"><span class="wa-spin"></span>Sending\\u2026</span>`;
-      } else if (sent) {
-        actions = m._note
-          ? `<span class="wa-state ok" title="${esc(m._note)}">Sent \\u2714 (not yet confirmed)</span>`
+      } else if (u.sent) {
+        actions = u.note
+          ? `<span class="wa-state ok" title="${esc(u.note)}">Sent \\u2714 (not yet confirmed)</span>`
           : `<span class="wa-state ok">Sent \\u2714</span>`;
-      } else if (failed) {
-        actions = `<span class="wa-state err">${esc(m._error || 'Failed')}</span>
-          <button class="wa-send" onclick="retryWhatsApp(${i})">Retry</button>`;
+      } else if (u.failed) {
+        actions = `<span class="wa-state err">${esc(u.error || 'Failed')}</span>
+          <button class="wa-send" onclick="retryWhatsApp('${esc(m.lead_id)}')">Retry</button>`;
       } else {
         actions = `<div class="wa-actions">
-          <button class="wa-rewrite" onclick="rewriteWhatsApp(${i}, '${esc(m.lead_id)}')">Rewrite</button>
-          <button class="wa-send" onclick="sendWhatsApp(${i}, '${esc(m.lead_id)}', '${esc(m.phone)}')">Send</button>
+          <button class="wa-rewrite" onclick="rewriteWhatsApp('${esc(m.lead_id)}')">Rewrite</button>
+          <button class="wa-send" onclick="sendWhatsApp('${esc(m.lead_id)}')">Send</button>
         </div>`;
       }
       // The picture that will ride with the message. Shown small, and
@@ -2478,11 +2517,12 @@ async function loadWhatsAppInline() {
         : '<div class="sub" style="margin:6px 0">No screenshot &mdash; the text '
           + 'will send on its own.</div>';
 
-      return `<div class="wa-msg-card" id="wa-msg-${i}">
+      return `<div class="wa-msg-card" id="wa-msg-${k}">
         <div class="wa-name">${esc(m.name)}</div>
         <div class="wa-phone">${esc(m.phone)}</div>
         ${shot}
-        <textarea class="wa-edit" id="wa-text-${i}" rows="4">${msgText}</textarea>
+        <textarea class="wa-edit" id="wa-text-${k}" rows="4"
+          oninput="noteEdit('${esc(m.lead_id)}', this.value)">${msgText}</textarea>
         <div class="wa-row">${actions}</div>
       </div>`;
     }).join('');
@@ -2581,6 +2621,11 @@ async function undoSend(idx, leadId) {
     return;
   }
 
+  // Forget how the previous send ended. The card is about to reappear in the
+  // queue, and a leftover "Sent" from the attempt being undone would render
+  // it as already done.
+  delete waUi[leadId];
+
   // Redraw the whole panel: the lead has moved out of the excluded grid and
   // into the queue above, which is the confirmation that it worked.
   await loadWhatsAppInline();
@@ -2658,64 +2703,76 @@ function cancelWhatsAppReset() {
   if (note) note.textContent = '';
 }
 
-function sendWhatsApp(idx, leadId, phone) {
-  const card = $(`#wa-msg-${idx}`);
-  if (!card) return;
-  const msg = waQueue[idx];
+function noteEdit(leadId, value) {
+  uiFor(leadId).draft = value;
+}
+
+// Look the message up by Lead ID, never by position. The queue is rebuilt
+// from the server on a timer, and a card's index moves the moment anything
+// enters or leaves the list -- so an index captured when the button was
+// drawn could address a different business by the time it was pressed.
+function waMessage(leadId) {
+  return waQueue.find(m => m.lead_id === leadId);
+}
+
+function sendWhatsApp(leadId) {
+  const msg = waMessage(leadId);
   if (!msg) return;
+  const u = uiFor(leadId);
 
-  // Read the current text from the textarea (user may have edited it)
-  const textarea = $(`#wa-text-${idx}`);
-  const message = textarea ? textarea.value : msg.message;
-
-  // First click: confirm
-  if (!msg._confirming) {
-    msg._confirming = true;
-    const row = card.querySelector('.wa-row');
-    row.innerHTML = `<span class="wa-state">Send to ${esc(phone)}?</span>
-      <button class="wa-send confirm" onclick="sendWhatsApp(${idx}, '${esc(leadId)}', '${esc(phone)}')">Yes, send</button>
-      <button onclick="cancelSend(${idx})">Cancel</button>`;
+  // First press: arm the confirmation. It lives in waUi, so a refresh
+  // landing before the second press cannot quietly discard it.
+  if (!u.confirming) {
+    u.confirming = true;
+    loadWhatsAppInline();
     return;
   }
 
-  // Second click: send
-  msg._confirming = false;
-  msg._sending = true;
+  const message = u.draft !== undefined ? u.draft : msg.message;
+  u.confirming = false;
+  u.sending = true;
   loadWhatsAppInline();
 
   fetch('/api/whatsapp/send', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     // phone is the display form; phone_e164 is what actually gets dialled.
-    body: JSON.stringify({lead_id: leadId, phone: phone,
+    body: JSON.stringify({lead_id: leadId, phone: msg.phone,
                           phone_e164: msg.phone_e164 || '', message: message}),
   }).then(r => r.json()).then(d => {
-    msg._sending = false;
-    if (d.error) { msg._failed = true; msg._error = d.error; }
-    else { msg._sent = true; msg._note = d.note || ''; }
+    u.sending = false;
+    if (d.error) { u.failed = true; u.error = d.error; }
+    else {
+      u.sent = true;
+      u.note = d.note || '';
+      // The edit has been sent, so it is no longer an unsaved change and
+      // must not hold off the refresh that moves this card to the sent list.
+      delete u.draft;
+    }
     loadWhatsAppInline();
     refresh();  // update counts
   }).catch(e => {
-    msg._sending = false;
-    msg._failed = true;
-    msg._error = e.message || 'Network error';
+    u.sending = false;
+    u.failed = true;
+    u.error = e.message || 'Network error';
     loadWhatsAppInline();
   });
 }
 
-function cancelSend(idx) {
-  waQueue[idx]._confirming = false;
+function cancelSend(leadId) {
+  uiFor(leadId).confirming = false;
   loadWhatsAppInline();
 }
 
-function retryWhatsApp(idx) {
-  waQueue[idx]._failed = false;
-  waQueue[idx]._error = null;
+function retryWhatsApp(leadId) {
+  const u = uiFor(leadId);
+  u.failed = false;
+  u.error = null;
   loadWhatsAppInline();
 }
 
-function rewriteWhatsApp(idx, leadId) {
-  const card = $(`#wa-msg-${idx}`);
+function rewriteWhatsApp(leadId) {
+  const card = $(`#wa-msg-${waKey(leadId)}`);
   if (!card) return;
   const btn = card.querySelector('.wa-rewrite');
   if (btn) { btn.disabled = true; btn.textContent = 'Rewriting\\u2026'; }
@@ -2730,6 +2787,8 @@ function rewriteWhatsApp(idx, leadId) {
       if (row) row.innerHTML = `<span class="wa-state err">${esc(d.error)}</span>`;
       return;
     }
+    // The server has written a new message, so any local edit is stale.
+    delete uiFor(leadId).draft;
     loadWhatsAppInline();
   }).catch(e => {
     const row = card.querySelector('.wa-row');
@@ -2737,10 +2796,13 @@ function rewriteWhatsApp(idx, leadId) {
   });
 }
 
-// Poll WhatsApp state every 30 seconds
+// Poll WhatsApp state every 30 seconds -- but never over the top of someone
+// mid-decision. A redraw while a confirmation is armed or a message is being
+// edited throws that away, and the press that follows lands on a card that
+// has quietly reset itself.
 if (WA_ENABLED) {
   loadWhatsAppInline();
-  setInterval(loadWhatsAppInline, 30000);
+  setInterval(() => { if (!waBusy()) loadWhatsAppInline(); }, 30000);
 }
 
 // First-run setup state. While keys or the Sheet are missing, the stage
@@ -3301,7 +3363,7 @@ async function loadReach() {
     (drop
       ? `<td style="padding:2px 0 2px 10px;text-align:right">` +
         `<button class="reach-drop" id="reach-drop-${i}"
-           onclick="dropLead(${i}, '${esc(e.lead_id)}', '${esc(e.name)}', ${e.email ? 1 : 0})"
+           onclick="dropUnreachable(${i}, '${esc(e.lead_id)}', '${esc(e.name)}', ${e.email ? 1 : 0})"
            title="Disqualify this lead so it is never researched or built.">Remove</button></td>`
       : '') +
     `</tr>`
@@ -3344,7 +3406,7 @@ async function loadReach() {
 // lead out of -- and the rows sit close together in a narrow table.
 let reachDropping = null;
 
-async function dropLead(idx, leadId, name, hasEmail) {
+async function dropUnreachable(idx, leadId, name, hasEmail) {
   const btn = $(`#reach-drop-${idx}`);
   const row = $(`#reach-row-x-${idx}`);
   if (!btn || !row) return;

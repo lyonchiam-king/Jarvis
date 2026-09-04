@@ -648,6 +648,18 @@ the message stayed stuck for ever — on the recipient's phone as much as yours.
 again). New messages will be readable. The four already stuck cannot be
 recovered; re-send those.
 
+### "Sent, but it stayed in the list"
+
+Fixed. WhatsApp often does not confirm delivery straight away — a first
+message to a new contact especially — and the relay reports that honestly as
+**unconfirmed**. The send list used to treat unconfirmed as "not sent yet", so
+the business stayed at the top of the queue looking untouched. Sending again
+from there would have messaged them twice.
+
+An unconfirmed message now moves down to the sent list like any other, marked
+so you can see it was not acknowledged. If it really did not arrive, use
+**Send again**.
+
 ### A message says sent but never arrived
 
 At the bottom of section 4, every drafted message you cannot send from there
