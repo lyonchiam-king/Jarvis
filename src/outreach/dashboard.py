@@ -1177,6 +1177,30 @@ def create_app(config: Config) -> Flask:
         except Exception:
             return jsonify({"qr": None})
 
+    @app.route("/api/whatsapp/reset", methods=["POST"])
+    def api_whatsapp_reset():
+        """Unlink the paired WhatsApp account and offer a fresh QR.
+
+        For switching phones, or re-pairing when the link has gone stale.
+        The relay does the work; this exists because a relay endpoint with no
+        button in the dashboard may as well not be there -- /logout shipped
+        months ago and had never once been called.
+        """
+        c = current()
+        if not c.outreach.whatsapp_enabled:
+            return jsonify({"error": "WhatsApp is switched off for this campaign."}), 400
+
+        from .providers.whatsapp import WhatsAppClient, WhatsAppError
+
+        client = WhatsAppClient(port=c.outreach.whatsapp_relay_port)
+        try:
+            note = client.logout()
+        except WhatsAppError as exc:
+            return jsonify({"error": str(exc)}), 200
+        except Exception as exc:  # noqa: BLE001 -- surfaced on the page
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+        return jsonify({"ok": True, "note": note})
+
     @app.route("/api/suggest-areas", methods=["POST"])
     def api_suggest_areas():
         """Expand a broad location into the sub-areas discovery can drink.
@@ -1804,6 +1828,13 @@ PAGE = """<!doctype html>
   .wa-panel { margin-top:12px; }
   .wa-status { display:flex; align-items:center; gap:8px; margin-bottom:12px;
                font-size:14px; }
+  /* Sits at the far right of the status row: reachable when wanted, never
+     next to the thumb that is pressing Send. */
+  .wa-status .wa-reset { margin-left:auto; font-size:12.5px; padding:5px 10px;
+                         color:var(--muted); }
+  .wa-status .wa-reset:hover:not(:disabled) { color:var(--accent);
+                                              border-color:var(--accent); }
+  .wa-reset-note { margin:-6px 0 12px; font-size:13px; color:var(--muted); }
   .wa-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
   .wa-dot.on { background:var(--ok); }
   .wa-dot.off { background:var(--accent); }
@@ -2182,7 +2213,17 @@ async function loadWhatsAppInline() {
   const label = waState.connected
     ? `Connected \\u2014 ${waState.daily_sent || 0} / ${waState.daily_cap || 30} sent today`
     : waState.error || 'Relay not running';
-  html += `<div class="wa-status"><span class="wa-dot ${dot}"></span>${esc(label)}</div>`;
+  // Offered whenever the relay itself answered -- connected or not. An
+  // unpaired relay showing a QR that has gone stale is exactly when someone
+  // needs this, so gating it on "connected" would hide it in the one state
+  // it is most wanted.
+  const canReset = waState.enabled !== false && !waState.error;
+  const resetBtn = canReset
+    ? `<button class="wa-reset" id="wa-reset-btn" onclick="resetWhatsApp()"
+         title="Unlink this WhatsApp account and show a new QR code, so you can sign in again or link a different phone.">Log out / switch account</button>`
+    : '';
+  html += `<div class="wa-status"><span class="wa-dot ${dot}"></span>${esc(label)}${resetBtn}</div>`;
+  html += `<div class="wa-reset-note" id="wa-reset-note"></div>`;
 
   // QR when unpaired
   if (!waState.connected && !waState.paired) {
@@ -2290,6 +2331,77 @@ async function loadWhatsAppInline() {
   }
 
   el.innerHTML = html;
+}
+
+// Unlink the paired account and wait for the new QR.
+//
+// Two presses on purpose. This is not destructive to any data, but it does
+// end a link that takes a phone in hand to restore -- and it sits a few
+// pixels from the Send buttons.
+let waResetting = false;
+
+async function resetWhatsApp() {
+  const btn = $('#wa-reset-btn');
+  const note = $('#wa-reset-note');
+  if (!note) return;
+
+  if (!waResetting) {
+    waResetting = true;
+    note.innerHTML = `<b>Log out of WhatsApp on this computer?</b>
+      Messages already sent stay in your phone. You will scan a new QR code to
+      link again \u2014 this phone, or a different one.
+      <button class="wa-send confirm" onclick="resetWhatsApp()">Yes, log out</button>
+      <button onclick="cancelWhatsAppReset()">Cancel</button>`;
+    return;
+  }
+
+  waResetting = false;
+  if (btn) btn.disabled = true;
+  note.textContent = 'Logging out\u2026';
+
+  let d;
+  try {
+    d = await (await fetch('/api/whatsapp/reset', {method: 'POST'})).json();
+  } catch (e) {
+    note.innerHTML = '<span class="err">Could not reach the dashboard.</span>';
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  if (d.error) {
+    note.innerHTML = '<span class="err">' + esc(d.error) + '</span>';
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  // The relay reconnects in the background, so the QR is not there the
+  // instant this returns. Poll rather than redraw once onto an empty box
+  // and leave the user thinking it failed.
+  note.textContent = 'Logged out. Waiting for the new QR code\u2026';
+  for (let i = 0; i < 12; i++) {
+    await new Promise(r => setTimeout(r, 1500));
+    let qr = null;
+    try { qr = (await (await fetch('/api/whatsapp/qr')).json()).qr; } catch {}
+    if (qr) {
+      await loadWhatsAppInline();
+      const n = $('#wa-reset-note');
+      if (n) n.textContent = 'Scan the code below with the phone you want to use.';
+      return;
+    }
+  }
+
+  await loadWhatsAppInline();
+  const n = $('#wa-reset-note');
+  if (n) {
+    n.innerHTML = '<span class="err">Logged out, but no new QR code appeared. '
+      + 'Restart the relay window and reload this page.</span>';
+  }
+}
+
+function cancelWhatsAppReset() {
+  waResetting = false;
+  const note = $('#wa-reset-note');
+  if (note) note.textContent = '';
 }
 
 function sendWhatsApp(idx, leadId, phone) {

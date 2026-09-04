@@ -45,7 +45,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1042 tests, pytest, no CI -- the suite is the only gate
+tests/             1054 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -302,6 +302,27 @@ Everywhere the dashboard reuses an existing token it passes
 It passes `consent_timeout` instead, so an abandoned sign-in becomes an error
 on the page and a button they can press again, rather than a panel that
 quietly stops answering.
+
+**A message nobody can decrypt is a missing `getMessage`, not a bad send.**
+Four messages arrived as "Waiting for this message. This may take a while."
+-- in Lyon's own chat list, which is where it shows first. Nothing about the
+send looked wrong, because encryption is not what failed: WhatsApp is
+end-to-end per device, and a device that cannot decrypt asks for the message
+*again* with a retry receipt. Baileys answers by calling `getMessage(key)`
+and re-encrypting. The relay passed no `getMessage`, so every retry went
+unanswered and the message stuck for ever -- on the recipient's phone as much
+as ours. `sentMessages` keeps the content of recent sends, bounded, purely so
+that retry can be served.
+
+**`sock.logout()` does not delete the credentials.** It ends the session at
+WhatsApp's end and leaves `.whatsapp-session/` untouched, so the next
+`useMultiFileAuthState` reads the dead session straight back, WhatsApp answers
+401, and the relay reconnect-loops for ever without emitting a QR -- which
+looks like a hung relay, not a logout. `clearSession()` deletes the folder, and
+a `resetting` flag stops the close handler reconnecting underneath the reset
+and rebuilding what is being deleted. Being unlinked *from the phone* takes the
+same path, for the same reason. A failed delete is reported, never reported as
+success: the relay would silently come back on the old account.
 
 **Secrets are write-only.** `env_edit.set_key` writes; `is_set` reports presence
 and never the value. No key is ever echoed to a page, a log, or a report.

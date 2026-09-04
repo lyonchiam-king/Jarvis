@@ -101,6 +101,40 @@ class WhatsAppClient:
         except Exception:
             return None
 
+    # ------------------------------------------------------------------ reset
+
+    def logout(self) -> str:
+        """Unlink the relay's WhatsApp account so another can be paired.
+
+        Returns a note to show the user. Raises WhatsAppError when the relay
+        could not do it -- most usefully when the saved session could not be
+        deleted, because a relay that reconnects to the same account after a
+        reset is worse than one that refuses: the button looks like it did
+        nothing.
+
+        The timeout is its own, and generous. Logging out talks to WhatsApp
+        before touching the disk, and the default ten seconds is sized for
+        localhost round-trips rather than a remote handshake.
+        """
+        try:
+            resp = requests.post(f"{self._base}/logout", timeout=30.0)
+        except requests.RequestException as exc:
+            raise WhatsAppError(
+                "The WhatsApp relay is not running, so there is no session to "
+                f"reset ({exc})."
+            ) from exc
+
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {}
+
+        if resp.status_code >= 400 or not data.get("ok"):
+            raise WhatsAppError(
+                data.get("error") or f"The relay refused the reset (HTTP {resp.status_code})."
+            )
+        return data.get("note") or "Logged out."
+
     # ------------------------------------------------------------------- send
 
     def send_message(

@@ -94,6 +94,11 @@ usual numbers:
 3. **Their own WhatsApp.** Section 4 shows a QR code; they scan it from
    WhatsApp → Linked devices, on their own phone, once.
 
+To change which phone is linked — yours or theirs — press **Log out /
+switch account** at the right of the connection line in section 4. It
+unlinks the account, forgets the saved session, and shows a fresh QR a few
+seconds later. Messages already sent stay in the phone; only the link goes.
+
 The button refuses to run a second time once a Sheet is set up — a second,
 empty Sheet would make every lead already gathered look lost.
 
@@ -608,6 +613,21 @@ you cannot double-charge yourself or double-message anyone.
 ---
 
 ## When something goes wrong
+
+### "Waiting for this message. This may take a while."
+
+If messages you sent show this in your own WhatsApp, it is not your account
+and not the recipient — it is the relay, and it is fixed as of this version.
+
+WhatsApp encrypts separately for every device. When a device cannot decrypt
+something, it asks the sender for that message again. The relay used to throw
+the message away the moment it went out, so it had nothing to answer with, and
+the message stayed stuck for ever — on the recipient's phone as much as yours.
+
+**Update, then restart the relay window** (close it and run `Dashboard.bat`
+again). New messages will be readable. The four already stuck cannot be
+recovered; re-send those.
+
 
 Open **Run one step on its own** in step 1 and press **Check setup**. It tests
 every connection and says what's broken in plain English.

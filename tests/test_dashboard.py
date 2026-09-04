@@ -2073,3 +2073,112 @@ def test_two_presses_at_once_only_ever_make_one_sheet(new_user, monkeypatch):
     assert second.status_code == 409
     assert first[0].get_json()["ok"] is True
     assert _FakeNewSheets.made == ["Outreach -- hair salon in Penang"]
+
+
+# ------------------------------- WhatsApp: log out and pair another phone
+
+
+def _wa_config(enabled=True):
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    return replace(
+        config,
+        outreach=replace(config.outreach, whatsapp_enabled=enabled),
+        secrets=replace(config.secrets, sheet_id="s"),
+    )
+
+
+def test_resetting_whatsapp_asks_the_relay_to_log_out(monkeypatch):
+    """The relay has had a /logout endpoint for months and nothing ever
+    called it -- no client method, no dashboard button. A relay endpoint the
+    dashboard cannot reach may as well not exist."""
+    from outreach.providers import whatsapp as wa
+
+    called = []
+
+    class FakeClient:
+        def __init__(self, port=4099):
+            called.append(port)
+
+        def logout(self):
+            return "Logged out. A new QR code will appear shortly."
+
+    monkeypatch.setattr(wa, "WhatsAppClient", FakeClient)
+    client = create_app(_wa_config()).test_client()
+
+    body = client.post("/api/whatsapp/reset").get_json()
+
+    assert body["ok"] is True
+    assert "QR" in body["note"]
+    assert called == [4099]
+
+
+def test_a_relay_that_cannot_reset_says_so_instead_of_reporting_success(
+    monkeypatch
+):
+    """If the saved session survives, the relay reconnects to the same
+    account. Reporting ok there gives the user a button that appears to work
+    and changes nothing."""
+    from outreach.providers import whatsapp as wa
+
+    class FakeClient:
+        def __init__(self, port=4099):
+            pass
+
+        def logout(self):
+            raise wa.WhatsAppError("Could not delete the saved WhatsApp session")
+
+    monkeypatch.setattr(wa, "WhatsAppClient", FakeClient)
+    client = create_app(_wa_config()).test_client()
+
+    body = client.post("/api/whatsapp/reset").get_json()
+
+    assert "ok" not in body
+    assert "Could not delete" in body["error"]
+
+
+def test_a_relay_that_is_not_running_never_crashes_the_panel(monkeypatch):
+    """Every other WhatsApp panel survives a dead relay; this one must too."""
+    from outreach.providers import whatsapp as wa
+
+    class FakeClient:
+        def __init__(self, port=4099):
+            pass
+
+        def logout(self):
+            raise OSError("connection refused")
+
+    monkeypatch.setattr(wa, "WhatsAppClient", FakeClient)
+    client = create_app(_wa_config()).test_client()
+
+    response = client.post("/api/whatsapp/reset")
+
+    assert response.status_code == 200
+    assert "OSError" in response.get_json()["error"]
+
+
+def test_reset_is_refused_when_whatsapp_is_switched_off():
+    client = create_app(_wa_config(enabled=False)).test_client()
+
+    response = client.post("/api/whatsapp/reset")
+
+    assert response.status_code == 400
+    assert "switched off" in response.get_json()["error"]
+
+
+def test_the_send_section_offers_a_way_to_pair_another_phone(client):
+    """The button has to be on the page Lyon actually uses. A reset he can
+    only reach with curl is not a reset."""
+    page = client.get("/").get_data(as_text=True)
+
+    # The status-row button specifically. "resetWhatsApp()" on its own
+    # matches the function's definition *and* the Yes-log-out button inside
+    # its own confirmation, so it passes with the real button unwired --
+    # which is exactly what it did before this assertion was tightened.
+    assert 'id="wa-reset-btn" onclick="resetWhatsApp()"' in page, (
+        "the button in the WhatsApp panel must call the reset"
+    )
+    assert "async function resetWhatsApp()" in page
+    assert "/api/whatsapp/reset" in page
+    assert "Log out / switch account" in page
+    # And a confirmation, because it sits beside the Send buttons.
+    assert "cancelWhatsAppReset" in page

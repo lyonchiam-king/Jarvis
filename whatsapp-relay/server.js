@@ -10,6 +10,7 @@
  */
 
 const express = require("express");
+const fs = require("fs");
 const {
   makeWASocket,
   useMultiFileAuthState,
@@ -49,6 +50,37 @@ let lastCheckTime = 0;
 // message id -> WhatsApp status code (1 = sent to server, 2 = delivered).
 const acks = new Map();
 
+// message id -> the content we sent under it.
+//
+// This is what fixes "Waiting for this message. This may take a while."
+// WhatsApp is end-to-end encrypted per device, so when any device -- the
+// recipient's, or one of the sender's own -- fails to decrypt a message, it
+// does not give up: it sends back a *retry receipt* asking for that message
+// again. Baileys answers a retry by calling `getMessage(key)` to fetch the
+// original content and re-encrypting it against a fresh session.
+//
+// With no `getMessage` there is nothing to answer with. The retry goes
+// unfulfilled, and the message stays "Waiting for this message" for ever --
+// on the recipient's phone, and on the sender's own, which is where it was
+// first noticed. Nothing about the send looked wrong: the socket accepted it
+// and WhatsApp acknowledged it, because encryption is not the problem.
+// Keeping the plaintext for a while is what makes the retry answerable.
+//
+// Bounded: this is a retry buffer, not a message archive. Retries arrive
+// within seconds to minutes, so a few hundred recent messages is far more
+// than the protocol ever asks for, and the entries are small -- an image
+// message holds a media URL and its keys, never the bytes.
+const MESSAGE_STORE_MAX = parseInt(process.env.MESSAGE_STORE_MAX || "400", 10);
+const sentMessages = new Map();
+
+function rememberMessage(id, content) {
+  if (!id || !content) return;
+  sentMessages.set(id, content);
+  while (sentMessages.size > MESSAGE_STORE_MAX) {
+    sentMessages.delete(sentMessages.keys().next().value);
+  }
+}
+
 // Wait briefly for the server to acknowledge a message. Resolves to the
 // status code, or null if nothing came back in time -- which is reported as
 // "pending", never as "sent".
@@ -62,6 +94,10 @@ async function waitForAck(id, timeoutMs = ACK_TIMEOUT_MS) {
   return acks.has(id) ? acks.get(id) : null;
 }
 let sendQueue = Promise.resolve(); // serialise sends so we never firehose
+// True while /logout is tearing the session down. The close handler must not
+// race the reset by reconnecting underneath it -- that would rebuild the
+// credential folder the reset is in the middle of deleting.
+let resetting = false;
 
 // ---------------------------------------------------------------------------
 // Logger — pino but quiet (Baileys is chatty at info level)
@@ -82,6 +118,24 @@ function resetDailyIfNeeded() {
 }
 
 // ---------------------------------------------------------------------------
+// Session teardown
+// ---------------------------------------------------------------------------
+
+// Delete the stored credentials.
+//
+// `sock.logout()` ends the session at WhatsApp's end but leaves the folder on
+// disk untouched -- that part is the application's job, and skipping it is
+// the classic Baileys reset bug: `useMultiFileAuthState` reads the same dead
+// credentials back on the next connect, WhatsApp answers 401, and the relay
+// reconnect-loops for ever without ever emitting a QR. Whoever pressed the
+// button just sees a relay that never comes back.
+async function clearSession() {
+  await fs.promises.rm(AUTH_DIR, { recursive: true, force: true });
+  acks.clear();
+  sentMessages.clear();
+}
+
+// ---------------------------------------------------------------------------
 // Connect to WhatsApp
 // ---------------------------------------------------------------------------
 
@@ -95,6 +149,11 @@ async function connect() {
     printQRInTerminal: false,
     logger,
     browser: ["Jarvis Outreach", "Desktop", "1.0.0"],
+    // Answers retry receipts. Without it every message a device cannot
+    // decrypt stays "Waiting for this message" permanently -- see the note
+    // on `sentMessages` above. Returning undefined is safe and simply means
+    // that retry cannot be served; it is not an error.
+    getMessage: async (key) => sentMessages.get(key?.id) || undefined,
   });
 
   sock.ev.on("creds.update", saveCreds);
@@ -139,20 +198,33 @@ async function connect() {
     if (connection === "close") {
       connected = false;
       const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      const loggedOut = statusCode === DisconnectReason.loggedOut;
 
       console.log(
-        `[whatsapp-relay] Disconnected (code: ${statusCode}). Reconnect: ${shouldReconnect}`
+        `[whatsapp-relay] Disconnected (code: ${statusCode}). Logged out: ${loggedOut}`
       );
 
-      if (shouldReconnect) {
+      // A reset is already driving the teardown and will reconnect itself.
+      // Reconnecting here as well would recreate the credential folder it is
+      // about to delete, and the relay would come back paired to the account
+      // the user just asked to be rid of.
+      if (resetting) return;
+
+      if (!loggedOut) {
         setTimeout(connect, 3000);
-      } else {
-        qrCode = null;
-        console.log("[whatsapp-relay] Logged out — waiting for new QR scan");
-        // Reconnect anyway so a new QR is generated.
-        setTimeout(connect, 5000);
+        return;
       }
+
+      // Logged out somewhere else -- almost always the phone, via
+      // Linked devices > Log out. The stored credentials are dead now, and
+      // reconnecting with them just earns another 401: the relay would spin
+      // for ever and never show a QR, which looked exactly like a hung
+      // relay. Clear them first so the reconnect starts a fresh pairing.
+      qrCode = null;
+      console.log("[whatsapp-relay] Logged out — clearing session, new QR to follow");
+      clearSession()
+        .catch((err) => logger.error({ err }, "Could not clear session folder"))
+        .finally(() => setTimeout(connect, 3000));
     }
   });
 }
@@ -298,6 +370,11 @@ app.post("/send", async (req, res) => {
       dailySent += 1;
 
       const key = result?.key;
+      // Kept so a retry receipt for this message can be answered. A device
+      // that fails to decrypt asks for the message again; with nothing held
+      // here that request cannot be served and the message stays "Waiting
+      // for this message" on the recipient's phone and on our own.
+      rememberMessage(key?.id, result?.message);
       // "sent" now means WhatsApp acknowledged it, not merely that the call
       // returned. Without an ack the honest answer is "pending": the message
       // may be sitting in a socket that never transmitted it.
@@ -421,18 +498,80 @@ app.post("/check", async (req, res) => {
   });
 });
 
-// POST /logout — destroy the session (forces re-pair)
+// POST /logout — unlink this account and come back ready for a new QR.
+//
+// Used by the dashboard's "Log out / switch account" button. Three things
+// have to happen in order, and skipping any one of them leaves the relay in a
+// state that looks broken rather than logged out:
+//
+//   1. Tell WhatsApp, so the entry disappears from Linked devices on the
+//      phone rather than lingering as a device nobody can see the use of.
+//   2. Delete the credentials on disk. Without this the next connect reads
+//      the dead session straight back and loops on 401 with no QR.
+//   3. Reconnect, so a fresh QR exists by the time the page next asks.
+//
+// `resetting` holds the close handler off while this runs: it would otherwise
+// reconnect underneath us and rebuild the folder being deleted.
 app.post("/logout", async (_req, res) => {
-  if (sock) {
-    try {
-      await sock.logout();
-    } catch {
-      // Best-effort — the socket may already be dead.
-    }
+  if (resetting) {
+    return res.status(409).json({
+      ok: false,
+      error: "A reset is already in progress. Give it a few seconds.",
+    });
   }
+
+  resetting = true;
   connected = false;
   qrCode = null;
-  res.json({ ok: true });
+
+  try {
+    if (sock) {
+      try {
+        // Best effort. A socket already dead cannot be logged out of, and
+        // that is fine -- the credentials are deleted either way, so this
+        // machine forgets the account regardless of what WhatsApp heard.
+        await sock.logout();
+      } catch (err) {
+        logger.warn({ err }, "logout() failed; clearing local session anyway");
+      }
+      try {
+        sock.end(undefined);
+      } catch {
+        // Already closed.
+      }
+      sock = null;
+    }
+
+    try {
+      await clearSession();
+    } catch (err) {
+      // This one does fail the request. If the credentials are still on
+      // disk the relay will reconnect to the same account, and reporting
+      // success would leave the user pressing a button that silently does
+      // nothing.
+      logger.error({ err }, "Could not delete the session folder");
+      resetting = false;
+      setTimeout(connect, 1000);
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Could not delete the saved WhatsApp session at "
+          + AUTH_DIR
+          + ": " + (err.message || String(err))
+          + ". Close the relay window and delete that folder by hand.",
+      });
+    }
+  } finally {
+    // Cleared before reconnecting, so the close handler governs the new
+    // socket normally again.
+    if (resetting) resetting = false;
+  }
+
+  // Not awaited: pairing is driven by the user scanning a code, which takes
+  // as long as it takes. The route answers now and the page polls /qr.
+  connect().catch((err) => logger.error({ err }, "Reconnect after reset failed"));
+
+  res.json({ ok: true, note: "Logged out. A new QR code will appear shortly." });
 });
 
 // ---------------------------------------------------------------------------

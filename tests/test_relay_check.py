@@ -142,3 +142,104 @@ def test_an_oversized_body_answers_json_not_an_html_error_page():
 
     assert "entity.too.large" in text
     assert "larger than the relay accepts" in text
+
+
+# ------------------------------------------- "Waiting for this message"
+
+
+def test_the_socket_can_answer_a_retry_receipt():
+    """The cause of "Waiting for this message. This may take a while."
+
+    WhatsApp is encrypted per device. A device that cannot decrypt a message
+    does not give up -- it sends back a retry receipt asking for that message
+    again, and Baileys answers by calling `getMessage(key)` for the original
+    content and re-encrypting it. With no `getMessage` there is nothing to
+    answer with: the retry goes unfulfilled and the message stays "Waiting
+    for this message" for ever, on the recipient's phone and on the sender's
+    own. Nothing about the send looks wrong, because encryption is not what
+    failed.
+    """
+    src = source()
+
+    assert "getMessage:" in src, (
+        "makeWASocket has no getMessage, so no retry receipt can ever be "
+        "answered and undecryptable messages stay stuck for good"
+    )
+    # And it has to read from somewhere, not be a stub returning undefined.
+    assert re.search(r"getMessage:.*sentMessages\.get", src), (
+        "getMessage must look the message up in the store"
+    )
+
+
+def test_every_sent_message_is_kept_for_a_retry():
+    """A getMessage that reads an empty store answers nothing. The content
+    has to be recorded at the moment it is sent."""
+    src = source()
+
+    assert re.search(r"rememberMessage\(\s*key\?\.id,\s*result\?\.message", src), (
+        "the send path must record what it sent, keyed by message id"
+    )
+
+
+def test_the_retry_store_is_bounded():
+    """A retry buffer, not a message archive -- this process runs for weeks."""
+    src = source()
+
+    assert "MESSAGE_STORE_MAX" in src
+    assert re.search(r"while\s*\(\s*sentMessages\.size\s*>", src), (
+        "the store must evict, or a long-running relay grows without limit"
+    )
+
+
+# ------------------------------------------------------ logout / re-pair
+
+
+def test_logout_deletes_the_saved_session():
+    """sock.logout() ends the session at WhatsApp's end and leaves the
+    credentials on disk. Skipping the delete is the classic Baileys reset
+    bug: useMultiFileAuthState reads the dead session straight back, WhatsApp
+    answers 401, and the relay reconnect-loops for ever without ever showing
+    a QR -- which looks exactly like a hung relay to whoever pressed the
+    button."""
+    src = source()
+
+    assert "async function clearSession()" in src
+    assert re.search(r"fs\.promises\.rm\(\s*AUTH_DIR", src), (
+        "the session folder must actually be deleted"
+    )
+    logout = src.split('app.post("/logout"', 1)[1]
+    assert "clearSession()" in logout, "the logout route must clear the session"
+
+
+def test_a_failed_delete_is_reported_rather_than_claimed_as_success():
+    """If the credentials survive, the relay reconnects to the same account.
+    Answering ok:true there gives the user a button that silently does
+    nothing."""
+    logout = source().split('app.post("/logout"', 1)[1]
+
+    assert "ok: false" in logout, "a failed reset must not report ok:true"
+    assert "500" in logout
+
+
+def test_a_reset_holds_off_the_reconnect_that_would_race_it():
+    """The close handler reconnects on disconnect. During a reset that would
+    rebuild the credential folder being deleted, and the relay would come
+    back paired to the account the user just asked to be rid of."""
+    src = source()
+
+    assert "let resetting = false" in src
+    assert re.search(r"if\s*\(\s*resetting\s*\)\s*return;", src), (
+        "the close handler must stand aside while a reset owns the teardown"
+    )
+
+
+def test_being_logged_out_from_the_phone_clears_the_dead_session_too():
+    """Unlinking from Linked devices on the phone kills the credentials just
+    as thoroughly. Reconnecting with them earns another 401 for ever."""
+    src = source()
+    close = src.split('if (connection === "close")', 1)[1].split("});", 1)[0]
+
+    assert "clearSession()" in close, (
+        "a loggedOut disconnect must clear the dead credentials before "
+        "reconnecting, or no QR is ever produced"
+    )
