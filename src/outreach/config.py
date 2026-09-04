@@ -196,6 +196,13 @@ BUILD_TARGETS: frozenset[str] = frozenset({"lovable", "firebase"})
 # vs. a self-hosted Firebase page; the image provider is orthogonal to that.
 IMAGE_PROVIDERS: frozenset[str] = frozenset({"gemini", "vertex"})
 
+# How much art direction the site prompt carries. "showcase" adds the craft
+# blocks -- type as a scale, layout that breaks the centred column, colour
+# ratio, motion in numbers. Both levels produce the same spec: this changes
+# only the prompt handed to the site builder, so no research model sees the
+# extra text and a weaker one is not penalised for it.
+DESIGN_LEVELS: frozenset[str] = frozenset({"standard", "showcase"})
+
 
 @dataclass(frozen=True)
 class BuildSettings:
@@ -207,6 +214,9 @@ class BuildSettings:
     """
 
     target: str = "lovable"          # "lovable" | "firebase"
+    # "standard" | "showcase" -- see DESIGN_LEVELS. A campaign-level craft
+    # constant, like target above, not a per-business schema field.
+    design_level: str = "showcase"
     # The display label + button target for whatever tool Lyon pastes prompts
     # into. A campaign-level craft constant, not a per-business schema field
     # (per CLAUDE.md: craft rules are template text). Defaults match the tool
@@ -522,6 +532,13 @@ def load_config(
             f"build.target must be one of {sorted(BUILD_TARGETS)}, got "
             f"{build_target!r}"
         )
+    design_level = str(b.get("design_level", "showcase")).strip().lower()
+    if design_level not in DESIGN_LEVELS:
+        raise ConfigError(
+            f"build.design_level must be one of {sorted(DESIGN_LEVELS)}, got "
+            f"{design_level!r}. Use 'showcase' for the full art direction, or "
+            f"'standard' for the shorter prompt."
+        )
     # Display label + button target for the site-builder tool. The name is
     # required (a blank button label is a broken UI); the URL is allowed to be
     # blank, in which case the dashboard simply omits the "Open [tool]" button
@@ -580,6 +597,7 @@ def load_config(
 
     build = BuildSettings(
         target=build_target,
+        design_level=design_level,
         site_builder_name=site_builder_name,
         site_builder_url=site_builder_url,
         enabled=bool(b.get("enabled", False)),

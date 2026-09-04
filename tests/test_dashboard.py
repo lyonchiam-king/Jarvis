@@ -2559,3 +2559,61 @@ def test_removing_a_lead_warns_when_it_still_has_an_email(client):
 
     assert "Remove anyway?" in page
     assert "could still be contacted that way" in page
+
+
+# ------------------------------------------- the art-direction switch
+
+
+def test_the_design_level_is_readable_from_the_page(client):
+    body = client.get("/api/design-level").get_json()
+
+    assert body["level"] in ("standard", "showcase")
+    assert body["levels"] == ["showcase", "standard"]
+
+
+def test_the_switch_is_on_the_page_lyon_uses(client):
+    """A setting he can only reach by editing YAML is a setting he does not
+    have -- the same rule that made the reachability stage a button."""
+    page = client.get("/").get_data(as_text=True)
+
+    assert 'id="design-showcase"' in page
+    assert "setDesignLevel(this.checked)" in page
+    assert "/api/design-level" in page
+
+
+def test_an_unknown_level_is_refused_without_touching_the_campaign(client):
+    response = client.post("/api/design-level", json={"level": "fancy"})
+
+    assert response.status_code == 400
+    assert "fancy" in response.get_json()["error"]
+
+
+def test_setting_the_level_forks_to_the_local_campaign(campaign_app):
+    """Never write to a git-tracked file at runtime -- the dashboard once
+    broke `git pull` on Lyon's machine doing exactly this."""
+    client, local = campaign_app
+    tracked = Path("campaign.yaml")
+    before = tracked.read_text()
+
+    body = client.post("/api/design-level", json={"level": "standard"}).get_json()
+
+    assert body["ok"] is True
+    assert tracked.read_text() == before, "the tracked campaign file was written to"
+    assert 'design_level: "standard"' in local.read_text()
+
+
+def test_the_new_level_takes_effect_without_a_restart(campaign_app):
+    client, _ = campaign_app
+
+    client.post("/api/design-level", json={"level": "standard"})
+
+    assert client.get("/api/design-level").get_json()["level"] == "standard"
+
+
+def test_saving_the_level_keeps_the_campaign_files_comments(campaign_app):
+    client, local = campaign_app
+    before = Path("campaign.yaml").read_text().count("#")
+
+    client.post("/api/design-level", json={"level": "standard"})
+
+    assert local.read_text().count("#") == before

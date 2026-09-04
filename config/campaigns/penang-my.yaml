@@ -172,6 +172,16 @@ lovable:
   auto_approve: false
 
 build:
+  # How much art direction every site prompt carries.
+  #   showcase  the craft rules as well -- type as a scale, layout that
+  #             breaks the centred column, colour ratio, motion given in
+  #             real durations. The default.
+  #   standard  the shorter prompt, as it was before the craft rules existed.
+  # It changes only the prompt handed to the site builder, never the research,
+  # so it costs nothing per lead either way. There is a tick box for it in
+  # step 3 of the dashboard.
+  design_level: showcase
+
   # Publishing to Cloudflare Pages. The sites are built in Google AI Studio
   # and pushed from there into a GitHub repository; point this at your local
   # clone of it, with one folder per business. Jarvis only ever reads it.

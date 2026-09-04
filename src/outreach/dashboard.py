@@ -1178,6 +1178,52 @@ def create_app(config: Config) -> Flask:
 
     # -------------------------------------------------------------- WhatsApp
 
+    @app.route("/api/design-level", methods=["GET", "POST"])
+    def api_design_level():
+        """Read or set how much art direction the site prompt carries.
+
+        A craft constant for the whole campaign, not a per-business field --
+        every business gets the same answer, so it lives in the campaign file
+        as template text rather than costing a schema field per lead.
+        """
+        from .campaign_edit import CampaignEditError, rewrite_design_level
+        from .config import DESIGN_LEVELS
+
+        if request.method == "GET":
+            return jsonify({
+                "level": current().build.design_level,
+                "levels": sorted(DESIGN_LEVELS),
+            })
+
+        level = ((request.json or {}).get("level") or "").strip().lower()
+        if level not in DESIGN_LEVELS:
+            return jsonify({
+                "error": f"Unknown design level {level!r}. "
+                         f"Expected one of {sorted(DESIGN_LEVELS)}."
+            }), 400
+
+        try:
+            path = _writable_campaign()
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        try:
+            original = path.read_text()
+            path.write_text(rewrite_design_level(original, level))
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        except OSError as exc:
+            return jsonify({"error": f"Could not save {path}: {exc}"}), 200
+
+        try:
+            state["config"] = load_config(path)
+        except ConfigError as exc:
+            # Same shape as every other campaign edit: put the file back
+            # rather than leave a campaign the pipeline cannot load.
+            path.write_text(original)
+            return jsonify({"error": f"Reverted -- {exc}"}), 200
+
+        return jsonify({"ok": True, "level": level})
+
     @app.route("/api/whatsapp/status")
     def api_whatsapp_status():
         """Relay connection state + daily counters."""
@@ -2147,7 +2193,18 @@ PAGE = """<!doctype html>
       <a class="sub" href="/guide#3-build-the-ones-you-approved" target="_blank" rel="noopener">What is this?</a></h2>
   <div class="row" style="margin-bottom:10px">
     <button data-run="site-generate">Generate pages with Gemini</button>
+    <label class="sub" style="display:flex;align-items:center;gap:7px;margin-left:auto">
+      <input type="checkbox" id="design-showcase" onchange="setDesignLevel(this.checked)"
+             style="width:auto">
+      Full art direction
+    </label>
+    <span class="hint" id="design-note"></span>
   </div>
+  <p class="hint" id="design-help">Adds the craft rules to every site prompt
+    &mdash; type as a scale, layout that breaks the centred column, colour
+    ratio, motion given in real durations. It changes only the prompt you
+    paste, never the research, so it costs nothing per lead. Turn it off if
+    the pages come back worse.</p>
   <p class="hint">Writes each approved brief to a file in your
     <code>sites\\</code> folder using Gemini. Nothing is published and nothing
     is sent &mdash; the run prints the path of every page so you can open one
@@ -3332,6 +3389,51 @@ async function dropLead(idx, leadId, name, hasEmail) {
   refresh();
 }
 
+// How much art direction the site prompt carries. A campaign setting rather
+// than a per-lead one -- every business gets the same craft rules.
+async function loadDesignLevel() {
+  const box = $('#design-showcase');
+  if (!box) return;
+  try {
+    const d = await (await fetch('/api/design-level')).json();
+    box.checked = d.level === 'showcase';
+  } catch { /* leave it alone rather than showing a wrong state */ }
+}
+
+async function setDesignLevel(on) {
+  const box = $('#design-showcase');
+  const note = $('#design-note');
+  const wanted = on ? 'showcase' : 'standard';
+  if (box) box.disabled = true;
+  if (note) note.textContent = 'Saving\\u2026';
+
+  let d;
+  try {
+    d = await (await fetch('/api/design-level', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({level: wanted}),
+    })).json();
+  } catch (e) {
+    if (note) note.innerHTML = '<span class="err">Could not reach the dashboard.</span>';
+    if (box) { box.disabled = false; box.checked = !on; }
+    return;
+  }
+
+  if (box) box.disabled = false;
+  if (d.error) {
+    if (note) note.innerHTML = '<span class="err">' + esc(d.error) + '</span>';
+    // Put the box back where it was: the setting did not change.
+    if (box) box.checked = !on;
+    return;
+  }
+  if (note) {
+    note.textContent = on
+      ? 'On \\u2014 briefs written from now on carry it.'
+      : 'Off \\u2014 back to the shorter prompt.';
+  }
+}
+
 async function loadQueue() {
   let d;
   try { d = await (await fetch('/api/build-queue')).json(); } catch { return; }
@@ -3387,6 +3489,7 @@ loadNextUp();
 loadReview();
 loadQueue();
 loadReach();
+loadDesignLevel();
 poll();
 setInterval(poll, 1200);
 setInterval(refresh, 30000);

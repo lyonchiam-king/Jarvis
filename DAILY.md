@@ -532,6 +532,26 @@ So the debugging loop is:
 
 ---
 
+## How much design the prompts ask for
+
+Step 3 has a tick box, **Full art direction**. It is on.
+
+With it on, every site prompt carries the craft rules as well as the brief:
+type as one scale rather than picked sizes, section widths that vary instead
+of a stack of identical centred boxes, a colour ratio that keeps the accent
+for the booking button, and motion given in real durations rather than the
+word "slow". It also tells the builder not to ship the component library's
+default look, which is most of why generated pages recognisably look
+generated.
+
+It changes only the prompt you paste. The research is untouched, so it costs
+nothing per lead and you can turn it on and off freely.
+
+Turn it off if the pages come back worse — a longer prompt is not always a
+better one, and you are the judge of that. To apply a change to briefs that
+already exist, run **site-brief --rewrite**; a normal run skips anything
+already briefed, by design.
+
 ## Where tomorrow's 60 come from
 
 Worth understanding, because it's the one thing that will eventually stop the

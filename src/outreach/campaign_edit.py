@@ -308,6 +308,37 @@ def rewrite_research(
     return result
 
 
+def rewrite_design_level(text: str, level: str) -> str:
+    """Set ``build.design_level``, comments intact.
+
+    Inserted when absent: the shipped campaign file predates the setting, so
+    a campaign that has never been edited has nowhere for it to go.
+    """
+    from .config import DESIGN_LEVELS
+
+    cleaned = level.strip().lower()
+    if cleaned not in DESIGN_LEVELS:
+        raise CampaignEditError(
+            f"design_level must be one of {sorted(DESIGN_LEVELS)}, got {level!r}"
+        )
+
+    lines = text.splitlines()
+    bounds = _section_bounds(lines, "build")
+    if bounds is None:
+        raise CampaignEditError(
+            "This campaign file has no top-level `build:` section."
+        )
+    start, end = bounds
+    if not _replace_scalar(lines, start, end, "design_level", cleaned):
+        lines.insert(start, f"  design_level: {_scalar(cleaned)}")
+
+    result = "\n".join(lines)
+    if text.endswith("\n"):
+        result += "\n"
+    _validate(result)
+    return result
+
+
 def rewrite_outreach(text: str, *, model: str | None = None) -> str:
     """Set ``outreach.model`` -- the smaller model that writes the message.
 

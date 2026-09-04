@@ -100,7 +100,7 @@ visible, above everything else)
 - Call -> tel: link
 - WhatsApp -> wa.me link
 
-This is where most phone conversions happen. It must never cover the last line of content -- pad the page bottom by its height.
+This is where most phone conversions happen. It must never cover the last line of content -- pad the page bottom by its height. Add env(safe-area-inset-bottom) to the bar's own bottom padding: without it the bar sits under the home indicator on every recent iPhone, which is exactly where the thumb already is.
 
 REAL DETAILS (use exactly these, do not paraphrase)
 Phone: +60123456789 -- as a tappable tel: link, in the header

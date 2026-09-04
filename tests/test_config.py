@@ -1,3 +1,5 @@
+import pathlib
+
 import pytest
 
 from outreach.config import IMAGE_PROVIDERS, ConfigError, load_config
@@ -337,3 +339,48 @@ def test_vertex_project_id_never_comes_from_yaml(monkeypatch):
     monkeypatch.delenv("VERTEX_PROJECT_ID", raising=False)
     config = load_config(PENANG, env_file=None)
     assert config.secrets.vertex_project_id == ""
+
+
+# ------------------------------------------------- build.design_level
+
+
+def test_design_level_defaults_to_showcase(tmp_path):
+    """The switch exists to be turned off, not on: a campaign file written
+    before it existed should get the fuller art direction."""
+    from outreach.config import load_config
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    assert config.build.design_level == "showcase"
+
+
+def test_design_level_can_be_turned_down(tmp_path):
+    from outreach.config import load_config
+
+    path = tmp_path / "c.yaml"
+    source = pathlib.Path("config/campaigns/penang-my.yaml").read_text()
+    # Replace the real line, never inject a second one: YAML is last-wins, so
+    # a duplicate key means the config loaded is not the config written.
+    assert "\n  design_level: showcase\n" in source
+    source = source.replace(
+        "\n  design_level: showcase\n", "\n  design_level: standard\n", 1
+    )
+    path.write_text(source)
+
+    assert load_config(path, env_file=None).build.design_level == "standard"
+
+
+def test_an_unknown_design_level_fails_at_load_with_the_fix_in_the_message(tmp_path):
+    from outreach.config import ConfigError, load_config
+
+    path = tmp_path / "c.yaml"
+    source = pathlib.Path("config/campaigns/penang-my.yaml").read_text()
+    source = source.replace(
+        "\n  design_level: showcase\n", "\n  design_level: fancy\n", 1
+    )
+    path.write_text(source)
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(path, env_file=None)
+    message = str(exc.value)
+    assert "design_level" in message
+    assert "showcase" in message and "standard" in message

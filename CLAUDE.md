@@ -45,7 +45,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1089 tests, pytest, no CI -- the suite is the only gate
+tests/             1112 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -364,6 +364,19 @@ one the relay has not answered for yet, and removing those would throw away
 work the check has not done. A rejected lead holding an email is still
 buildable and still counted in "can be followed up", so removing one says so
 before it acts.
+
+**Art direction is a craft rule, so it is a campaign setting, not a schema
+field.** Every business gets the same answer about type scale, container
+widths, colour ratio and easing curves, so asking the model to restate them
+per lead spends tokens on a chance to forget one -- and the required-field
+count is capped at 19 anyway. `build.design_level` switches the craft blocks
+in `render_lovable_prompt` instead: `showcase` (the default) adds them,
+`standard` is the prompt as it was. It changes only the text handed to the
+site builder, never the spec, so no research model sees it and Ollama is not
+penalised for it. All four `render_lovable_prompt` call sites pass it -- run,
+`--rewrite`, `generate_sites` and `regenerate_one` -- and each has its own
+test, because three of them were unwired and every other test still passed:
+the prompt was valid, just not the one the campaign asked for.
 
 **Secrets are write-only.** `env_edit.set_key` writes; `is_set` reports presence
 and never the value. No key is ever echoed to a page, a log, or a report.

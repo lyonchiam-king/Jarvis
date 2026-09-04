@@ -845,3 +845,92 @@ def test_the_states_rule_covers_more_than_the_primary_button():
 
     assert "Every link, button and input" in states
     assert "nav item" in states
+
+
+# ------------------------------------------------- the showcase design level
+
+
+def test_standard_is_the_default_and_is_unchanged_by_the_switch():
+    """The switch must be additive. Everything built before it existed was
+    built at this level, and a silent change to it would make an old brief
+    and a new one incomparable."""
+    assert _rendered() == _rendered(design_level="standard")
+
+
+def test_showcase_only_adds():
+    """The craft blocks are extra art direction, not a rewrite. Everything
+    the standard prompt says still has to be said."""
+    standard = _rendered(design_level="standard")
+    showcase = _rendered(design_level="showcase")
+
+    assert len(showcase) > len(standard)
+    # Every non-trivial line of the standard prompt survives verbatim.
+    missing = [
+        line for line in standard.splitlines()
+        if len(line.strip()) > 20 and line not in showcase
+    ]
+    assert not missing, f"showcase dropped standard lines: {missing[:3]}"
+
+
+def test_showcase_carries_the_craft_blocks():
+    showcase = _rendered(design_level="showcase")
+
+    for heading in (
+        "TYPE AS A SYSTEM",
+        "LAYOUT (break the centred column",
+        "COLOUR DISCIPLINE",
+        "MOTION, IN NUMBERS",
+    ):
+        assert heading in showcase, f"{heading} missing from the showcase prompt"
+
+
+def test_the_craft_blocks_are_absent_at_standard():
+    standard = _rendered(design_level="standard")
+
+    for heading in ("TYPE AS A SYSTEM", "COLOUR DISCIPLINE", "MOTION, IN NUMBERS"):
+        assert heading not in standard
+
+
+def test_showcase_names_real_numbers_not_adjectives():
+    """The whole point of the motion block: "slow" becomes a different guess
+    in every component, so the prompt states durations."""
+    showcase = _rendered(design_level="showcase")
+
+    assert "120-200ms" in showcase
+    assert "400-700ms" in showcase
+    assert "60-80ms" in showcase
+
+
+def test_each_builder_gets_its_own_component_warning():
+    """Opposite risks: shadcn ships a recognisable default look, and a
+    hand-rolled page ships the browser's."""
+    assert "shadcn's defaults are recognisable" in _rendered(
+        target="lovable", design_level="showcase")
+    assert "::backdrop" in _rendered(target="html", design_level="showcase")
+
+
+def test_an_unknown_design_level_is_refused_by_name():
+    import pytest
+
+    with pytest.raises(ValueError) as exc:
+        _rendered(design_level="fancy")
+    assert "showcase" in str(exc.value)
+
+
+def test_the_showcase_snapshots_are_stable():
+    """Same guard as the standard prompt: a reworded craft block is a real
+    change to every site built afterwards, so it is read as a diff."""
+    import pathlib
+
+    here = pathlib.Path(__file__).parent / "fixtures"
+    for target, name in (("lovable", "lovable_prompt_showcase.txt"),
+                         ("html", "html_prompt_showcase.txt")):
+        assert _rendered(target=target, design_level="showcase") == (
+            here / name).read_text(), f"diff tests/fixtures/{name}"
+
+
+def test_the_mobile_bar_clears_the_iphone_home_indicator():
+    """Both levels. A bar under the gesture bar is a bug, not a flourish --
+    it sits exactly where the thumb already is."""
+    for level in ("standard", "showcase"):
+        assert "safe-area-inset-bottom" in _rendered(design_level=level)
