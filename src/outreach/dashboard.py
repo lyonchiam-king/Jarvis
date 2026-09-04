@@ -2490,7 +2490,7 @@ async function loadWhatsAppInline() {
 
   // Connection indicator
   const dot = waState.connected ? 'on'
-    : (waState.reconnecting || waState.resetting) ? 'wait'
+    : (waState.reconnecting || waState.resetting || waState.connecting) ? 'wait'
     : waState.paired === false ? 'wait' : 'off';
   // last_error is the relay's own account of what went wrong, and it beats
   // "Relay not running" -- which describes the symptom of a crash, a wrong
@@ -2501,6 +2501,7 @@ async function loadWhatsAppInline() {
   const label = waState.connected
     ? `Connected \\u2014 ${waState.daily_sent || 0} / ${waState.daily_cap || 30} sent today`
     : waState.resetting ? 'Resetting\\u2026'
+    : waState.connecting ? 'Connecting to WhatsApp\\u2026'
     : waState.reconnecting
       ? `Reconnecting\\u2026 next try in ${waState.retry_in_seconds || 0}s`
         + (waState.last_error ? ' \\u2014 ' + waState.last_error : '')

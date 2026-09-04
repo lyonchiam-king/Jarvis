@@ -334,9 +334,11 @@ def test_the_relay_survives_an_unhandled_error():
 
     assert 'process.on("uncaughtException"' in src
     assert 'process.on("unhandledRejection"' in src
-    # And it must not re-throw or exit -- staying up is the entire point.
-    tail = src.split('process.on("uncaughtException"', 1)[1]
-    assert "process.exit" not in tail
+    # And the handler itself must not exit -- staying up is the entire point.
+    # Scoped to its own body: the listen error handler further down exits
+    # deliberately, because a relay that cannot own the port must not linger.
+    body = src.split('process.on("uncaughtException"', 1)[1].split("});", 1)[0]
+    assert "process.exit" not in body
 
 
 def test_the_reset_waits_for_the_new_socket_before_reporting_success():
@@ -454,3 +456,70 @@ def test_the_status_says_reconnecting_rather_than_dead():
     status = source().split('app.get("/status"', 1)[1].split("});", 1)[0]
     assert "reconnecting" in status
     assert "retry_in_seconds" in status
+
+
+# ------------------------- one relay, and only one, per WhatsApp session
+
+
+def test_a_second_relay_stops_instead_of_lingering():
+    """WhatsApp allows one connection per linked device, so a second relay on
+    the same .whatsapp-session/ does not sit harmlessly beside the first --
+    they take the connection from each other, and the symptom is a relay that
+    connects, works for a moment, and drops, over and over.
+
+    This is the one place where disappearing is right, and it needed saying
+    because the uncaughtException handler would otherwise keep the loser
+    alive: an EADDRINUSE thrown from listen is exactly the kind of error that
+    handler was written to swallow.
+    """
+    src = code()
+
+    assert 'server.on("error"' in src, (
+        "a failed listen goes to uncaughtException and the process lives on"
+    )
+    block = src.split('server.on("error"', 1)[1][:1200]
+    assert "EADDRINUSE" in block
+    assert "process.exit(1)" in block
+    # And it has to say which of the two relays this is, or the log reads as
+    # a crash rather than as the second copy standing down.
+    assert "already running" in block, (
+        "the message must name the cause, since the fix is to close the "
+        "other relay rather than to restart this one"
+    )
+
+
+def test_the_port_is_claimed_before_whatsapp_is_touched():
+    """The bind is the lock. Connecting first means the loser of the race has
+    already taken the device slot from the winner before it finds out."""
+    src = code()
+
+    # The startup block only, not the first `connectSafely()` in the file --
+    # scheduleReconnect contains one too, and it is declared earlier.
+    startup = src[src.index("app.listen(PORT"):]
+    listen_body = startup[:startup.index("});")]
+    assert "connectSafely();" in listen_body, (
+        "the relay must own the port before it opens a WhatsApp session"
+    )
+
+
+def test_connection_transitions_are_timestamped():
+    """A relay that connects and drops repeatedly is only diagnosable from
+    the pattern -- how long it held, and how often."""
+    src = code()
+
+    assert "function stamp(" in src
+    assert "new Date().toISOString()" in src
+    close = src.split('if (connection === "close")', 1)[1][:900]
+    assert "held" in close, "a drop must report how long the connection lasted"
+
+
+def test_a_connection_attempt_in_flight_is_distinguishable_from_a_dead_relay():
+    """Between the retry timer firing and the socket opening, connected,
+    reconnecting and resetting were all false with no error -- which the page
+    could only render as "Relay not running". A normal reconnect looked like
+    a dead relay."""
+    src = code()
+
+    assert "let connecting = false" in src
+    status = src.split('app.get("/status"', 1)[1].split("});", 1)[0]
+    assert "connecting" in status

@@ -128,6 +128,14 @@ if "%ERRORLEVEL%"=="0" (
     )
     if exist "%RELAY_DIR%\node_modules" (
         del relay-install-log.txt >nul 2>&1
+        REM Stop any relay left over from a previous run before starting a
+        REM new one. The cleanup at the end of this file only runs when the
+        REM dashboard exits normally, so closing the window with the X left
+        REM the relay behind -- and every later run added another. Two relays
+        REM sharing one WhatsApp session take the connection from each other,
+        REM which looks like a relay that keeps dropping. /t kills the node
+        REM process as well as the cmd window wrapping it.
+        taskkill /fi "WINDOWTITLE eq WhatsApp Relay" /t /f >nul 2>&1
         echo   WhatsApp relay: starting on port %RELAY_PORT%...
         REM Output goes to relay-log.txt as well as the window. The window is
         REM started with /c, so it closes the moment node exits and takes the
@@ -150,7 +158,7 @@ echo.
 set "EXITCODE=%ERRORLEVEL%"
 
 REM Clean up the relay when the dashboard stops.
-taskkill /fi "WINDOWTITLE eq WhatsApp Relay" /f >nul 2>&1
+taskkill /fi "WINDOWTITLE eq WhatsApp Relay" /t /f >nul 2>&1
 
 echo.
 if not "%EXITCODE%"=="0" (

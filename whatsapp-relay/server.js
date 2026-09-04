@@ -132,6 +132,24 @@ const RECONNECT_MAX_MS = 60000;
 let reconnectTimer = null;
 let reconnectDelay = RECONNECT_MIN_MS;
 let reconnectAt = 0;
+// True while an attempt is actually in flight. Without it the window between
+// the retry timer firing and the socket opening reported connected:false,
+// reconnecting:false and no error -- which the page could only render as
+// "Relay not running", so a normal reconnect looked like a dead relay.
+let connecting = false;
+// When the current connection opened, so a drop can report how long it held.
+let openedAt = 0;
+
+// Every connection transition, with a clock against it.
+//
+// A relay that connects and drops repeatedly is only diagnosable from the
+// pattern -- how long it held, what code closed it, how many times. The
+// console said "Disconnected" with no time attached, and the window it was
+// printed in closes when the process stops, so relay-log.txt is where this
+// has to end up.
+function stamp(message) {
+  console.log(`[whatsapp-relay] ${new Date().toISOString()} ${message}`);
+}
 
 function scheduleReconnect(reason, delay = reconnectDelay) {
   // One pending attempt at a time: a close event and a failed connect can
@@ -208,8 +226,15 @@ async function clearSession() {
 
 async function connect() {
   const gen = ++generation;
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-  const { version } = await fetchLatestBaileysVersion();
+  connecting = true;
+  stamp("connecting to WhatsApp");
+  try {
+    var { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+    var { version } = await fetchLatestBaileysVersion();
+  } catch (err) {
+    if (gen === generation) connecting = false;
+    throw err;
+  }
 
   // Both of those awaited. If another connect started meanwhile it owns the
   // relay now, and building a second socket here would leave two of them
@@ -284,21 +309,36 @@ async function connect() {
 
     if (connection === "open") {
       connected = true;
+      connecting = false;
       qrCode = null;
       lastError = "";
       reconnectDelay = RECONNECT_MIN_MS;
       reconnectAt = 0;
-      console.log("[whatsapp-relay] Connected to WhatsApp");
+      openedAt = Date.now();
+      stamp("connected");
     }
 
     if (connection === "close") {
       connected = false;
+      connecting = false;
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const loggedOut = statusCode === DisconnectReason.loggedOut;
 
-      console.log(
-        `[whatsapp-relay] Disconnected (code: ${statusCode}). Logged out: ${loggedOut}`
+      // How long it held is the tell. Seconds means something is taking the
+      // connection away -- most often a second relay on the same session,
+      // which is why the port is now a hard single-instance lock.
+      const held = openedAt ? Math.round((Date.now() - openedAt) / 1000) : null;
+      openedAt = 0;
+      stamp(
+        `disconnected after ${held === null ? "no successful connection" : held + "s"}`
+        + ` (code ${statusCode}, logged out: ${loggedOut})`
       );
+      if (held !== null && held < 30) {
+        stamp(
+          "that connection lasted under 30s. If this repeats, another relay "
+          + "or another WhatsApp Web session is using the same linked device."
+        );
+      }
 
       // A reset is driving the teardown and reconnects itself. The
       // generation check above already makes a superseded socket inert; this
@@ -366,6 +406,7 @@ app.get("/status", (_req, res) => {
     resetting,
     // A relay working its way back is not a relay that has given up, and the
     // page should not describe them the same way.
+    connecting,
     reconnecting: reconnectTimer !== null,
     ...(reconnectAt ? { retry_in_seconds: Math.max(
       0, Math.round((reconnectAt - Date.now()) / 1000)) } : {}),
@@ -731,7 +772,32 @@ process.on("unhandledRejection", (err) => {
 // HTTP server at all -- so the dashboard could not even ask what was wrong
 // and reported the relay as not running, which is a different problem with a
 // different fix. The port answering is what lets /status explain itself.
-app.listen(PORT, "127.0.0.1", () => {
+//
+// It also makes the port the single-instance lock, which matters more than
+// the HTTP server does: WhatsApp allows one connection per linked device, so
+// a second relay on the same .whatsapp-session/ does not sit harmlessly
+// beside the first -- the two take the slot from each other, and the symptom
+// is a relay that connects, works for a moment, and drops, over and over.
+const server = app.listen(PORT, "127.0.0.1", () => {
   console.log(`[whatsapp-relay] Listening on http://127.0.0.1:${PORT}`);
   connectSafely();
+});
+
+server.on("error", (err) => {
+  if (err && err.code === "EADDRINUSE") {
+    // The one place where disappearing is right. "Never fatal" is about not
+    // losing a working relay to a stray exception; a second relay is not a
+    // working relay, it is the thing that breaks the first one. Staying
+    // alive here is what the uncaughtException handler would otherwise do,
+    // and it is exactly wrong.
+    console.error(
+      `[whatsapp-relay] Port ${PORT} is already in use, so another relay is `
+      + "already running. Stopping, because two relays sharing one WhatsApp "
+      + "session take the connection from each other -- which looks like a "
+      + "relay that keeps dropping."
+    );
+    process.exit(1);
+  }
+  console.error("[whatsapp-relay] Server error:", err);
+  process.exit(1);
 });

@@ -692,6 +692,27 @@ disqualified lead back. And a row marked **has email** can still be reached
 that way, so removing it gives up a lead you could have contacted; the button
 says so when that is the case.
 
+### It connects, then drops, over and over
+
+Almost always two relays running at once. WhatsApp allows one connection per
+linked device, so a second copy does not sit quietly beside the first — they
+take the connection from each other, and what you see is a relay that connects,
+works for a moment, and drops.
+
+It happened because closing the dashboard window with the X never stopped the
+relay, so every later run started another one. Both halves are fixed:
+`Dashboard.bat` now stops any old relay before starting a new one, and a relay
+that finds the port already taken stops instead of fighting.
+
+**If it is still happening,** open Task Manager, end every **Node.js** process,
+then start `Dashboard.bat` again. Those are relays left over from before this
+fix and nothing will clear them but that.
+
+`relay-log.txt` now times every connect and drop, and says how long each
+connection held. Under thirty seconds, repeatedly, is the signature of
+something else using the same linked device — a second relay, or WhatsApp Web
+open in a browser.
+
 ### It says "Reconnecting..."
 
 That is the relay working its way back after the connection dropped, and it

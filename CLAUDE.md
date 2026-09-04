@@ -45,7 +45,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1133 tests, pytest, no CI -- the suite is the only gate
+tests/             1138 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -430,6 +430,31 @@ which sets the Outreach Log's manual `Status` to `Skipped` -- with
 written: the message and its screenshot cost money to make, so skipping keeps
 them and **Send again** is one press. That reversibility is why it does not
 stop to confirm.
+
+**One relay per WhatsApp session, enforced by the port.** WhatsApp allows one
+connection per linked device, so a second relay on the same
+`.whatsapp-session/` does not sit harmlessly beside the first -- they take the
+connection from each other, and the symptom is a relay that connects, works
+for a moment and drops, over and over. Two things made that easy to reach:
+`Dashboard.bat` only killed the relay when the dashboard exited *normally*, so
+closing the window with the X left one behind and every later run added
+another; and the `uncaughtException` handler kept the loser of the race alive,
+because an EADDRINUSE thrown from `listen` is exactly the sort of error it was
+written to swallow. The bind is the lock now -- `server.on("error")` exits on
+EADDRINUSE and says which relay this is -- and the launcher kills the old tree
+before starting, with `/t` so the node process goes with its cmd wrapper.
+This is the one place where disappearing is right: a second relay is not a
+working relay, it is the thing breaking the first.
+
+**"Connecting" is a third state.** Between the retry timer firing and the
+socket opening, `connected`, `reconnecting` and `resetting` were all false with
+no error -- which the page could only render as "Relay not running", so every
+normal reconnect looked like a dead relay for a few seconds.
+
+**A drop is only diagnosable from the pattern.** How long the connection held,
+what code closed it, how often. `stamp()` timestamps every transition into
+`relay-log.txt`, and a connection that lasted under thirty seconds says so,
+because that is the signature of something else holding the device slot.
 
 **Secrets are write-only.** `env_edit.set_key` writes; `is_set` reports presence
 and never the value. No key is ever echoed to a page, a log, or a report.
