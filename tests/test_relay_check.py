@@ -253,3 +253,112 @@ def test_a_logged_out_session_is_wiped_before_reconnecting():
         "the logged-out path must wipe the stale auth state before "
         "reconnecting, or the 401 loop never offers a QR"
     )
+
+
+# ------------------------------- the reset that logged out and then died
+
+
+def test_a_superseded_socket_can_no_longer_act():
+    """The crash behind "logged out, then no QR, then relay not working".
+
+    Sockets do not close on command. `logout()` returns before the WebSocket
+    has finished closing, so the old socket's connection.update lands *after*
+    the replacement is already connecting. It reached the live handler, was
+    read as a fresh "logged out", and deleted the credential folder the new
+    socket had just written -- whose next saveCreds then threw ENOENT out of
+    an event handler and ended the process.
+
+    Every handler now checks the generation it was built under.
+    """
+    src = source()
+
+    assert "let generation = 0" in src
+    assert "const gen = ++generation" in src, (
+        "each connect must claim a generation"
+    )
+    handlers = re.findall(r"sock\.ev\.on\(\s*\"([a-z.]+)\"", src)
+    assert set(handlers) >= {"creds.update", "connection.update", "messages.update"}
+    # Every one of them, not just the close handler: a stale creds.update
+    # writing into a deleted folder is its own crash.
+    for name in handlers:
+        block = src.split(f'sock.ev.on("{name}"', 1)[1][:400]
+        assert "gen !== generation" in block, (
+            f"the {name} handler acts on a socket that may already be replaced"
+        )
+
+
+def test_the_reset_orphans_the_old_socket_before_touching_the_disk():
+    """Bumping the generation is what makes the old socket's late close event
+    harmless. Doing it after the delete leaves the window open."""
+    route = source().split('app.post("/logout"', 1)[1]
+    bump = route.index("generation += 1")
+    assert bump < route.index("clearSession()"), (
+        "the old socket must be orphaned before the session is cleared"
+    )
+    assert bump < route.index("await dying.logout()"), (
+        "logout() emits the close event, so the bump must come first"
+    )
+
+
+def test_saving_credentials_can_never_kill_the_relay():
+    """saveCreds throws ENOENT when the folder went away underneath it, and
+    an unhandled throw inside an event handler ends the process -- the relay
+    just vanishes, which is exactly what "relay not working" was."""
+    block = source().split('sock.ev.on("creds.update"', 1)[1][:700]
+
+    assert "try {" in block and "catch" in block, (
+        "saveCreds must not be able to throw out of the handler"
+    )
+
+
+def test_the_relay_survives_an_unhandled_error():
+    """A relay that degrades beats one that disappears. The window is started
+    with `cmd /c`, so a crash closes it and takes the stack trace away; all
+    the dashboard could say afterwards was "relay not running"."""
+    src = source()
+
+    assert 'process.on("uncaughtException"' in src
+    assert 'process.on("unhandledRejection"' in src
+    # And it must not re-throw or exit -- staying up is the entire point.
+    tail = src.split('process.on("uncaughtException"', 1)[1]
+    assert "process.exit" not in tail
+
+
+def test_the_reset_waits_for_the_new_socket_before_reporting_success():
+    """Answering as soon as the old session is gone is how a reset that then
+    failed to reconnect looked like success followed by a dead relay."""
+    route = source().split('app.post("/logout"', 1)[1]
+
+    assert "await connect();" in route, (
+        "the reply must mean a socket exists, not merely that the old one went"
+    )
+    assert route.index("await connect();") < route.index("ok: true")
+
+
+def test_a_reconnect_that_fails_is_reported():
+    route = source().split('app.post("/logout"', 1)[1]
+    assert "could not start a new session" in route
+
+
+def test_deleting_the_session_retries_for_windows():
+    """This runs on Windows, where a file another handle still holds gives
+    EBUSY rather than deleting -- usually released a moment later."""
+    block = source().split("async function clearSession()", 1)[1][:700]
+
+    # The option, not the word. The comment above it explains why Windows
+    # needs this and says "maxRetries" too, so a bare substring check passed
+    # with the option deleted.
+    assert re.search(r"maxRetries:\s*[1-9]", block), (
+        "a reset must not fail over a Windows file lock that clears itself"
+    )
+    assert re.search(r"retryDelay:\s*[1-9]", block)
+
+
+def test_the_relay_reports_why_it_is_unhappy():
+    """"Relay not running" describes a crash, a wrong port and a relay never
+    started identically. /status carries the reason so the page can show it."""
+    src = source()
+
+    assert "let lastError" in src
+    status = src.split('app.get("/status"', 1)[1].split("});", 1)[0]
+    assert "last_error" in status

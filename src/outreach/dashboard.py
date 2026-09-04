@@ -2274,9 +2274,13 @@ async function loadWhatsAppInline() {
 
   // Connection indicator
   const dot = waState.connected ? 'on' : waState.paired === false ? 'wait' : 'off';
+  // last_error is the relay's own account of what went wrong, and it beats
+  // "Relay not running" -- which describes the symptom of a crash, a wrong
+  // port and a relay never started all in the same four words.
   const label = waState.connected
     ? `Connected \\u2014 ${waState.daily_sent || 0} / ${waState.daily_cap || 30} sent today`
-    : waState.error || 'Relay not running';
+    : waState.resetting ? 'Resetting\\u2026'
+    : waState.last_error || waState.error || 'Relay not running';
   // Offered whenever the relay itself answered -- connected or not. An
   // unpaired relay showing a QR that has gone stale is exactly when someone
   // needs this, so gating it on "connected" would hide it in the one state

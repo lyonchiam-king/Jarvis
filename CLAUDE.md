@@ -45,7 +45,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1072 tests, pytest, no CI -- the suite is the only gate
+tests/             1080 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -323,6 +323,26 @@ a `resetting` flag stops the close handler reconnecting underneath the reset
 and rebuilding what is being deleted. Being unlinked *from the phone* takes the
 same path, for the same reason. A failed delete is reported, never reported as
 success: the relay would silently come back on the old account.
+
+**A socket does not close when you tell it to.** `logout()` returns before
+the WebSocket has finished closing, so the old socket's `connection.update`
+arrives *after* the replacement is already connecting. It reached the live
+handler, was read as a fresh "logged out", and deleted the credential folder
+the new socket had just written -- whose next `saveCreds` then threw ENOENT
+out of an event handler and ended the process. Pressing Log out gave exactly
+that: logged out, no QR, then "relay not working". A boolean flag cannot fix
+this; the ordering is not knowable. Every socket captures a `generation` and
+every handler it registers is inert once that number moves on, so a
+superseded socket cannot act at all.
+
+**The relay must degrade, never disappear.** Baileys emits from timers and
+socket callbacks, where an unhandled throw ends the process -- and the window
+is started with `cmd /c`, so it closes and takes the stack trace with it. A
+crashed relay and one never started looked identical, and the only thing the
+page could say was "relay not running". `uncaughtException` and
+`unhandledRejection` now log and keep serving, `saveCreds` cannot throw out of
+its handler, output goes to `relay-log.txt`, and `/status` carries
+`last_error` so the page shows a reason instead of a symptom.
 
 **Secrets are write-only.** `env_edit.set_key` writes; `is_set` reports presence
 and never the value. No key is ever echoed to a page, a log, or a report.

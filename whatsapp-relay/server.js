@@ -94,10 +94,25 @@ async function waitForAck(id, timeoutMs = ACK_TIMEOUT_MS) {
   return acks.has(id) ? acks.get(id) : null;
 }
 let sendQueue = Promise.resolve(); // serialise sends so we never firehose
-// True while /logout is tearing the session down. The close handler must not
-// race the reset by reconnecting underneath it -- that would rebuild the
-// credential folder the reset is in the middle of deleting.
+// True while /logout is tearing the session down -- a lock on the route, so a
+// second press cannot start a teardown on top of one already running.
 let resetting = false;
+// The last error worth telling the user about, surfaced on /status. A relay
+// that is merely "not connected" gives the page nothing to say.
+let lastError = "";
+
+// Which socket owns the relay.
+//
+// Every socket captures the generation it was built under, and every handler
+// it registers does nothing once that number has moved on. Sockets do not
+// close on command: `logout()` returns before the WebSocket has finished
+// closing, so the old socket's `connection.update` lands *after* the
+// replacement is already connecting. Without this it landed on the live
+// handler, read the disconnect as "logged out", and deleted the credential
+// folder the new socket had just written -- which crashed the next
+// `saveCreds` with ENOENT and took the whole relay down. That is the "logged
+// out, then no QR, then relay not working" sequence.
+let generation = 0;
 
 // ---------------------------------------------------------------------------
 // Logger — pino but quiet (Baileys is chatty at info level)
@@ -130,7 +145,16 @@ function resetDailyIfNeeded() {
 // reconnect-loops for ever without ever emitting a QR. Whoever pressed the
 // button just sees a relay that never comes back.
 async function clearSession() {
-  await fs.promises.rm(AUTH_DIR, { recursive: true, force: true });
+  // maxRetries is for Windows, which is where this runs. A file another
+  // handle still holds gives EBUSY or EPERM rather than deleting, and the
+  // handle is usually released a moment later -- Node retries internally
+  // rather than failing a reset over a race that resolves itself.
+  await fs.promises.rm(AUTH_DIR, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 200,
+  });
   acks.clear();
   sentMessages.clear();
 }
@@ -140,8 +164,14 @@ async function clearSession() {
 // ---------------------------------------------------------------------------
 
 async function connect() {
+  const gen = ++generation;
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
+
+  // Both of those awaited. If another connect started meanwhile it owns the
+  // relay now, and building a second socket here would leave two of them
+  // fighting over one account.
+  if (gen !== generation) return;
 
   sock = makeWASocket({
     version,
@@ -156,7 +186,22 @@ async function connect() {
     getMessage: async (key) => sentMessages.get(key?.id) || undefined,
   });
 
-  sock.ev.on("creds.update", saveCreds);
+  sock.ev.on("creds.update", async () => {
+    // Inert once this socket has been superseded: its credentials belong to
+    // a session being torn down, and writing them would either resurrect the
+    // old account or land in a folder that no longer exists.
+    if (gen !== generation) return;
+    try {
+      await saveCreds();
+    } catch (err) {
+      // Never fatal. This throws ENOENT if the folder went away underneath
+      // it, and an unhandled throw inside an event handler ends the process
+      // -- the relay would simply vanish, which is what "relay not working"
+      // with no further explanation actually was.
+      lastError = `Could not save WhatsApp credentials: ${err.message || err}`;
+      logger.error({ err }, "saveCreds failed");
+    }
+  });
 
   // WhatsApp acknowledges a message separately from sendMessage() resolving.
   // Without this the relay reported "sent" the moment the call returned,
@@ -164,6 +209,7 @@ async function connect() {
   // transmitted -- so a send could look successful and arrive nowhere, with
   // nothing in the sender's own chat list either.
   sock.ev.on("messages.update", (updates) => {
+    if (gen !== generation) return;
     for (const u of updates || []) {
       const id = u?.key?.id;
       const status = u?.update?.status;
@@ -176,6 +222,10 @@ async function connect() {
   });
 
   sock.ev.on("connection.update", (update) => {
+    // A socket we have already replaced. Its close event is not news, and
+    // acting on it is what deleted a live session's credentials.
+    if (gen !== generation) return;
+
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
@@ -204,10 +254,9 @@ async function connect() {
         `[whatsapp-relay] Disconnected (code: ${statusCode}). Logged out: ${loggedOut}`
       );
 
-      // A reset is already driving the teardown and will reconnect itself.
-      // Reconnecting here as well would recreate the credential folder it is
-      // about to delete, and the relay would come back paired to the account
-      // the user just asked to be rid of.
+      // A reset is driving the teardown and reconnects itself. The
+      // generation check above already makes a superseded socket inert; this
+      // covers the window before the replacement has been built.
       if (resetting) return;
 
       if (!loggedOut) {
@@ -268,6 +317,10 @@ app.get("/status", (_req, res) => {
     daily_sent: dailySent,
     daily_cap: MAX_PER_DAY,
     port: PORT,
+    resetting,
+    // Only when there is one, so the page shows a reason rather than an
+    // empty field.
+    ...(lastError ? { last_error: lastError } : {}),
   });
 });
 
@@ -526,35 +579,42 @@ app.post("/logout", async (_req, res) => {
   resetting = true;
   connected = false;
   qrCode = null;
+  lastError = "";
+
+  // Orphan the old socket before touching anything. Bumping the generation
+  // makes every handler it registered inert, so the close event that arrives
+  // seconds from now -- after logout() has already returned -- cannot reach
+  // the live handler and delete the replacement's credentials.
+  const dying = sock;
+  sock = null;
+  generation += 1;
 
   try {
-    if (sock) {
+    if (dying) {
       try {
-        // Best effort. A socket already dead cannot be logged out of, and
-        // that is fine -- the credentials are deleted either way, so this
-        // machine forgets the account regardless of what WhatsApp heard.
-        await sock.logout();
+        // Best effort, so the device disappears from Linked devices on the
+        // phone. The credentials go either way: this machine forgets the
+        // account regardless of what WhatsApp heard.
+        await dying.logout();
       } catch (err) {
         logger.warn({ err }, "logout() failed; clearing local session anyway");
       }
       try {
-        sock.end(undefined);
+        dying.end(undefined);
       } catch {
         // Already closed.
       }
-      sock = null;
     }
 
     try {
       await clearSession();
     } catch (err) {
-      // This one does fail the request. If the credentials are still on
-      // disk the relay will reconnect to the same account, and reporting
-      // success would leave the user pressing a button that silently does
-      // nothing.
+      // Reported, never reported as success. With the credentials still on
+      // disk the relay reconnects to the same account, and an ok here would
+      // leave the user pressing a button that silently changes nothing.
       logger.error({ err }, "Could not delete the session folder");
-      resetting = false;
-      setTimeout(connect, 1000);
+      lastError = `Could not delete ${AUTH_DIR}: ${err.message || err}`;
+      connect().catch((e) => logger.error({ e }, "Reconnect failed"));
       return res.status(500).json({
         ok: false,
         error:
@@ -564,17 +624,48 @@ app.post("/logout", async (_req, res) => {
           + ". Close the relay window and delete that folder by hand.",
       });
     }
+
+    // Awaited: the reply should mean a socket exists and a QR is coming, not
+    // merely that the old one is gone. Answering earlier is how a reset that
+    // then failed to reconnect looked like a success followed by a dead
+    // relay.
+    await connect();
+  } catch (err) {
+    logger.error({ err }, "Reset failed");
+    lastError = `Reset failed: ${err.message || err}`;
+    return res.status(500).json({
+      ok: false,
+      error:
+        "Logged out, but the relay could not start a new session: "
+        + (err.message || String(err))
+        + ". Close the relay window and run Dashboard.bat again.",
+    });
   } finally {
-    // Cleared before reconnecting, so the close handler governs the new
-    // socket normally again.
-    if (resetting) resetting = false;
+    resetting = false;
   }
 
-  // Not awaited: pairing is driven by the user scanning a code, which takes
-  // as long as it takes. The route answers now and the page polls /qr.
-  connect().catch((err) => logger.error({ err }, "Reconnect after reset failed"));
-
   res.json({ ok: true, note: "Logged out. A new QR code will appear shortly." });
+});
+
+// ---------------------------------------------------------------------------
+// Last resort
+// ---------------------------------------------------------------------------
+
+// A relay that degrades beats a relay that disappears. Baileys emits from
+// timers and socket callbacks, where an unhandled throw ends the process with
+// nothing on screen -- the window is started with `cmd /c`, so it closes on
+// exit and takes the stack trace with it. All the dashboard could then say
+// was "relay not running", which describes the symptom and hides the cause.
+// Staying up keeps /status answering, which is what puts the reason on the
+// page.
+process.on("uncaughtException", (err) => {
+  lastError = `Relay error: ${err && err.message ? err.message : err}`;
+  console.error("[whatsapp-relay] Uncaught exception:", err);
+});
+
+process.on("unhandledRejection", (err) => {
+  lastError = `Relay error: ${err && err.message ? err.message : err}`;
+  console.error("[whatsapp-relay] Unhandled rejection:", err);
 });
 
 // ---------------------------------------------------------------------------

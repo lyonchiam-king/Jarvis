@@ -34,3 +34,6 @@ node_modules/
 # WhatsApp session credentials -- the relay persists auth state here so a
 # restart does not require re-pairing the phone. Never commit.
 .whatsapp-session/
+
+# Relay output, so a crash leaves a trace the window would have taken with it.
+relay-log.txt

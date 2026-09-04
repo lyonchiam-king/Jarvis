@@ -129,7 +129,12 @@ if "%ERRORLEVEL%"=="0" (
     if exist "%RELAY_DIR%\node_modules" (
         del relay-install-log.txt >nul 2>&1
         echo   WhatsApp relay: starting on port %RELAY_PORT%...
-        start "WhatsApp Relay" /MIN cmd /c "node %RELAY_DIR%/server.js"
+        REM Output goes to relay-log.txt as well as the window. The window is
+        REM started with /c, so it closes the moment node exits and takes the
+        REM reason with it -- a relay that crashed and one that was never
+        REM started looked identical, and all the dashboard could say was
+        REM "relay not running". The log survives either way.
+        start "WhatsApp Relay" /MIN cmd /c "node %RELAY_DIR%/server.js > relay-log.txt 2>&1"
     ) else (
         echo   WhatsApp relay: could not install it. Details in:
         echo     %cd%\relay-install-log.txt

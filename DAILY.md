@@ -628,6 +628,17 @@ the message stayed stuck for ever — on the recipient's phone as much as yours.
 again). New messages will be readable. The four already stuck cannot be
 recovered; re-send those.
 
+### The relay says "not working" and nothing explains why
+
+It now writes everything it prints to **`relay-log.txt`** in your project
+folder. The relay runs in a minimised window that closes the instant it
+stops, so before this a crash left no trace at all — a relay that had died
+and one that was never started looked exactly the same from the dashboard.
+
+Open that file and read the last few lines. The connection line in section 4
+also shows the relay's own reason now, rather than "Relay not running" for
+every possible cause.
+
 
 Open **Run one step on its own** in step 1 and press **Check setup**. It tests
 every connection and says what's broken in plain English.
