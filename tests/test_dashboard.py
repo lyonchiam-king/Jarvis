@@ -2388,3 +2388,174 @@ def test_the_send_section_offers_a_way_to_pair_another_phone(client):
     assert "Log out / switch account" in page
     # And a confirmation, because it sits beside the Send buttons.
     assert "cancelWhatsAppReset" in page
+
+
+# ------------------------- sending one again without touching the Sheet
+
+
+class _GuardedSheets:
+    """A fake that refuses a manual-column write exactly as the real client does.
+
+    A FakeSheets more permissive than SheetsClient is how the manual-column
+    bug shipped past a green suite, so this calls the real guard rather than
+    recording every write happily.
+    """
+
+    url = "https://sheet"
+
+    def __init__(self, outreach=None, leads=None):
+        self._outreach = outreach or {}
+        self._leads = leads or {}
+        self.writes = []
+
+    def read_rows(self, tab):
+        if tab is schema.OUTREACH_LOG:
+            return self._outreach
+        if tab is schema.LEADS:
+            return self._leads
+        return {}
+
+    def update_column(self, tab, column, values, *, user_edit=False):
+        from outreach.sheets import guard_manual_column
+
+        guard_manual_column(tab, column, user_edit=user_edit)
+        self.writes.append((column, dict(values)))
+        for key, value in values.items():
+            if key in self._outreach:
+                self._outreach[key][1][column] = value
+        return len(values)
+
+
+def _sent_row(**over):
+    row = {
+        "Lead ID": "a",
+        "Business Name": "Kedai Kopi",
+        "Channel": "WhatsApp",
+        "Status": "Drafted",
+        "WhatsApp Message": "hello",
+        "Drafted At": "2026-09-01T00:00:00Z",
+        "WhatsApp Status": "sent",
+        "WhatsApp Sent At": "2026-09-02T00:00:00Z",
+    }
+    row.update(over)
+    return {"a": (2, row)}
+
+
+def _wa_client(monkeypatch, sheets):
+    monkeypatch.setattr(dash, "_sheets_client", lambda config: sheets)
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, sheet_id="s"))
+    return create_app(config).test_client()
+
+
+def test_sending_again_clears_what_was_holding_the_lead_back(monkeypatch):
+    """A message can be acknowledged by WhatsApp and never arrive -- the
+    "Waiting for this message" ones were exactly that. The Sheet then says
+    sent when it is not, and the only fix was to open the Sheet by hand."""
+    sheets = _GuardedSheets(outreach=_sent_row())
+    client = _wa_client(monkeypatch, sheets)
+
+    body = client.post("/api/whatsapp/undo-send", json={"lead_id": "a"}).get_json()
+
+    assert body["ok"] is True
+    written = {column: values["a"] for column, values in sheets.writes}
+    assert written["WhatsApp Status"] == ""
+    assert written["WhatsApp Sent At"] == ""
+
+
+def test_the_lead_comes_back_into_the_send_queue(monkeypatch):
+    """The real test of an undo: the queue offers it again afterwards.
+    Asserting the cells were cleared proves a write, not a working button."""
+    sheets = _GuardedSheets(
+        outreach=_sent_row(),
+        leads={"a": (2, {"Lead ID": "a", "Business Name": "Kedai Kopi",
+                         "Phone": "+60123456789", "WhatsApp Reachable": "yes"})},
+    )
+    client = _wa_client(monkeypatch, sheets)
+
+    before = client.get("/api/whatsapp/queue").get_json()
+    assert [e["reason"] for e in before["excluded"]] == ["already_sent"]
+    assert before["queue"] == []
+
+    client.post("/api/whatsapp/undo-send", json={"lead_id": "a"})
+    after = client.get("/api/whatsapp/queue").get_json()
+
+    assert [m["lead_id"] for m in after["queue"]] == ["a"]
+    assert after["excluded"] == []
+
+
+def test_the_message_itself_is_never_touched(monkeypatch):
+    """Pressing Send afterwards must send the same message, not a new one --
+    the draft and its screenshot cost money to produce."""
+    sheets = _GuardedSheets(outreach=_sent_row())
+    client = _wa_client(monkeypatch, sheets)
+
+    client.post("/api/whatsapp/undo-send", json={"lead_id": "a"})
+
+    touched = {column for column, _ in sheets.writes}
+    assert "WhatsApp Message" not in touched
+    assert "Drafted At" not in touched
+
+
+def test_a_hand_edited_status_is_reset_only_when_it_is_the_blocker(monkeypatch):
+    """Status is a manual column, so a stage may never write it. This is the
+    exception the rule names -- one named row the user just clicked."""
+    sheets = _GuardedSheets(outreach=_sent_row(Status="Sent"))
+    client = _wa_client(monkeypatch, sheets)
+
+    client.post("/api/whatsapp/undo-send", json={"lead_id": "a"})
+
+    assert ("Status", {"a": "Drafted"}) in sheets.writes
+
+
+def test_a_status_already_saying_drafted_is_left_alone(monkeypatch):
+    """Writing a manual column that is already right is still writing one."""
+    sheets = _GuardedSheets(outreach=_sent_row(Status="Drafted"))
+    client = _wa_client(monkeypatch, sheets)
+
+    client.post("/api/whatsapp/undo-send", json={"lead_id": "a"})
+
+    assert "Status" not in {column for column, _ in sheets.writes}
+
+
+def test_sending_again_needs_a_drafted_message_to_send(monkeypatch):
+    sheets = _GuardedSheets(outreach={})
+    client = _wa_client(monkeypatch, sheets)
+
+    body = client.post("/api/whatsapp/undo-send", json={"lead_id": "ghost"}).get_json()
+
+    assert "nothing to send again" in body["error"]
+    assert sheets.writes == []
+
+
+def test_the_send_panel_offers_send_again_only_where_it_would_work(client):
+    """No phone, no Leads row and drafted-as-email each need a different fix.
+    A button promising to undo them would simply not work."""
+    page = client.get("/").get_data(as_text=True)
+
+    assert 'onclick="undoSend(' in page
+    assert "/api/whatsapp/undo-send" in page
+    assert "const UNDOABLE = {already_sent: 1, status_not_drafted: 1}" in page
+
+
+# --------------------- removing a lead that is not on WhatsApp
+
+
+def test_the_not_on_whatsapp_list_can_disqualify_a_lead(client):
+    """Answered dead ends. Removing one stops it being researched or built."""
+    page = client.get("/").get_data(as_text=True)
+
+    assert 'onclick="dropLead(' in page
+    assert "async function dropLead(" in page
+    # The rejected list gets the button; the verified one must not.
+    assert "fold('Not on WhatsApp', d.rejected || [], true)" in page
+    assert "fold('On WhatsApp', d.verified || [])" in page
+
+
+def test_removing_a_lead_warns_when_it_still_has_an_email(client):
+    """A lead with no WhatsApp but a known email is still buildable -- it is
+    counted in the panel's own "can be followed up" number."""
+    page = client.get("/").get_data(as_text=True)
+
+    assert "Remove anyway?" in page
+    assert "could still be contacted that way" in page

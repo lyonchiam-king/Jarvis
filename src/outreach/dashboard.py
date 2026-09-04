@@ -1587,6 +1587,81 @@ def create_app(config: Config) -> Flask:
 
         return jsonify({"queue": queue, "excluded": excluded})
 
+    @app.route("/api/whatsapp/undo-send", methods=["POST"])
+    def api_whatsapp_undo_send():
+        """Put one already-sent lead back in the send queue.
+
+        A message can be reported as sent and still not arrive -- the
+        "Waiting for this message" messages were exactly that: acknowledged
+        by WhatsApp, unreadable on the phone. The Sheet is then wrong, and
+        the only way to correct it was to open the Sheet and clear a cell by
+        hand, which is precisely what the dashboard exists to avoid.
+
+        Only what is blocking the resend is written. The message, the
+        screenshot and the draft are untouched, so pressing Send afterwards
+        sends the same thing again rather than a regenerated one.
+        """
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+
+        c = current()
+        try:
+            sheets = _sheets_client(c)
+            rows = sheets.read_rows(schema.OUTREACH_LOG)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+
+        found = rows.get(lead_id)
+        if found is None:
+            return jsonify({
+                "error": "No drafted message for this lead, so there is "
+                         "nothing to send again."
+            }), 200
+        row = found[1]
+
+        cleared = []
+        try:
+            # The two the dashboard wrote when it sent. Clearing the status
+            # is what returns the lead to the queue; clearing the timestamp
+            # keeps the row honest, since it is no longer true that this
+            # went out at that moment.
+            if (row.get("WhatsApp Status") or "").strip():
+                sheets.update_column(
+                    schema.OUTREACH_LOG, "WhatsApp Status", {lead_id: ""}
+                )
+                cleared.append("WhatsApp Status")
+            if (row.get("WhatsApp Sent At") or "").strip():
+                sheets.update_column(
+                    schema.OUTREACH_LOG, "WhatsApp Sent At", {lead_id: ""}
+                )
+                cleared.append("WhatsApp Sent At")
+
+            # Status is a manual column, so a stage may never write it. This
+            # is the exception the rule names: a dashboard action on one
+            # named row the user has just clicked. Only written when it is
+            # actually what is holding the lead out of the queue -- a row
+            # already saying Drafted is left alone.
+            status = (row.get("Status") or "").strip()
+            if status and status.casefold() != "drafted":
+                sheets.update_column(
+                    schema.OUTREACH_LOG,
+                    "Status",
+                    {lead_id: "Drafted"},
+                    user_edit=True,
+                )
+                cleared.append(f"Status ({status} -> Drafted)")
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+
+        if not cleared:
+            return jsonify({
+                "error": "Nothing was blocking this one -- it should already "
+                         "be in the send list."
+            }), 200
+        return jsonify({"ok": True, "cleared": cleared})
+
     @app.route("/api/whatsapp/send", methods=["POST"])
     def api_whatsapp_send():
         """Send one WhatsApp message and record the result in the Sheet."""
@@ -1894,6 +1969,12 @@ PAGE = """<!doctype html>
   .wa-status .wa-reset:hover:not(:disabled) { color:var(--accent);
                                               border-color:var(--accent); }
   .wa-reset-note { margin:-6px 0 12px; font-size:13px; color:var(--muted); }
+  /* Small, and inside the cell it acts on, so there is never a question of
+     which business a press applies to. */
+  .wa-undo { margin-top:6px; font-size:11.5px; padding:3px 8px; width:100%; }
+  .reach-drop { font-size:11.5px; padding:2px 8px; color:var(--muted); }
+  .reach-drop:hover:not(:disabled) { color:var(--accent); border-color:var(--accent); }
+  .reach-note { font-size:12.5px; color:var(--muted); padding:2px 0 2px 10px; }
   .wa-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
   .wa-dot.on { background:var(--ok); }
   .wa-dot.off { background:var(--accent); }
@@ -2385,11 +2466,21 @@ async function loadWhatsAppInline() {
         `Status: ${x.status || 'blank'}`,
         `This lead has a drafted message, but its Status cell says \\u2018${x.status || ''}\\u2019 rather than \\u2018Drafted\\u2019. Set it back to Drafted and it returns to the send list.`],
     };
-    const items = waExcluded.map((x) => {
+    // Only these two are undoable by clearing a cell. The rest -- no phone,
+    // no Leads row, drafted as email -- need a different fix each, and a
+    // button promising to undo them would simply not work.
+    const UNDOABLE = {already_sent: 1, status_not_drafted: 1};
+    const items = waExcluded.map((x, i) => {
       const pair = (reasons[x.reason] || (() => ['Hidden', 'Hidden from the send list.']))(x);
+      const undo = UNDOABLE[x.reason]
+        ? `<button class="wa-undo" id="wa-undo-${i}"
+             onclick="undoSend(${i}, '${esc(x.lead_id)}')"
+             title="Put this back in the send list so you can send it again. The message and its screenshot are kept.">Send again</button>`
+        : '';
       return `<div class="wa-excl" title="${esc(x.name || x.lead_id)} \\u2014 ${esc(pair[1])}">
         <div class="wa-name">${esc(x.name || x.lead_id)}</div>
         <div class="wa-why">${esc(pair[0])}</div>
+        ${undo}
       </div>`;
     }).join('');
     html += `<div class="wa-excl-wrap">
@@ -2399,6 +2490,44 @@ async function loadWhatsAppInline() {
   }
 
   el.innerHTML = html;
+}
+
+// Put an already-sent lead back in the send list.
+//
+// A message can be acknowledged by WhatsApp and still never arrive -- that
+// is what the "Waiting for this message" ones were. The Sheet then says sent
+// when it is not, and correcting it used to mean opening the Sheet and
+// clearing a cell by hand.
+async function undoSend(idx, leadId) {
+  const btn = $(`#wa-undo-${idx}`);
+  if (btn) { btn.disabled = true; btn.textContent = 'Working\\u2026'; }
+
+  let d;
+  try {
+    d = await (await fetch('/api/whatsapp/undo-send', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lead_id: leadId}),
+    })).json();
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Send again'; }
+    return;
+  }
+
+  if (d.error) {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Send again';
+      btn.title = d.error;
+      btn.classList.add('err');
+    }
+    return;
+  }
+
+  // Redraw the whole panel: the lead has moved out of the excluded grid and
+  // into the queue above, which is the confirmation that it worked.
+  await loadWhatsAppInline();
+  refresh();
 }
 
 // Unlink the paired account and wait for the new QR.
@@ -3104,18 +3233,35 @@ async function loadReach() {
     return;
   }
 
-  const rows = list => list.map(e =>
-    `<tr><td style="padding:2px 10px 2px 0">${esc(e.name)}</td>` +
+  // `drop` adds a per-row Remove button. Only the "not on WhatsApp" list
+  // gets one: those are the answered dead ends, and removing a lead that is
+  // merely unchecked would throw away one the relay has not answered for yet.
+  const rows = (list, drop) => list.map((e, i) =>
+    `<tr id="reach-row-${drop ? 'x' : 'v'}-${i}">` +
+    `<td style="padding:2px 10px 2px 0">${esc(e.name)}</td>` +
     `<td style="white-space:nowrap;padding:2px 0">${esc(e.dialled || e.phone)}</td>` +
-    `<td style="padding:2px 0 2px 10px">${e.email ? 'has email' : ''}</td></tr>`
+    `<td style="padding:2px 0 2px 10px">${e.email ? 'has email' : ''}</td>` +
+    (drop
+      ? `<td style="padding:2px 0 2px 10px;text-align:right">` +
+        `<button class="reach-drop" id="reach-drop-${i}"
+           onclick="dropLead(${i}, '${esc(e.lead_id)}', '${esc(e.name)}', ${e.email ? 1 : 0})"
+           title="Disqualify this lead so it is never researched or built.">Remove</button></td>`
+      : '') +
+    `</tr>`
   ).join('');
 
   // Only the ones needing a decision are shown outright. The verified and
   // rejected lists are the long ones and are answered questions, so they
   // fold away -- the counts are what Lyon actually reads each morning.
-  const fold = (label, list) => list.length
+  const fold = (label, list, drop) => list.length
     ? `<details style="margin-top:8px"><summary class="sub">${label} (${list.length})</summary>` +
-      `<table style="width:100%;border-collapse:collapse;margin-top:6px">${rows(list)}</table></details>`
+      (drop
+        ? '<p class="hint" style="margin:6px 0 0">These have no WhatsApp account. ' +
+          '<b>Remove</b> disqualifies one for good, so it is never researched or ' +
+          'built. A lead marked <b>has email</b> can still be reached that way &mdash; ' +
+          'removing it gives that up too.</p>'
+        : '') +
+      `<table style="width:100%;border-collapse:collapse;margin-top:6px">${rows(list, drop)}</table></details>`
     : '';
 
   el.innerHTML =
@@ -3132,7 +3278,58 @@ async function loadReach() {
         `${rows(d.waiting || [])}</table>`
       : '') +
     fold('On WhatsApp', d.verified || []) +
-    fold('Not on WhatsApp', d.rejected || []);
+    fold('Not on WhatsApp', d.rejected || [], true);
+}
+
+// Disqualify one lead from the "not on WhatsApp" list.
+//
+// Two presses. It is terminal -- Disqualified is a stage nothing moves a
+// lead out of -- and the rows sit close together in a narrow table.
+let reachDropping = null;
+
+async function dropLead(idx, leadId, name, hasEmail) {
+  const btn = $(`#reach-drop-${idx}`);
+  const row = $(`#reach-row-x-${idx}`);
+  if (!btn || !row) return;
+
+  if (reachDropping !== idx) {
+    reachDropping = idx;
+    btn.textContent = hasEmail ? 'Remove anyway?' : 'Sure?';
+    btn.title = hasEmail
+      ? `${name} has an email address and could still be contacted that way.`
+      : `Disqualify ${name} for good.`;
+    btn.classList.add('confirm');
+    return;
+  }
+
+  reachDropping = null;
+  btn.disabled = true;
+  btn.textContent = 'Removing\\u2026';
+
+  let d;
+  try {
+    d = await (await fetch('/api/drop', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lead_id: leadId}),
+    })).json();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Remove';
+    return;
+  }
+
+  if (d.error) {
+    btn.disabled = false;
+    btn.textContent = 'Remove';
+    btn.title = d.error;
+    btn.classList.add('err');
+    return;
+  }
+
+  // Redrawn rather than hidden: the counts at the top of the panel move too,
+  // and "buildable" is the number that decides spend.
+  await loadReach();
+  refresh();
 }
 
 async function loadQueue() {

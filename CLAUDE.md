@@ -45,7 +45,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1080 tests, pytest, no CI -- the suite is the only gate
+tests/             1089 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -343,6 +343,27 @@ page could say was "relay not running". `uncaughtException` and
 `unhandledRejection` now log and keep serving, `saveCreds` cannot throw out of
 its handler, output goes to `relay-log.txt`, and `/status` carries
 `last_error` so the page shows a reason instead of a symptom.
+
+**"Sent" is a claim the Sheet makes, not a fact.** WhatsApp acknowledges a
+message it later fails to deliver -- the "Waiting for this message" ones were
+acknowledged and unreadable. Correcting that meant opening the Sheet and
+clearing a cell by hand, which is the thing the dashboard exists to avoid, so
+**Send again** on an excluded lead clears `WhatsApp Status` and `WhatsApp Sent
+At` and puts it back in the queue. It writes nothing else: the message and its
+screenshot cost money to produce, and Send afterwards must send the same one.
+It is offered only for `already_sent` and `status_not_drafted`, the two
+exclusions a cleared cell actually fixes -- no phone, no Leads row and
+drafted-as-email each need a different repair, and a button promising to undo
+them would not work.
+
+**A dead end should be removable where it is read.** A lead the check answered
+"not on WhatsApp" is a settled question, so that list carries a per-row
+**Remove** that disqualifies it and stops it being researched or built.
+Confined to that list on purpose: an *unchecked* lead is not a dead end, it is
+one the relay has not answered for yet, and removing those would throw away
+work the check has not done. A rejected lead holding an email is still
+buildable and still counted in "can be followed up", so removing one says so
+before it acts.
 
 **Secrets are write-only.** `env_edit.set_key` writes; `is_set` reports presence
 and never the value. No key is ever echoed to a page, a log, or a report.

@@ -628,6 +628,27 @@ the message stayed stuck for ever — on the recipient's phone as much as yours.
 again). New messages will be readable. The four already stuck cannot be
 recovered; re-send those.
 
+### A message says sent but never arrived
+
+At the bottom of section 4, every drafted message you cannot send from there
+is listed with the reason. The ones marked **Sent** now carry a **Send again**
+button: press it and that business drops back into the send list above, with
+the same message and the same screenshot, ready to send.
+
+Nothing is regenerated, so it costs nothing. Use it whenever WhatsApp claimed
+a message went out and it did not actually land.
+
+### Clearing out the leads with no WhatsApp
+
+Open **Not on WhatsApp** in the WhatsApp check panel. Each row has a
+**Remove** button, which disqualifies that business for good — it will never
+be researched, briefed or built.
+
+Two things to know. It asks once before acting, because nothing brings a
+disqualified lead back. And a row marked **has email** can still be reached
+that way, so removing it gives up a lead you could have contacted; the button
+says so when that is the case.
+
 ### The relay says "not working" and nothing explains why
 
 It now writes everything it prints to **`relay-log.txt`** in your project
