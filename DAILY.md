@@ -537,16 +537,19 @@ So the debugging loop is:
 Every message now ends with the other things you offer, under the website
 link:
 
-> If a website isn't what you need right now, these are the other ways I help
-> businesses get found:
-> • Google Business Profile setup and optimisation, so you show up when people
->   search nearby
-> • Marketing funnels, so the enquiries you already get turn into bookings
-> • Social media management and paid ads, run and measured
+> Whether or not the site is right for you, these are the other ways I get
+> businesses in front of customers:
+> • Google Business Profile optimisation, so you show up in Maps when someone
+>   nearby searches
+> • Meta ads on Facebook and Instagram, targeted to your area
+> • Google ads, so you appear the moment someone searches for what you do
 
-The message itself still opens on their reviews, frames the site as a way to
-grow, and ends by saying plainly what happens if they like it and what happens
-if they do not. The list is what the "if not" points at.
+The message opens on the gap rather than a compliment — the people who found
+them already rate them highly, and the people who have not cannot find them at
+all — then the site as the way to close it, then plainly what happens if they
+like it and if they do not. It ends on getting found being the wider job, which
+is what the list follows on from: the message finishes on their growth rather
+than on a yes-or-no about one website.
 
 > **If you pulled and the services did not appear:** your settings live in
 > `penang-my.local.yaml`, which was copied from the shipped file once, the

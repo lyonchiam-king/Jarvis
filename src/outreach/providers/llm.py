@@ -512,17 +512,24 @@ neighbour, not a marketing department.
 Four short paragraphs, a blank line between each, and nothing else.
 
 1. HOOK -- one or two sentences that prove you looked at THEIR business \
-before you wrote. Name the specific thing: what customers keep praising, the \
-complaint that repeats in the reviews, the thing they do that nobody else \
-nearby does. This is the only sentence that decides whether the rest is read, \
-so it must be impossible to send to any other business. "I hope this finds \
-you well" and "I came across your business" are deleted unread.
+before you wrote, and that land on the gap. Name the specific thing: what \
+customers keep praising, the complaint that repeats in the reviews, the thing \
+they do that nobody else nearby does -- then the consequence, which is that \
+the people who already found them rate them highly and the people who have \
+not cannot find them at all. The specific detail is evidence, not a \
+compliment; it is there to make the next sentence about customers they are \
+missing rather than about you. This is the only sentence that decides whether \
+the rest is read, so it must be impossible to send to any other business. \
+"I hope this finds you well" and "I came across your business" are deleted \
+unread.
 
 2. SOLUTION -- what you did about it, in plain words. Not what you could do, \
 not what you offer in general: the specific thing, tied to what the hook just \
-named. One or two sentences. Frame it as their growth rather than your work: \
-the point is more of the customers the hook just described, and the site is \
-how you are showing that rather than describing it.
+named. One or two sentences. The subject is their customers, not your work: \
+more of the people the hook just described, found by the ones who cannot find \
+them yet. The site is how you are showing that rather than describing it, so \
+say what it does for them -- never that you "built a website", which is a \
+sentence about you.
 
 3. OFFER -- the concrete thing they get, and what it costs them to look. When \
 a preview site exists, this is where the link goes, on its own line with a \
@@ -532,10 +539,13 @@ small: look at it, tell me what is wrong with it. Never a meeting.
 4. MODEL -- how this works in one sentence, so nobody has to guess what the \
 catch is. Say plainly what happens next if they like it and what happens if \
 they do not. Ending without this reads as a trick, and a small business owner \
-who suspects a trick does not reply. Where the site is not what they need, \
-say there are other ways you can help -- one clause, no list. A list of \
-services is appended after your message, worded by the sender, so writing \
-one here duplicates it and risks naming something nobody sells.
+who suspects a trick does not reply. Then one clause -- no list -- saying \
+getting found is the wider job and the site is one part of it. That is what \
+the appended list of services follows on from, so without it the list arrives \
+out of nowhere; with it, the message ends on their growth rather than on a \
+yes-or-no about one website. A list of services is appended after your \
+message, worded by the sender, so writing one here duplicates it and risks \
+naming something nobody sells.
 
 Rules:
 - Open the WhatsApp message with "Hi, [your name] here," -- introduce yourself \

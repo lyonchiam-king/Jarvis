@@ -1,4 +1,5 @@
 import pathlib
+import re
 
 import pytest
 import yaml
@@ -429,10 +430,16 @@ def test_services_can_be_emptied_and_the_message_ends_as_before(tmp_path):
 
 def test_a_services_list_without_an_intro_fails_at_load(tmp_path):
     """The bullets would arrive with no explanation and read as a price list."""
-    path = _campaign_with(
-        tmp_path,
-        [('  services_intro: "If a website', '  services_intro: ""  # was: "If a website')],
+    # The line is found by its key, not by what it happens to say -- an
+    # assertion tied to the wording breaks every time the wording is tuned,
+    # which is exactly the sort of edit this setting exists to make easy.
+    source = pathlib.Path("config/campaigns/penang-my.yaml").read_text()
+    source = re.sub(
+        r"^  services_intro:.*$", '  services_intro: ""', source, count=1,
+        flags=re.M,
     )
+    path = tmp_path / "c.yaml"
+    path.write_text(source)
 
     with pytest.raises(ConfigError) as exc:
         load_config(path, env_file=None)

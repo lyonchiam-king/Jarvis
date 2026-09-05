@@ -45,7 +45,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1167 tests, pytest, no CI -- the suite is the only gate
+tests/             1171 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -489,6 +489,14 @@ concatenate: someone who trimmed their areas to two meant two.
 inherited research value passes whatever the merge does -- it cannot tell
 inheritance from fallback. Pin merge assertions to `outreach`, where the
 template genuinely differs from the dataclass.
+
+**The specific detail is evidence, not a compliment.** A hook told only to
+prove it looked wrote a nice observation about the business and never reached
+the reason anyone would reply. It now has to land on the gap -- the people who
+found them rate them highly, the people who have not cannot find them at all
+-- so the next sentence is about customers they are missing rather than about
+the sender. The solution beat forbids "built a website" outright: that is a
+sentence about the sender, and the subject has to be their customers.
 
 **Secrets are write-only.** `env_edit.set_key` writes; `is_set` reports presence
 and never the value. No key is ever echoed to a page, a log, or a report.

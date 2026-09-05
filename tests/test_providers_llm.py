@@ -934,3 +934,50 @@ def test_the_mobile_bar_clears_the_iphone_home_indicator():
     it sits exactly where the thumb already is."""
     for level in ("standard", "showcase"):
         assert "safe-area-inset-bottom" in _rendered(design_level=level)
+
+
+# ------------------------- the message leads on customers, not on the site
+
+
+def test_the_hook_is_told_to_land_on_customers_they_are_missing():
+    """The detail from the reviews is evidence, not a compliment. Without
+    that said outright the model writes a nice observation about the business
+    and never reaches the reason anyone would reply."""
+    from outreach.providers.llm import OUTREACH_COPY_SYSTEM
+
+    hook = OUTREACH_COPY_SYSTEM.split("1. HOOK", 1)[1].split("2. SOLUTION", 1)[0]
+
+    assert "cannot find them" in hook
+    assert "compliment" in hook
+
+
+def test_the_solution_beat_forbids_making_it_about_the_website():
+    """"I built you a website" is a sentence about the sender. The subject
+    has to be their customers."""
+    from outreach.providers.llm import OUTREACH_COPY_SYSTEM
+
+    solution = OUTREACH_COPY_SYSTEM.split("2. SOLUTION", 1)[1].split("3. OFFER", 1)[0]
+
+    assert "built a website" in solution
+    assert "their customers, not your work" in solution
+
+
+def test_the_model_beat_sets_up_the_services_that_follow():
+    """The list is appended after the message. Ending on a yes-or-no about
+    one website leaves it arriving out of nowhere."""
+    from outreach.providers.llm import OUTREACH_COPY_SYSTEM
+
+    beat = OUTREACH_COPY_SYSTEM.split("4. MODEL", 1)[1].split("Rules:", 1)[0]
+
+    assert "getting found is the wider job" in beat
+    assert "no list" in beat
+
+
+def test_the_model_is_still_forbidden_from_naming_the_services():
+    """They are appended verbatim. A model that lists them itself duplicates
+    the block and risks naming something nobody sells."""
+    from outreach.providers.llm import OUTREACH_COPY_SYSTEM
+
+    assert "Never list, name or number the sender's other services" in (
+        OUTREACH_COPY_SYSTEM
+    )
