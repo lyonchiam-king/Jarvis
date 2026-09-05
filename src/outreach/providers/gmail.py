@@ -53,6 +53,39 @@ def build_message(
     return message
 
 
+def render_services_block(intro: str, services: tuple[str, ...] | list[str]) -> str:
+    """The "other ways I can help" list, worded once and never paraphrased.
+
+    Rendered here rather than asked of the model for the same reason the
+    compliance footer is: it is the same three lines for every business, and a
+    model told to mention them will reword one, drop one, or invent a fourth
+    -- and an invented service is something nobody actually sells.
+
+    Returns "" when there is nothing to list, so a campaign that names no
+    services gets the message exactly as it was.
+    """
+    lines = [str(s).strip() for s in services if str(s).strip()]
+    if not lines:
+        return ""
+    # A middot rather than a hyphen: WhatsApp renders a leading "-" as its own
+    # list markup in some clients and swallows the character.
+    return "\n".join([intro.strip(), *(f"\u2022 {line}" for line in lines)]).strip()
+
+
+def with_services(message: str, services_block: str) -> str:
+    """The WhatsApp counterpart to ``compose_body``'s footer.
+
+    WhatsApp carries no compliance footer -- it is a conversation, not a
+    commercial email -- so the services list is the only thing appended to it,
+    after a blank line. Separate from ``compose_body`` because that function
+    also adds a signature and a postal address, neither of which belongs in a
+    chat message.
+    """
+    if not services_block.strip():
+        return message
+    return f"{message.rstrip()}\n\n{services_block.strip()}"
+
+
 def compose_body(
     *,
     body: str,
@@ -61,6 +94,7 @@ def compose_body(
     company: str,
     postal_address: str,
     opt_out_note: str,
+    services_block: str = "",
 ) -> str:
     """Append the signature and the compliance footer to the model's copy.
 
@@ -70,6 +104,12 @@ def compose_body(
     this pipeline targets, not stylistic choices.
     """
     parts = [body.rstrip()]
+
+    # After the message, before the signature: it is part of the offer, not
+    # part of the footer, and a reader who stopped at the website link should
+    # still meet it on the way to the name at the bottom.
+    if services_block.strip():
+        parts.append(services_block.strip())
 
     signature = [line for line in (sender_name, sender_title, company) if line]
     if signature:

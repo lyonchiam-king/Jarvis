@@ -145,6 +145,21 @@ class OutreachSettings:
     # Required in every commercial email under CAN-SPAM, GDPR/ePrivacy, and
     # Australia's Spam Act. Appended to the footer of every draft.
     postal_address: str = ""
+    # The other services on offer, appended verbatim to every message.
+    #
+    # Assembled here rather than asked of the model for the same reason the
+    # compliance footer is: a model told to "mention the other services" will
+    # paraphrase one, drop one, or invent a fourth, and none of those is a
+    # thing anyone actually sells. It is also the same three lines for every
+    # lead, so paying a model to restate them per business buys nothing but a
+    # chance to get them wrong.
+    #
+    # Empty by default in code -- the campaign file supplies the real list.
+    # A campaign that names none simply gets the message as it was.
+    services: tuple[str, ...] = ()
+    # The one line that introduces the list. Without it the bullets arrive
+    # with no explanation, which reads as a price list rather than an offer.
+    services_intro: str = ""
     # Appended verbatim so the recipient always has a way out.
     opt_out_note: str = (
         "If you'd rather not hear from me again, just reply "
@@ -500,12 +515,37 @@ def load_config(
 
     o = raw.get("outreach") or {}
     wa = o.get("whatsapp") or {}
+    # A string here is almost always someone writing one service on one line
+    # rather than a list. Taking it as a one-item list is friendlier than
+    # iterating its characters, which is what a bare tuple() would do.
+    raw_services = o.get("services") or []
+    if isinstance(raw_services, str):
+        raw_services = [raw_services]
+    if not isinstance(raw_services, list):
+        raise ConfigError(
+            "outreach.services must be a list of lines, one service each."
+        )
+    services = tuple(
+        str(line).strip() for line in raw_services if str(line).strip()
+    )
+    if services and not str(o.get("services_intro", "")).strip():
+        raise ConfigError(
+            "outreach.services is set but outreach.services_intro is empty.\n"
+            "The list needs a line introducing it, or the bullets arrive with "
+            "no explanation and read as a price list.\n"
+            "Add something like:\n"
+            '    services_intro: "If the site is not what you need, these are '
+            'the other ways I help:"'
+        )
+
     outreach = OutreachSettings(
         sender_name=str(o.get("sender_name", "")),
         sender_title=str(o.get("sender_title", "")),
         company=str(o.get("company", "")),
         channel_priority=tuple(o.get("channel_priority") or ("whatsapp", "email")),
         postal_address=str(o.get("postal_address", "")),
+        services=services,
+        services_intro=str(o.get("services_intro", "")).strip(),
         require_site=bool(o.get("require_site", False)),
         opt_out_note=str(
             o.get("opt_out_note")

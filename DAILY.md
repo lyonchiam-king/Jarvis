@@ -532,6 +532,31 @@ So the debugging loop is:
 
 ---
 
+## The other services on every message
+
+Every message now ends with the other things you offer, under the website
+link:
+
+> If a website isn't what you need right now, these are the other ways I help
+> businesses get found:
+> • Google Business Profile setup and optimisation, so you show up when people
+>   search nearby
+> • Marketing funnels, so the enquiries you already get turn into bookings
+> • Social media management and paid ads, run and measured
+
+The message itself still opens on their reviews, frames the site as a way to
+grow, and ends by saying plainly what happens if they like it and what happens
+if they do not. The list is what the "if not" points at.
+
+**Edit the wording** in the box above step 4, *Other services listed at the
+end of every message* — one service per line, plus the line that introduces
+them. It is added word for word, so what you type is what they read; the model
+never rewrites it. Clear the box and messages end as they did before.
+
+Only new drafts pick it up. To add it to messages already written, press
+**Draft messages** again for those leads, or **Rewrite** on a single one in
+the send list.
+
 ## How much design the prompts ask for
 
 Step 3 has a tick box, **Full art direction**. It is on.

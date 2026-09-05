@@ -573,3 +573,182 @@ def test_a_lead_with_no_whatsapp_is_not_photographed(monkeypatch):
     outreach_draft.run(cfg(), sheets, FakeWriter(), FakeGmail())
 
     assert taken == []
+
+
+# ------------------- the services listed at the end of every message
+
+
+def test_the_services_block_is_rendered_verbatim():
+    """Assembled here rather than asked of the model, for the same reason the
+    compliance footer is: a model told to mention them rewords one, drops one,
+    or invents a fourth that nobody sells."""
+    from outreach.providers.gmail import render_services_block
+
+    block = render_services_block(
+        "Other ways I help:",
+        ("Google Business Profile", "Marketing funnels", "Social ads"),
+    )
+
+    assert block.splitlines() == [
+        "Other ways I help:",
+        "• Google Business Profile",
+        "• Marketing funnels",
+        "• Social ads",
+    ]
+
+
+def test_no_services_means_the_message_ends_as_it_did():
+    """A campaign that lists none must be untouched by this."""
+    from outreach.providers.gmail import render_services_block, with_services
+
+    assert render_services_block("intro", ()) == ""
+    assert with_services("the message", "") == "the message"
+
+
+def test_blank_lines_in_the_list_are_dropped():
+    """The page edits this as a textarea, so a trailing newline is normal."""
+    from outreach.providers.gmail import render_services_block
+
+    block = render_services_block("Intro:", ["One", "", "  ", "Two"])
+    assert block.count("•") == 2
+
+
+def test_the_whatsapp_message_carries_the_services():
+    from outreach.providers.gmail import with_services
+
+    out = with_services("Hi, Lyon here.\n\nWebsite: https://x", "Intro:\n• One")
+
+    assert out.startswith("Hi, Lyon here.")
+    assert out.endswith("Intro:\n• One")
+    # A blank line between the message and the list, not glued on.
+    assert "\n\n" in out
+
+
+def test_the_email_puts_the_services_before_the_signature():
+    """It is part of the offer, not part of the footer -- a reader who stopped
+    at the link should still meet it on the way to the name."""
+    from outreach.providers.gmail import compose_body
+
+    body = compose_body(
+        body="The message.",
+        sender_name="Lyon Ming",
+        sender_title="Founder",
+        company="COAI",
+        postal_address="Somewhere",
+        opt_out_note="Reply no thanks.",
+        services_block="Other ways I help:\n• One",
+    )
+
+    assert body.index("Other ways I help") < body.index("Lyon Ming")
+    assert body.index("Lyon Ming") < body.index("Somewhere")
+
+
+def test_an_email_with_no_services_is_byte_identical_to_before():
+    """The default must be additive: a campaign that lists none gets exactly
+    the draft it got before this existed."""
+    from outreach.providers.gmail import compose_body
+
+    args = dict(
+        body="The message.",
+        sender_name="Lyon Ming",
+        sender_title="Founder",
+        company="COAI",
+        postal_address="Somewhere",
+        opt_out_note="Reply no thanks.",
+    )
+    assert compose_body(**args) == compose_body(**args, services_block="")
+
+
+def _with_services(**over):
+    """cfg() plus a pinned services list, so the assertions do not inherit
+    whatever the live campaign file happens to say."""
+    settings = {
+        "postal_address": "12 Some Road, 10450 Penang",
+        "sender_name": "Yiu Ming",
+        "require_site": False,
+        "services_intro": "Other ways I help:",
+        "services": ("Google Business Profile", "Marketing funnels"),
+    }
+    settings.update(over)
+    return config(**settings)
+
+
+def test_the_drafted_whatsapp_message_carries_the_services():
+    """The wiring, not the renderer. A block that renders correctly and never
+    reaches the Sheet is the failure this misses otherwise."""
+    sheets = FakeSheets(index([lead("a")]), index([research_row("a")]))
+
+    outreach_draft.run(_with_services(), sheets, FakeWriter(), FakeGmail())
+
+    message = sheets.upserts[0][1][0]["WhatsApp Message"]
+    assert "Other ways I help:" in message
+    assert "• Google Business Profile" in message
+    assert "• Marketing funnels" in message
+
+
+def test_the_drafted_email_carries_the_services():
+    sheets = FakeSheets(index([lead("a")]), index([research_row("a", "o@salon.my")]))
+    gmail = FakeGmail()
+
+    outreach_draft.run(_with_services(), sheets, FakeWriter(), gmail)
+
+    body = gmail.drafted[0][2]
+    assert "• Google Business Profile" in body
+
+
+def test_a_campaign_listing_no_services_drafts_exactly_as_before():
+    """Additive by default. A campaign that names none must get the message it
+    got before any of this existed."""
+    sheets = FakeSheets(index([lead("a")]), index([research_row("a")]))
+
+    outreach_draft.run(
+        _with_services(services=(), services_intro=""),
+        sheets, FakeWriter(), FakeGmail(),
+    )
+
+    message = sheets.upserts[0][1][0]["WhatsApp Message"]
+    assert "•" not in message
+    assert "Other ways" not in message
+
+
+def test_rewriting_one_message_keeps_the_services():
+    """The dashboard's Rewrite button. A rewritten message that quietly lost
+    the list would differ from its neighbours for no visible reason."""
+    sheets = FakeSheets(
+        index([lead("a", stage="Email Drafted")]),
+        index([research_row("a")]),
+    )
+    outreach_draft.run(_with_services(), sheets, FakeWriter(), FakeGmail())
+
+    result = outreach_draft.regenerate_one(
+        _with_services(), sheets, FakeWriter(), "a"
+    )
+
+    assert "• Google Business Profile" in result["whatsapp_message"]
+
+
+def test_rewriting_one_message_keeps_the_services_in_the_email_too(monkeypatch):
+    """Asserted through the call rather than the Sheet: regenerate_one stores
+    only the first few hundred characters of the composed body as a preview,
+    and the services sit at the end -- so a Sheet assertion would pass or fail
+    on message length rather than on the wiring."""
+    from outreach.providers import gmail as gmail_provider
+
+    seen = {}
+    real = gmail_provider.compose_body
+
+    def spy(**kwargs):
+        seen.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(gmail_provider, "compose_body", spy)
+    sheets = FakeSheets(
+        index([lead("a", stage="Email Drafted")]),
+        index([research_row("a", "o@salon.my")]),
+    )
+    outreach_draft.run(_with_services(), sheets, FakeWriter(), FakeGmail())
+    seen.clear()
+
+    outreach_draft.regenerate_one(_with_services(), sheets, FakeWriter(), "a")
+
+    assert "• Google Business Profile" in seen["services_block"]

@@ -520,7 +520,9 @@ you well" and "I came across your business" are deleted unread.
 
 2. SOLUTION -- what you did about it, in plain words. Not what you could do, \
 not what you offer in general: the specific thing, tied to what the hook just \
-named. One or two sentences.
+named. One or two sentences. Frame it as their growth rather than your work: \
+the point is more of the customers the hook just described, and the site is \
+how you are showing that rather than describing it.
 
 3. OFFER -- the concrete thing they get, and what it costs them to look. When \
 a preview site exists, this is where the link goes, on its own line with a \
@@ -530,11 +532,17 @@ small: look at it, tell me what is wrong with it. Never a meeting.
 4. MODEL -- how this works in one sentence, so nobody has to guess what the \
 catch is. Say plainly what happens next if they like it and what happens if \
 they do not. Ending without this reads as a trick, and a small business owner \
-who suspects a trick does not reply.
+who suspects a trick does not reply. Where the site is not what they need, \
+say there are other ways you can help -- one clause, no list. A list of \
+services is appended after your message, worded by the sender, so writing \
+one here duplicates it and risks naming something nobody sells.
 
 Rules:
 - Open the WhatsApp message with "Hi, [your name] here," -- introduce yourself \
 by the name given in the Sender block, then straight into the hook.
+- Never list, name or number the sender's other services. They are appended \
+verbatim after your message. Naming them yourself gets one reworded, one \
+dropped, or a fourth invented that nobody sells.
 - One ask, and make it small -- a reply, not a meeting.
 - No hype, no superlatives, no "revolutionise", no exclamation marks.
 - Never claim you are an existing customer, never invent a mutual connection, \

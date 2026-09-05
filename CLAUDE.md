@@ -45,7 +45,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1138 tests, pytest, no CI -- the suite is the only gate
+tests/             1160 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -455,6 +455,20 @@ normal reconnect looked like a dead relay for a few seconds.
 what code closed it, how often. `stamp()` timestamps every transition into
 `relay-log.txt`, and a connection that lasted under thirty seconds says so,
 because that is the signature of something else holding the device slot.
+
+**The service list is written once, not asked of the model.** Every message
+now ends with the other things on offer -- Google Business Profile work,
+funnels, social ads. That is the same three lines for every business, so it
+is `outreach.services` in the campaign file and `render_services_block`
+appends it verbatim, exactly as the compliance footer is. A model told to
+"mention the other services" rewords one, drops one, or invents a fourth, and
+an invented service is something nobody sells. The system prompt is told not
+to list them for the same reason, and the MODEL beat instead ends on one
+clause saying there are other ways to help, so the list does not arrive out
+of nowhere. Empty by default in code: a campaign naming none gets the message
+byte for byte as it was. Four call sites carry it -- run and regenerate, each
+for WhatsApp and email -- and each has its own test, `regenerate_one`'s email
+asserted through the call because it stores only a truncated preview.
 
 **Secrets are write-only.** `env_edit.set_key` writes; `is_set` reports presence
 and never the value. No key is ever echoed to a page, a log, or a report.

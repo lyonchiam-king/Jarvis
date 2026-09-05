@@ -2943,3 +2943,83 @@ def test_the_skip_button_sits_beside_send_and_beside_retry(client):
     assert "/api/whatsapp/skip" in page
     # Once in the failed branch, once in the normal one.
     assert page.count('class="wa-skip"') == 2
+
+
+# ------------------------------------- the services list, from the page
+
+
+def test_the_services_are_readable_from_the_page(client):
+    body = client.get("/api/services").get_json()
+
+    assert isinstance(body["services"], list)
+    assert "intro" in body
+
+
+def test_the_page_offers_a_place_to_edit_them(client):
+    """The wording is the part worth tuning after reading a few replies, and
+    a setting reachable only by editing YAML is a setting Lyon does not have."""
+    page = client.get("/").get_data(as_text=True)
+
+    assert 'id="svc-intro"' in page
+    assert 'id="svc-list"' in page
+    assert "saveServices()" in page
+    assert "/api/services" in page
+
+
+def test_saving_services_forks_to_the_local_campaign(campaign_app):
+    client, local = campaign_app
+    tracked = Path("campaign.yaml")
+    before = tracked.read_text()
+
+    body = client.post("/api/services", json={
+        "intro": "Other ways I help:",
+        "services": ["Google Business Profile", "Marketing funnels"],
+    }).get_json()
+
+    assert body["ok"] is True
+    assert tracked.read_text() == before, "the tracked campaign file was written to"
+    saved = local.read_text()
+    assert "Other ways I help:" in saved
+    assert "Marketing funnels" in saved
+
+
+def test_the_new_services_take_effect_without_a_restart(campaign_app):
+    client, _ = campaign_app
+
+    client.post("/api/services", json={
+        "intro": "Other ways I help:", "services": ["One", "Two"],
+    })
+
+    assert client.get("/api/services").get_json()["services"] == ["One", "Two"]
+
+
+def test_services_can_be_cleared_from_the_page(campaign_app):
+    """Turning the feature off must be as reachable as turning it on."""
+    client, _ = campaign_app
+    client.post("/api/services", json={"intro": "x:", "services": ["One"]})
+
+    client.post("/api/services", json={"intro": "", "services": []})
+
+    assert client.get("/api/services").get_json()["services"] == []
+
+
+def test_a_list_with_no_intro_is_refused_and_nothing_is_written(campaign_app):
+    client, local = campaign_app
+    before = local.read_text() if local.exists() else None
+
+    body = client.post("/api/services", json={
+        "intro": "  ", "services": ["One"],
+    }).get_json()
+
+    assert "introduces" in body["error"]
+    after = local.read_text() if local.exists() else None
+    assert after == before
+
+
+def test_saving_services_keeps_the_campaign_files_comments(campaign_app):
+    client, local = campaign_app
+    before = Path("campaign.yaml").read_text().count("#")
+
+    client.post("/api/services", json={"intro": "x:", "services": ["One"]})
+
+    assert local.read_text().count("#") == before

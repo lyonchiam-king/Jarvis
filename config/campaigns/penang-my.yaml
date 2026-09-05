@@ -131,6 +131,18 @@ outreach:
   # a real postal address is a legal requirement for commercial email under
   # CAN-SPAM, GDPR/ePrivacy, and Australia's Spam Act.
   postal_address: "COAI, Level 16, Hunza Tower, Penang, Malaysia"
+  # The other services offered, appended verbatim to the end of every message
+  # -- email and WhatsApp alike. Written here rather than left to the model:
+  # it is the same list for every business, and a model told to mention them
+  # reliably rewords one, drops one, or invents a fourth that nobody sells.
+  #
+  # Leave `services` empty and the message ends as it always did.
+  services_intro: "If a website isn't what you need right now, these are the other ways I help businesses get found:"
+  services:
+    - "Google Business Profile setup and optimisation, so you show up when people search nearby"
+    - "Marketing funnels, so the enquiries you already get turn into bookings"
+    - "Social media management and paid ads, run and measured"
+
   # Places rarely returns email for these businesses, so WhatsApp leads.
   channel_priority:
     - whatsapp

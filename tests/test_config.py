@@ -384,3 +384,65 @@ def test_an_unknown_design_level_fails_at_load_with_the_fix_in_the_message(tmp_p
     message = str(exc.value)
     assert "design_level" in message
     assert "showcase" in message and "standard" in message
+
+
+# ------------------------------------------- outreach.services
+
+
+def _campaign_with(tmp_path, replacements):
+    source = pathlib.Path("config/campaigns/penang-my.yaml").read_text()
+    for old, new in replacements:
+        assert old in source, f"campaign file no longer contains {old!r}"
+        source = source.replace(old, new, 1)
+    path = tmp_path / "c.yaml"
+    path.write_text(source)
+    return path
+
+
+def test_the_live_campaign_lists_the_services():
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+
+    assert len(config.outreach.services) == 3
+    assert config.outreach.services_intro
+
+
+def _campaign_with_services(tmp_path, block):
+    """The live campaign with its whole services block replaced.
+
+    Replacing the key alone would leave its "- " items orphaned under it,
+    which is a YAML error rather than the empty list the test meant.
+    """
+    source = pathlib.Path("config/campaigns/penang-my.yaml").read_text()
+    start = source.index("\n  services:\n")
+    end = source.index("\n  # Places rarely returns email")
+    path = tmp_path / "c.yaml"
+    path.write_text(source[:start] + block + source[end:])
+    return path
+
+
+def test_services_can_be_emptied_and_the_message_ends_as_before(tmp_path):
+    path = _campaign_with_services(tmp_path, "\n  services: []\n")
+
+    assert load_config(path, env_file=None).outreach.services == ()
+
+
+def test_a_services_list_without_an_intro_fails_at_load(tmp_path):
+    """The bullets would arrive with no explanation and read as a price list."""
+    path = _campaign_with(
+        tmp_path,
+        [('  services_intro: "If a website', '  services_intro: ""  # was: "If a website')],
+    )
+
+    with pytest.raises(ConfigError) as exc:
+        load_config(path, env_file=None)
+    assert "services_intro" in str(exc.value)
+
+
+def test_one_service_written_as_a_plain_string_is_taken_as_a_list(tmp_path):
+    """Friendlier than iterating its characters, which is what a bare tuple()
+    of a string would do -- three services becoming forty bullets."""
+    from outreach.config import OutreachSettings  # noqa: F401
+
+    path = _campaign_with_services(tmp_path, '\n  services: "Just the one service"\n')
+
+    assert load_config(path, env_file=None).outreach.services == ("Just the one service",)

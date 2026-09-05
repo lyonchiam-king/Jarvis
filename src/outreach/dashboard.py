@@ -1224,6 +1224,60 @@ def create_app(config: Config) -> Flask:
 
         return jsonify({"ok": True, "level": level})
 
+    @app.route("/api/services", methods=["GET", "POST"])
+    def api_services():
+        """Read or set the other services listed at the end of every message.
+
+        A campaign-level constant, not a per-business field: every lead gets
+        the same list. It is here rather than only in the campaign file
+        because the wording is the part Lyon will want to tune after reading
+        a few replies, and a setting he can only reach by editing YAML is a
+        setting he does not have.
+        """
+        from .campaign_edit import CampaignEditError, rewrite_services
+
+        if request.method == "GET":
+            c = current()
+            return jsonify({
+                "intro": c.outreach.services_intro,
+                "services": list(c.outreach.services),
+            })
+
+        payload = request.json or {}
+        intro = (payload.get("intro") or "").strip()
+        raw = payload.get("services")
+        if isinstance(raw, str):
+            raw = raw.splitlines()
+        if not isinstance(raw, list):
+            return jsonify({"error": "services must be a list of lines"}), 400
+        services = [str(line).strip() for line in raw if str(line).strip()]
+
+        if services and not intro:
+            return jsonify({
+                "error": "Add the line that introduces the list, or the "
+                         "bullets arrive with no explanation."
+            }), 200
+
+        try:
+            path = _writable_campaign()
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        try:
+            original = path.read_text()
+            path.write_text(rewrite_services(original, intro, services))
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        except OSError as exc:
+            return jsonify({"error": f"Could not save {path}: {exc}"}), 200
+
+        try:
+            state["config"] = load_config(path)
+        except ConfigError as exc:
+            path.write_text(original)
+            return jsonify({"error": f"Reverted -- {exc}"}), 200
+
+        return jsonify({"ok": True, "services": services})
+
     @app.route("/api/whatsapp/status")
     def api_whatsapp_status():
         """Relay connection state + daily counters."""
@@ -2257,6 +2311,22 @@ PAGE = """<!doctype html>
     seven minutes, mostly waiting. Pages already written are skipped and
     cost nothing.</p>
   <div id="queue"></div>
+
+  <details class="card" style="margin-bottom:14px">
+    <summary class="sub"><b>Other services listed at the end of every message</b></summary>
+    <p class="hint" style="margin:8px 0">Appended word for word to every
+      message, email and WhatsApp alike &mdash; the model never rewrites these.
+      One service per line. Leave the list empty and messages end as they did
+      before.</p>
+    <label class="sub">The line that introduces them
+      <input id="svc-intro" style="width:100%;margin:4px 0 10px"></label>
+    <label class="sub">One service per line
+      <textarea id="svc-list" rows="4" style="height:auto"></textarea></label>
+    <div class="row" style="margin-top:8px">
+      <button onclick="saveServices()">Save services</button>
+      <span class="hint" id="svc-note"></span>
+    </div>
+  </details>
 
   <h2><span class="stepno">4</span> Send
       <a class="sub" href="/guide#4-open-gmail-drafts" target="_blank" rel="noopener">What is this?</a></h2>
@@ -3585,6 +3655,50 @@ async function setDesignLevel(on) {
   }
 }
 
+// The services listed at the end of every message. A campaign constant --
+// every lead gets the same list -- but the wording is the part worth tuning
+// after reading a few replies, so it is editable here rather than in YAML.
+async function loadServices() {
+  const intro = $('#svc-intro');
+  const list = $('#svc-list');
+  if (!intro || !list) return;
+  try {
+    const d = await (await fetch('/api/services')).json();
+    intro.value = d.intro || '';
+    list.value = (d.services || []).join('\\n');
+  } catch { /* leave the boxes alone rather than showing a wrong state */ }
+}
+
+async function saveServices() {
+  const note = $('#svc-note');
+  const intro = $('#svc-intro').value;
+  const services = $('#svc-list').value.split('\\n');
+  if (note) note.textContent = 'Saving\\u2026';
+
+  let d;
+  try {
+    d = await (await fetch('/api/services', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({intro: intro, services: services}),
+    })).json();
+  } catch (e) {
+    if (note) note.innerHTML = '<span class="err">Could not reach the dashboard.</span>';
+    return;
+  }
+
+  if (d.error) {
+    if (note) note.innerHTML = '<span class="err">' + esc(d.error) + '</span>';
+    return;
+  }
+  if (note) {
+    note.textContent = d.services.length
+      ? `Saved \\u2014 ${d.services.length} service(s) on every message from now on.`
+      : 'Saved \\u2014 no services listed, messages end as before.';
+  }
+  loadServices();
+}
+
 async function loadQueue() {
   let d;
   try { d = await (await fetch('/api/build-queue')).json(); } catch { return; }
@@ -3641,6 +3755,7 @@ loadReview();
 loadQueue();
 loadReach();
 loadDesignLevel();
+loadServices();
 poll();
 setInterval(poll, 1200);
 setInterval(refresh, 30000);

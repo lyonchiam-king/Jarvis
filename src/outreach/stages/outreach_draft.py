@@ -249,6 +249,12 @@ def run(
     report.not_ready = not_ready
     report.selected = len(selected)
 
+    # Identical for every lead in the run, so built once out here rather than
+    # per business inside the loop.
+    services_block = gmail_provider.render_services_block(
+        config.outreach.services_intro, config.outreach.services
+    )
+
     if not selected:
         if config.outreach.require_site and not_ready:
             log.info(
@@ -318,6 +324,13 @@ def run(
             )
             report.copy_written += 1
 
+            # Computed once and used everywhere below. Appending at each use
+            # site instead is how one of them gets missed -- the message would
+            # then read one way in the log and another on the Sheet.
+            whatsapp_text = gmail_provider.with_services(
+                copy.whatsapp_message, services_block
+            )
+
             recipient = research_row.get("Email Found", "").strip()
             email_source = research_row.get("Email Source", "not found")
 
@@ -328,6 +341,7 @@ def run(
                 company=config.outreach.company,
                 postal_address=config.outreach.postal_address,
                 opt_out_note=config.outreach.opt_out_note,
+                services_block=services_block,
             )
 
             draft_id = ""
@@ -371,7 +385,7 @@ def run(
             if dry_run:
                 log.info("  subject: %s", copy.subject)
                 log.info("  to:      %s", recipient or "(no email -- WhatsApp only)")
-                log.info("  whatsapp: %s", copy.whatsapp_message)
+                log.info("  whatsapp: %s", whatsapp_text)
                 continue
 
             pending.rows.append(
@@ -385,7 +399,7 @@ def run(
                     "Body Preview": body[:BODY_PREVIEW_CHARS],
                     "Gmail Draft ID": draft_id,
                     "Gmail Draft Link": draft_link,
-                    "WhatsApp Message": copy.whatsapp_message,
+                    "WhatsApp Message": whatsapp_text,
                     "Drafted At": utc_now(),
                     # Manual columns, seeded once on insert. "Drafted" is the
                     # truth right now; you change it to Sent after you send.
@@ -447,6 +461,10 @@ def regenerate_one(
     research = sheets.read_rows(schema.RESEARCH)
     site_briefs = sheets.read_rows(schema.SITE_BRIEFS)
 
+    services_block = gmail_provider.render_services_block(
+        config.outreach.services_intro, config.outreach.services
+    )
+
     lead_entry = leads.get(lead_id)
     if lead_entry is None:
         raise ValueError(f"No lead with ID {lead_id!r} on the Leads tab.")
@@ -491,10 +509,14 @@ def regenerate_one(
         company=config.outreach.company,
         postal_address=config.outreach.postal_address,
         opt_out_note=config.outreach.opt_out_note,
+        services_block=services_block,
     )
 
+    whatsapp_text = gmail_provider.with_services(
+        copy.whatsapp_message, services_block
+    )
     sheets.update_column(
-        schema.OUTREACH_LOG, "WhatsApp Message", {lead_id: copy.whatsapp_message}
+        schema.OUTREACH_LOG, "WhatsApp Message", {lead_id: whatsapp_text}
     )
     sheets.update_column(schema.OUTREACH_LOG, "Subject", {lead_id: copy.subject})
     sheets.update_column(
@@ -504,7 +526,7 @@ def regenerate_one(
     return {
         "subject": copy.subject,
         "email_body": copy.email_body,
-        "whatsapp_message": copy.whatsapp_message,
+        "whatsapp_message": whatsapp_text,
     }
 
 
