@@ -548,6 +548,12 @@ The message itself still opens on their reviews, frames the site as a way to
 grow, and ends by saying plainly what happens if they like it and what happens
 if they do not. The list is what the "if not" points at.
 
+> **If you pulled and the services did not appear:** your settings live in
+> `penang-my.local.yaml`, which was copied from the shipped file once, the
+> first time you saved a setting from the dashboard. Anything added to the
+> shipped file after that never reached your copy. That is fixed — your copy
+> now inherits any setting it does not mention — so a pull is enough.
+
 **Edit the wording** in the box above step 4, *Other services listed at the
 end of every message* — one service per line, plus the line that introduces
 them. It is added word for word, so what you type is what they read; the model

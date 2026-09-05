@@ -45,7 +45,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1160 tests, pytest, no CI -- the suite is the only gate
+tests/             1167 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -469,6 +469,26 @@ of nowhere. Empty by default in code: a campaign naming none gets the message
 byte for byte as it was. Four call sites carry it -- run and regenerate, each
 for WhatsApp and email -- and each has its own test, `regenerate_one`'s email
 asserted through the call because it stores only a truncated preview.
+
+**A fork inherits every setting it has never heard of.** `fork_to_local`
+copies the tracked campaign once and never again, so a `*.local.yaml` is a
+snapshot of whatever shipped the day the user first saved a setting. Every
+key added to the template afterwards was invisible to them: their file has no
+such key, so they get the code default. That is fine where the default is the
+intended value and silently wrong where it is not -- `outreach.services`
+defaults to empty on purpose, so the pull that added three services to the
+template changed nothing at all for the person who asked for them, and the
+feature looked simply broken. `_inherit_from_template` merges the template
+under the fork, one level at a time. What the fork says always wins,
+**including a key it sets empty**, so clearing the services list on the page
+writes `services: []` rather than deleting the key -- omitting it would make
+"clear" mean "restore whatever shipped". Lists replace rather than
+concatenate: someone who trimmed their areas to two meant two.
+
+**Every key in `research` equals its code default.** So a test asserting an
+inherited research value passes whatever the merge does -- it cannot tell
+inheritance from fallback. Pin merge assertions to `outreach`, where the
+template genuinely differs from the dataclass.
 
 **Secrets are write-only.** `env_edit.set_key` writes; `is_set` reports presence
 and never the value. No key is ever echoed to a page, a log, or a report.

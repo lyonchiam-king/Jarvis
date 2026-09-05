@@ -377,10 +377,16 @@ def rewrite_services(text: str, intro: str, services: list[str]) -> str:
         i += 1
     lines = lines[:start] + kept + lines[end:]
 
-    block = [f"  services_intro: {_scalar(intro.strip())}"] if intro.strip() else []
+    # Written even when empty, never omitted. A `*.local.yaml` fork inherits
+    # any key it does not carry from the tracked template beside it, so a key
+    # simply deleted here would come straight back on the next load -- which
+    # would make "clear the list" mean "restore whatever shipped".
+    block = [f"  services_intro: {_scalar(intro.strip())}"]
     if cleaned:
         block.append("  services:")
         block += [f"    - {_scalar(line)}" for line in cleaned]
+    else:
+        block.append("  services: []")
     lines = lines[:start] + block + lines[start:]
 
     result = "\n".join(lines)

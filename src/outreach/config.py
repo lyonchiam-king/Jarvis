@@ -361,6 +361,58 @@ def _require(mapping: dict, key: str, where: str) -> object:
     return mapping[key]
 
 
+def _merge_settings(template: dict, local: dict) -> dict:
+    """The local file wins, key by key, but never by omission.
+
+    Merged one level at a time so a section the user has edited keeps every
+    other key in it. Lists are replaced wholesale rather than concatenated:
+    a user who trimmed their search areas to three meant three, not three
+    plus the twelve that shipped.
+    """
+    merged = dict(template)
+    for key, value in local.items():
+        if (
+            isinstance(value, dict)
+            and isinstance(merged.get(key), dict)
+        ):
+            merged[key] = _merge_settings(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _inherit_from_template(path: Path, raw: dict) -> dict:
+    """Fill a `*.local.yaml` fork's gaps from the tracked file beside it.
+
+    The fork is copied from the template once and never again, so every
+    setting added to the template afterwards was invisible to anyone who had
+    already saved a setting from the dashboard -- their file simply had no
+    such key, and they got the code default instead. That is fine where the
+    default is the intended value, and silently wrong where it is not: the
+    outreach services list defaults to empty on purpose, so a pull that added
+    three services to the template changed nothing at all for the person who
+    most wanted them.
+
+    A key the fork carries always wins, including one deliberately set empty.
+    Only keys it has never heard of come from the template.
+    """
+    if not path.name.endswith(".local.yaml"):
+        return raw
+    template = path.with_name(path.name.removesuffix(".local.yaml") + ".yaml")
+    if not template.exists():
+        return raw
+    try:
+        base = yaml.safe_load(template.read_text()) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        # Never fatal: the fork alone is a working config, and a broken
+        # template must not take down someone whose own file is fine.
+        log.warning("Could not read %s to fill in defaults: %s", template, exc)
+        return raw
+    if not isinstance(base, dict):
+        return raw
+    return _merge_settings(base, raw)
+
+
 def load_config(
     config_path: str | os.PathLike[str] | None = None,
     *,
@@ -411,6 +463,8 @@ def load_config(
     raw = yaml.safe_load(path.read_text()) or {}
     if not isinstance(raw, dict):
         raise ConfigError(f"{path} must contain a YAML mapping at the top level")
+
+    raw = _inherit_from_template(path, raw)
 
     campaign_raw = raw.get("campaign") or {}
     where = f"{path} -> campaign"

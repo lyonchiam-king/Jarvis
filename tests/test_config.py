@@ -1,6 +1,7 @@
 import pathlib
 
 import pytest
+import yaml
 
 from outreach.config import IMAGE_PROVIDERS, ConfigError, load_config
 
@@ -446,3 +447,153 @@ def test_one_service_written_as_a_plain_string_is_taken_as_a_list(tmp_path):
     path = _campaign_with_services(tmp_path, '\n  services: "Just the one service"\n')
 
     assert load_config(path, env_file=None).outreach.services == ("Just the one service",)
+
+
+# ------------------- a fork inherits settings it has never heard of
+
+
+def _fork(tmp_path, local_yaml: str):
+    """A tracked template plus a `.local.yaml` fork beside it, as a machine
+    that has saved a setting from the dashboard actually looks."""
+    template = tmp_path / "camp.yaml"
+    template.write_text(pathlib.Path("config/campaigns/penang-my.yaml").read_text())
+    local = tmp_path / "camp.local.yaml"
+    local.write_text(local_yaml)
+    return local
+
+
+def test_a_fork_written_before_a_setting_existed_still_gets_it(tmp_path):
+    """The bug this exists for. fork_to_local copies once and never again, so
+    every setting added to the template afterwards was invisible to anyone who
+    had already saved one from the dashboard -- their file had no such key, and
+    they got the code default. Fine where the default is the intended value,
+    silently wrong where it is not: the services list defaults to empty on
+    purpose, so a pull that added three services changed nothing at all for
+    the person who had asked for them.
+    """
+    local = _fork(tmp_path, """
+campaign:
+  name: mine
+  category: "hair salon"
+  location: "Penang"
+""")
+
+    config = load_config(local, env_file=None)
+
+    assert len(config.outreach.services) == 3
+    assert config.outreach.services_intro
+
+
+def test_what_the_fork_does_say_always_wins(tmp_path):
+    local = _fork(tmp_path, """
+campaign:
+  name: mine
+  category: "coffee shop"
+  location: "Ipoh"
+outreach:
+  services_intro: "My own line:"
+  services:
+    - "Only mine"
+""")
+
+    config = load_config(local, env_file=None)
+
+    assert config.campaign.category == "coffee shop"
+    assert config.outreach.services == ("Only mine",)
+    assert config.outreach.services_intro == "My own line:"
+
+
+def test_a_key_set_empty_in_the_fork_is_not_refilled(tmp_path):
+    """"Cleared" has to mean cleared. Inheriting by omission would make
+    emptying the list on the page restore whatever shipped."""
+    local = _fork(tmp_path, """
+campaign:
+  name: mine
+  category: "hair salon"
+  location: "Penang"
+outreach:
+  services_intro: ""
+  services: []
+""")
+
+    assert load_config(local, env_file=None).outreach.services == ()
+
+
+def test_a_trimmed_list_is_not_topped_up_from_the_template(tmp_path):
+    """Lists replace rather than merge. Someone who cut their search areas to
+    two meant two, not two plus the twelve that shipped."""
+    local = _fork(tmp_path, """
+campaign:
+  name: mine
+  category: "hair salon"
+  location: "Penang"
+  areas:
+    - "Georgetown, Penang, Malaysia"
+    - "Air Itam, Penang, Malaysia"
+""")
+
+    assert len(load_config(local, env_file=None).campaign.areas) == 2
+
+
+def test_other_keys_in_an_edited_section_survive(tmp_path):
+    """The merge goes a level down: editing one key under `outreach` must not
+    drop the rest of that section.
+
+    Asserted against `outreach` rather than `research` deliberately -- every
+    research key in the template happens to equal its code default, so a test
+    there cannot tell an inherited value from a fallback and passes whatever
+    the merge does. postal_address defaults to empty in code and is set in the
+    template, so only inheritance can produce it.
+    """
+    local = _fork(tmp_path, """
+campaign:
+  name: mine
+  category: "hair salon"
+  location: "Penang"
+outreach:
+  sender_name: "Someone Else"
+""")
+
+    config = load_config(local, env_file=None)
+
+    assert config.outreach.sender_name == "Someone Else"
+    assert config.outreach.postal_address, (
+        "the rest of the outreach section was dropped rather than merged"
+    )
+    assert len(config.outreach.services) == 3
+
+
+def test_a_plain_campaign_file_is_untouched_by_any_of_this(tmp_path):
+    """Only a `.local.yaml` inherits. A file someone named themselves is
+    loaded exactly as written."""
+    path = tmp_path / "somewhere.yaml"
+    path.write_text("""
+campaign:
+  name: mine
+  category: "hair salon"
+  location: "Penang"
+compliance:
+  country_code: "MY"
+""")
+
+    assert load_config(path, env_file=None).outreach.services == ()
+
+
+def test_an_unreadable_template_never_takes_down_a_working_fork(tmp_path):
+    """The fork alone is a valid config. A broken template must not stop
+    someone whose own file is fine."""
+    template = tmp_path / "camp.yaml"
+    template.write_text("{{ not yaml at all")
+    local = tmp_path / "camp.local.yaml"
+    local.write_text("""
+campaign:
+  name: mine
+  category: "hair salon"
+  location: "Penang"
+compliance:
+  country_code: "MY"
+""")
+
+    config = load_config(local, env_file=None)
+
+    assert config.campaign.category == "hair salon"
