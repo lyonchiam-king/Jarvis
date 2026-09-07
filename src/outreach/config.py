@@ -318,6 +318,12 @@ class Secrets:
     # which needs none.
     llm_api_key: str = ""
     gemini_api_key: str = ""
+    # Guards the dashboard. Empty means no login, which is safe only while
+    # the dashboard is bound to localhost -- nothing else can reach it. It is
+    # REQUIRED before the dashboard may bind to any other address: the page
+    # can spend money, message real businesses and read the Sheet, and on a
+    # cafe or hotel network everyone in the building is on that network.
+    dashboard_password: str = ""
     # Cloudflare Pages. The token is a secret and lives in .env; the
     # project and the repo folder are settings and live in the campaign.
     cloudflare_api_token: str = ""
@@ -744,6 +750,7 @@ def load_config(
         ),
         token_file=Path(os.getenv("GOOGLE_TOKEN_FILE", "credentials/token.json")),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+        dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
         llm_api_key=os.getenv(
             PROVIDER_KEY_ENV.get(provider, "ANTHROPIC_API_KEY"), ""
         ),

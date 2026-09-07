@@ -45,7 +45,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1171 tests, pytest, no CI -- the suite is the only gate
+tests/             1189 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -497,6 +497,30 @@ found them rate them highly, the people who have not cannot find them at all
 -- so the next sentence is about customers they are missing rather than about
 the sender. The solution beat forbids "built a website" outright: that is a
 sentence about the sender, and the subject has to be their customers.
+
+**The localhost binding was the only protection there was.** The dashboard
+had no login of any kind -- it was safe purely because nothing else could
+reach it. So putting it on a phone is not a networking change, it is an
+authentication change, and the ordering is not negotiable:
+`DASHBOARD_PASSWORD` guards the page whenever it is set, and `serve` **refuses**
+to bind anywhere but `127.0.0.1` without one rather than warning about it. On a
+cafe or hotel network everyone in the building is on that network, and the page
+spends money, messages real businesses and reads the Sheet. The old safety test
+parsed the source for a literal `"127.0.0.1"`; it now calls `serve` and asserts
+the behaviour, because the host stopped being a constant the moment a phone had
+to reach it.
+
+**Below 16px, Safari zooms and does not zoom back.** Tapping the message box to
+fix a typo left the whole page magnified with no obvious way out. Inputs go to
+16px on small screens for that reason alone, and the login page -- the first
+thing a phone sees -- was built at 16px from the start.
+
+**A batch `if` block expands `%VAR%` when it is parsed.** The setup routine at
+the top of `Dashboard.bat` is a subroutine to avoid exactly this, and the phone
+check reintroduced it: a nested `if "%ERRORLEVEL%"=="0"` reads the value from
+*before* the block. Chain with `&&` instead. The test strips `REM` lines before
+asserting, because the comment explaining the trap names the very thing the
+assertion forbids and otherwise matches the prose.
 
 **Secrets are write-only.** `env_edit.set_key` writes; `is_set` reports presence
 and never the value. No key is ever echoed to a page, a log, or a report.

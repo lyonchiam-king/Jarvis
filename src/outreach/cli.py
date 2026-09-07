@@ -632,12 +632,34 @@ def test_model(ctx: click.Context) -> None:
 @main.command("dashboard")
 @click.option("--port", default=8765, help="Port to serve on.")
 @click.option("--no-browser", is_flag=True, help="Don't open a browser tab.")
+@click.option(
+    "--phone",
+    is_flag=True,
+    help="Also serve to your own network, so a phone on the same wifi can "
+    "open it. Requires DASHBOARD_PASSWORD in .env.",
+)
 @click.pass_context
-def dashboard_cmd(ctx: click.Context, port: int, no_browser: bool) -> None:
-    """Open the dashboard in your browser. Runs on this machine only."""
-    from .dashboard import serve
+def dashboard_cmd(
+    ctx: click.Context, port: int, no_browser: bool, phone: bool
+) -> None:
+    """Open the dashboard in your browser.
 
-    serve(ctx.obj["config_path"], port=port, open_browser=not no_browser)
+    Runs on this machine only unless --phone is given, and that needs a
+    password: the page can spend money and message businesses.
+    """
+    from .dashboard import UnsafeBinding, serve
+
+    try:
+        serve(
+            ctx.obj["config_path"],
+            port=port,
+            open_browser=not no_browser,
+            # 0.0.0.0 is every interface this machine has, which is what a
+            # phone on the same wifi needs to reach it.
+            host="0.0.0.0" if phone else "127.0.0.1",
+        )
+    except UnsafeBinding as exc:
+        raise SystemExit(f"\n{exc}\n")
 
 
 @main.command("compliance")

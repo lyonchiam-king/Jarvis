@@ -70,6 +70,45 @@ build if anyone ever changes that binding.
 
 ---
 
+## Using it from your phone
+
+The dashboard can run as an app on your iPhone. Two things to understand
+first.
+
+**Your PC is still doing the work.** The phone is a screen onto it. Discovery,
+research, building, the WhatsApp relay — all of that runs on the computer, so
+`Dashboard.bat` has to be running and the machine awake. Close the lid and the
+phone shows nothing.
+
+**It needs a password before it will leave your machine.** Until now the only
+thing protecting the dashboard was that nothing could reach it. It can spend
+your API credits and message real businesses, so on a shared wifi it must not
+be open. Add a line to your `.env`:
+
+    DASHBOARD_PASSWORD=something-only-you-know
+
+`Dashboard.bat` sees it and turns phone access on by itself. Without it,
+nothing changes and the dashboard stays on your machine only.
+
+**Then, on your phone:**
+
+1. On the PC, run `ipconfig` and find the IPv4 Address — something like
+   `192.168.1.42`.
+2. On the phone, on the **same wifi**, open `http://192.168.1.42:8765`.
+3. Enter the password.
+4. Share button → **Add to Home Screen**.
+
+It now has its own icon and opens full-screen with no Safari bar. Approving
+briefs and sending messages work exactly as they do on the desktop.
+
+**Away from home?** Install [Tailscale](https://tailscale.com) on both the PC
+and the phone and sign in with the same account. They join a private network
+of your own and the same address works from anywhere, with nothing exposed to
+the internet. Free for personal use.
+
+Never put this on a public address or forward the port on your router. The
+password is the only thing between the page and whoever finds it.
+
 ## Giving it to someone else
 
 Everything in this tool is per-person. Someone you hand it to runs their own

@@ -264,21 +264,77 @@ def test_full_run_covers_the_pipeline_in_order():
 # ---------------------------------------------------------- safety checks
 
 
-def test_dashboard_binds_to_localhost_only():
-    """It must never be reachable from the network -- it can spend money."""
-    source = (SRC / "dashboard.py").read_text()
-    tree = ast.parse(source)
-    hosts = [
-        kw.value.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "run"
-        for kw in node.keywords
-        if kw.arg == "host" and isinstance(kw.value, ast.Constant)
-    ]
-    assert hosts == ["127.0.0.1"], f"expected localhost only, found {hosts}"
-    assert "0.0.0.0" not in source
+def _serve_with(monkeypatch, config, **kwargs):
+    """Call serve() with the server stubbed, and report the host it asked for.
+
+    Exercises the real function rather than parsing the source for a literal:
+    the guarantee is about what it does, and the host stopped being a
+    constant the moment a phone had to reach it.
+    """
+    from outreach import dashboard as dash
+
+    seen = {}
+
+    class FakeApp:
+        def run(self, host=None, port=None, debug=None):
+            seen["host"] = host
+            seen["port"] = port
+
+    monkeypatch.setattr(dash, "load_config", lambda *a, **k: config)
+    monkeypatch.setattr(dash, "create_app", lambda cfg: FakeApp())
+    dash.serve(open_browser=False, **kwargs)
+    return seen
+
+
+def test_the_dashboard_serves_only_this_machine_by_default(monkeypatch):
+    """It must not be reachable from the network unless asked -- it can spend
+    money and message real businesses."""
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+
+    assert _serve_with(monkeypatch, config)["host"] == "127.0.0.1"
+
+
+def test_serving_to_the_network_without_a_password_is_refused(monkeypatch):
+    """The one hard rule. On a cafe or hotel network everyone in the building
+    is on that network, and the dashboard has no other protection -- so this
+    is refused rather than warned about."""
+    from outreach.dashboard import UnsafeBinding
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, dashboard_password=""))
+
+    with pytest.raises(UnsafeBinding) as exc:
+        _serve_with(monkeypatch, config, host="0.0.0.0")
+
+    message = str(exc.value)
+    assert "DASHBOARD_PASSWORD" in message, "the message must name the fix"
+    assert ".env" in message
+
+
+def test_serving_to_the_network_is_allowed_once_a_password_is_set(monkeypatch):
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(
+        config, secrets=replace(config.secrets, dashboard_password="hunter2")
+    )
+
+    assert _serve_with(monkeypatch, config, host="0.0.0.0")["host"] == "0.0.0.0"
+
+
+def test_only_the_phone_flag_can_widen_the_binding():
+    """0.0.0.0 must appear in exactly one place -- behind the flag that asks
+    for it -- so it cannot creep into the default path."""
+    import re as _re
+
+    cli = (SRC / "cli.py").read_text()
+    dashboard = (SRC / "dashboard.py").read_text()
+
+    assert "0.0.0.0" not in dashboard, (
+        "the server module must not name a wide binding at all"
+    )
+    # In the CLI: only as the true branch of the --phone flag.
+    uses = _re.findall(r'.*"0\.0\.0\.0".*', cli)
+    assert len(uses) == 1, f"expected one guarded use, found {uses}"
+    assert "if phone" in uses[0]
 
 
 def test_dashboard_never_shells_out_to_a_string_command():
@@ -3023,3 +3079,154 @@ def test_saving_services_keeps_the_campaign_files_comments(campaign_app):
     client.post("/api/services", json={"intro": "x:", "services": ["One"]})
 
     assert local.read_text().count("#") == before
+
+
+# ------------------------------------------------- signing in from a phone
+
+
+def _locked_app(password="hunter2"):
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(
+        config, secrets=replace(config.secrets, dashboard_password=password)
+    )
+    return create_app(config).test_client()
+
+
+def test_with_no_password_set_nothing_asks_you_to_sign_in(client):
+    """The desktop workflow is unchanged. A login nobody needs is a login
+    nobody will set a password for."""
+    assert client.get("/").status_code == 200
+    assert client.get("/api/summary").status_code == 200
+
+
+def test_a_password_locks_the_page_and_the_api():
+    app = _locked_app()
+
+    page = app.get("/")
+    api = app.get("/api/summary")
+
+    assert page.status_code == 302 and "/login" in page.headers["Location"]
+    # JSON for the API: a browser handed a login page as an API response
+    # renders raw HTML into the panel, and a phone shows nothing at all.
+    assert api.status_code == 401
+    assert "Signed out" in api.get_json()["error"]
+
+
+def test_the_right_password_gets_you_in_and_stays_in():
+    app = _locked_app()
+
+    response = app.post("/login", data={"password": "hunter2"})
+
+    assert response.status_code == 302
+    assert app.get("/").status_code == 200
+    assert app.get("/api/summary").status_code == 200
+
+
+def test_the_wrong_password_does_not():
+    app = _locked_app()
+
+    response = app.post("/login", data={"password": "wrong"})
+
+    assert response.status_code == 401
+    assert b"Wrong password" in response.data
+    assert app.get("/api/summary").status_code == 401
+
+
+def test_guessing_is_rate_limited():
+    """Anything else on the wifi could otherwise try passwords at machine
+    speed."""
+    app = _locked_app()
+
+    for _ in range(8):
+        app.post("/login", data={"password": "wrong"})
+    blocked = app.post("/login", data={"password": "wrong"})
+
+    assert b"Too many attempts" in blocked.data
+    # And the real password is refused too while the window is open, so the
+    # limit cannot be stepped around by getting it right on the ninth try.
+    assert b"Too many attempts" in app.post(
+        "/login", data={"password": "hunter2"}
+    ).data
+
+
+def test_the_login_page_never_says_what_the_password_is():
+    """Secrets are write-only -- never echoed to a page, a log or a report."""
+    app = _locked_app(password="a-very-distinctive-secret")
+
+    for response in (app.get("/login"), app.post("/login", data={"password": "x"})):
+        assert b"a-very-distinctive-secret" not in response.data
+
+
+# ------------------------------------------- installing it on a phone
+
+
+def test_the_page_can_be_installed_as_an_app(client):
+    """Add to Home Screen gives an icon that opens without Safari's chrome.
+    Without `standalone` it is a bookmark with extra steps."""
+    manifest = client.get("/manifest.webmanifest").get_json()
+
+    assert manifest["display"] == "standalone"
+    assert manifest["start_url"] == "/"
+    assert manifest["icons"], "an installed app with no icon shows a screenshot"
+
+
+def test_the_icon_is_a_real_png(client):
+    """Generated rather than shipped, so it cannot drift from the palette --
+    but it still has to be a file iOS will accept."""
+    import struct
+
+    response = client.get("/icon.png")
+
+    assert response.mimetype == "image/png"
+    assert response.data[:8] == b"\x89PNG\r\n\x1a\n"
+    width, height = struct.unpack(">II", response.data[16:24])
+    assert (width, height) == (512, 512), "iOS wants 512 for the home screen"
+
+
+def test_the_page_links_everything_ios_needs(client):
+    page = client.get("/").get_data(as_text=True)
+
+    assert 'rel="manifest"' in page
+    assert 'rel="apple-touch-icon"' in page
+    assert 'name="apple-mobile-web-app-capable" content="yes"' in page
+    # viewport-fit=cover, or the page stops short of the screen edges and the
+    # safe-area padding below has nothing to do.
+    assert "viewport-fit=cover" in page
+
+
+def test_inputs_are_big_enough_that_safari_does_not_zoom(client):
+    """Below 16px Safari zooms the page in on focus and never zooms back --
+    tapping the message box to fix a typo left it magnified."""
+    page = client.get("/").get_data(as_text=True)
+
+    phone = page.split("@media (max-width:640px)", 1)[1].split("}\n  }", 1)[0]
+    assert "font-size:16px" in phone
+    assert "input, textarea" in phone
+
+
+def test_the_phone_layout_keeps_content_out_of_the_island_and_the_indicator(client):
+    page = client.get("/").get_data(as_text=True)
+
+    phone = page.split("@media (max-width:640px)", 1)[1].split("}\n  }", 1)[0]
+    assert "env(safe-area-inset-top)" in phone
+    assert "env(safe-area-inset-bottom)" in phone
+
+
+def test_the_send_buttons_are_thumb_sized_on_a_phone(client):
+    """These send messages to real businesses. 44px is Apple's own minimum."""
+    page = client.get("/").get_data(as_text=True)
+
+    phone = page.split("@media (max-width:640px)", 1)[1].split("}\n  }", 1)[0]
+    assert "min-height:44px" in phone
+
+
+def test_the_login_page_is_phone_shaped_too():
+    """It is the first thing seen on the phone, and the only page you cannot
+    get past -- a login that zooms on focus is a bad first impression."""
+    app = _locked_app()
+
+    page = app.get("/login").get_data(as_text=True)
+
+    assert "viewport-fit=cover" in page
+    assert "font-size:16px" in page
+    assert "env(safe-area-inset-bottom)" in page

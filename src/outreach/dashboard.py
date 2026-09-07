@@ -15,12 +15,21 @@ import sys
 import threading
 import time
 import webbrowser
+import hmac
+import secrets as _secrets
 from collections import deque
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template_string, request
+from flask import (
+    Flask,
+    jsonify,
+    redirect,
+    render_template_string,
+    request,
+    session,
+)
 
 from . import schema
 from .config import Config, load_config
@@ -635,9 +644,108 @@ def _load_summary(config: Config) -> Summary:
     return summary
 
 
+LOGIN_PAGE = """<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sign in</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fbfaf9; --ink:#1a1714; --line:#e3ded7;
+          --accent:#b4541f; --muted:#6f6862; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#151311; --ink:#efeae4; --line:#2f2a26; --accent:#e08a4e; --muted:#a49a90; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100dvh; display:flex; align-items:center;
+         justify-content:center; background:var(--bg); color:var(--ink);
+         font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+         padding:24px calc(20px + env(safe-area-inset-left)) calc(24px + env(safe-area-inset-bottom)); }
+  form { width:100%; max-width:340px; }
+  h1 { font-size:20px; margin:0 0 6px; }
+  p { color:var(--muted); font-size:14px; margin:0 0 18px; }
+  /* 16px minimum: Safari zooms the whole page on focus below that, and the
+     zoom does not come back on its own. */
+  input { width:100%; font-size:16px; padding:13px 14px; border-radius:10px;
+          border:1px solid var(--line); background:transparent; color:var(--ink); }
+  button { width:100%; margin-top:12px; font-size:16px; padding:14px;
+           border-radius:10px; border:1px solid var(--accent);
+           background:var(--accent); color:#fff; font-weight:600; }
+  .err { color:var(--accent); font-size:14px; margin:12px 0 0; }
+</style>
+<form method="post">
+  <h1>SME Outreach</h1>
+  <p>This dashboard can spend money and message businesses, so it asks first.</p>
+  <input type="password" name="password" placeholder="Dashboard password"
+         autocomplete="current-password" autofocus>
+  <button type="submit">Sign in</button>
+  {% if error %}<p class="err">{{ error }}</p>{% endif %}
+</form>
+"""
+
+
 def create_app(config: Config) -> Flask:
     app = Flask(__name__)
     runner = Runner()
+
+    # Signed-cookie sessions, with a per-process key. Restarting the
+    # dashboard signs every device out, which is the right trade for a tool
+    # that is started and stopped by hand: no secret to store, and a laptop
+    # that was closed does not leave a phone logged in for ever.
+    app.secret_key = _secrets.token_urlsafe(32)
+
+    # Failed attempts, so a password cannot be guessed at machine speed by
+    # anything else on the network. Keyed by source address, bounded.
+    login_failures: dict[str, list[float]] = {}
+    LOGIN_WINDOW = 300.0
+    LOGIN_MAX = 8
+
+    def _too_many_attempts(who: str) -> bool:
+        now = time.time()
+        recent = [t for t in login_failures.get(who, []) if now - t < LOGIN_WINDOW]
+        login_failures[who] = recent
+        if len(login_failures) > 200:  # bounded: a table, not a log
+            login_failures.clear()
+        return len(recent) >= LOGIN_MAX
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        wanted = current().secrets.dashboard_password
+        if not wanted:
+            # Nothing to sign in to. Say so rather than showing a box that
+            # accepts anything.
+            return redirect("/")
+
+        error = ""
+        if request.method == "POST":
+            who = request.remote_addr or "unknown"
+            if _too_many_attempts(who):
+                error = "Too many attempts. Wait a few minutes."
+            else:
+                given = (request.form.get("password") or "").strip()
+                # compare_digest, not ==: a plain comparison returns faster on
+                # a wrong first character, which is measurable over a network.
+                if hmac.compare_digest(given, wanted):
+                    session["in"] = True
+                    session.permanent = True
+                    return redirect("/")
+                login_failures.setdefault(who, []).append(time.time())
+                error = "Wrong password."
+        return render_template_string(LOGIN_PAGE, error=error), (
+            200 if request.method == "GET" else 401
+        )
+
+    @app.before_request
+    def _require_login():
+        # No password set means no login -- which is safe only on localhost,
+        # and `serve` refuses to bind anywhere else without one.
+        if not current().secrets.dashboard_password:
+            return None
+        if session.get("in") or request.endpoint == "login":
+            return None
+        # An API call gets JSON it can act on; a page gets the login form.
+        # A browser handed JSON shows raw text and a phone shows nothing.
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Signed out. Reload the page."}), 401
+        return redirect("/login")
 
     # The campaign target is editable from the page, so config is state rather
     # than a constant. Every handler reads through `current()` so a save takes
@@ -655,6 +763,69 @@ def create_app(config: Config) -> Flask:
             build=current().build,
             whatsapp_enabled=current().outreach.whatsapp_enabled,
         )
+
+    @app.route("/manifest.webmanifest")
+    def manifest():
+        """What "Add to Home Screen" reads to make this an app.
+
+        `standalone` is the part that matters: opened from the icon the page
+        gets the whole screen with no address bar, which is the difference
+        between an app and a bookmark.
+        """
+        return jsonify({
+            "name": "SME Outreach",
+            "short_name": "Outreach",
+            "start_url": "/",
+            "scope": "/",
+            "display": "standalone",
+            "background_color": "#f6f5f2",
+            "theme_color": "#f6f5f2",
+            "icons": [
+                {"src": "/icon.png", "sizes": "512x512", "type": "image/png",
+                 "purpose": "any maskable"},
+            ],
+        })
+
+    @app.route("/icon.png")
+    def icon():
+        """The Home Screen icon, drawn here rather than shipped as a file.
+
+        A binary in the repository would be one more thing to keep in step
+        with the palette, and this is a flat mark: the accent colour with a
+        rounded square knocked out of it. Written by hand as a minimal PNG so
+        nothing new has to be installed to draw it.
+        """
+        import struct
+        import zlib
+
+        size = 512
+        bg = (0xB4, 0x55, 0x2D)      # --accent
+        fg = (0xF6, 0xF5, 0xF2)      # --bg, the mark
+        # A thick ring: an O for Outreach, legible at 60px on a home screen.
+        cx = cy = size / 2
+        outer, inner = size * 0.34, size * 0.20
+
+        rows = bytearray()
+        for y in range(size):
+            rows.append(0)  # PNG filter byte: none
+            for x in range(size):
+                d = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+                rows.extend(fg if inner <= d <= outer else bg)
+
+        def chunk(tag: bytes, data: bytes) -> bytes:
+            return (
+                struct.pack(">I", len(data))
+                + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+            )
+
+        png = (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(rows), 6))
+            + chunk(b"IEND", b"")
+        )
+        return app.response_class(png, mimetype="image/png")
 
     @app.route("/guide")
     def guide():
@@ -1935,16 +2106,49 @@ def create_app(config: Config) -> Flask:
     return app
 
 
-def serve(config_path: str | None = None, *, port: int = 8765, open_browser: bool = True):
+# The only address that needs no password: nothing but this machine can
+# reach it. Every other value puts the dashboard on a network.
+LOOPBACK = "127.0.0.1"
+
+
+class UnsafeBinding(Exception):
+    """Refusing to put an unauthenticated dashboard on a network."""
+
+
+def serve(
+    config_path: str | None = None,
+    *,
+    port: int = 8765,
+    open_browser: bool = True,
+    host: str = LOOPBACK,
+):
     config = load_config(config_path)
+
+    # The one hard rule. The dashboard spends money, messages real
+    # businesses and reads the Sheet, and it has no other protection -- on a
+    # cafe or hotel network, everyone in the building is on that network.
+    # Binding wide open without a password is not a thing to warn about; it
+    # is a thing to refuse.
+    if host != LOOPBACK and not config.secrets.dashboard_password:
+        raise UnsafeBinding(
+            f"Refusing to serve on {host} with no password set.\n\n"
+            "Anyone on the same network could open this dashboard, spend "
+            "your API credits and message businesses as you.\n\n"
+            "Set one first:\n"
+            "    DASHBOARD_PASSWORD=something-only-you-know\n"
+            "in your .env file, then start it again."
+        )
+
     app = create_app(config)
-    url = f"http://127.0.0.1:{port}"
+    url = f"http://{LOOPBACK}:{port}"
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     print(f"\n  Dashboard running at {url}")
+    if host != LOOPBACK:
+        print(f"  On your phone, on the same wifi: http://<this-pc-ip>:{port}")
+        print("  It will ask for your dashboard password.")
     print("  Close this window when you're done.\n")
-    # 127.0.0.1 only -- never exposed to the network.
-    app.run(host="127.0.0.1", port=port, debug=False)
+    app.run(host=host, port=port, debug=False)
 
 
 GUIDE_PAGE = """<!doctype html>
@@ -2018,8 +2222,21 @@ PAGE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- viewport-fit=cover lets the page paint under the Dynamic Island and the
+     home indicator; the safe-area padding below keeps content out of both. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>SME Outreach</title>
+<!-- Added to the Home Screen this opens without Safari's chrome, which is
+     what makes it feel like an app rather than a bookmark. No store, no
+     build step -- the same single page, installed. -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Outreach">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#f6f5f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#151311" media="(prefers-color-scheme: dark)">
+<link rel="apple-touch-icon" href="/icon.png">
 <style>
   :root {
     --bg:#f6f5f2; --card:#fff; --ink:#1b1a17; --muted:#6b6862;
@@ -2164,6 +2381,42 @@ PAGE = """<!doctype html>
   .wa-excl-grid { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr));
                   gap:8px; max-height:230px; overflow-y:auto; padding-right:4px; }
   @media (max-width:900px) { .wa-excl-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+
+  /* ---- phone ----
+     Everything below is for using this from a phone on the same wifi. The
+     page was built for a desktop and reflows well enough, but three things
+     do not survive the move without saying so. */
+  @media (max-width:640px) {
+    /* Under the Dynamic Island and around the home indicator. viewport-fit
+       is cover, so without this the first heading sits under the clock. */
+    .wrap { padding:calc(16px + env(safe-area-inset-top))
+                    calc(14px + env(safe-area-inset-right))
+                    calc(40px + env(safe-area-inset-bottom))
+                    calc(14px + env(safe-area-inset-left)); }
+
+    /* 16px is the threshold below which Safari zooms the whole page in on
+       focus -- and it does not zoom back out. Tapping the message box to fix
+       a typo left the page magnified with no obvious way back. */
+    input, textarea, select, .wa-msg-card .wa-edit { font-size:16px; }
+
+    /* A finger is not a mouse pointer. 44px is Apple's own minimum and these
+       are buttons that send messages to real businesses. */
+    button { min-height:44px; padding:11px 16px; }
+    .wa-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .wa-actions button, .wa-msg-card .wa-row button { width:100%; }
+    .wa-msg-card .wa-row { flex-wrap:wrap; gap:8px; }
+
+    /* One column: two 160px cards side by side on a phone are unreadable,
+       and the excluded grid was five across. */
+    .wa-excl-grid { grid-template-columns:1fr; }
+    .steps, .funnel { gap:6px; }
+    .q input { flex:1 1 100%; }
+    .sendrow { flex-wrap:wrap; gap:6px; }
+    h2 { font-size:19px; margin:32px 0 10px; }
+    /* Wide content scrolls inside itself rather than pushing the page sideways.
+       A horizontally scrolling page on a phone feels broken. */
+    table { display:block; overflow-x:auto; }
+  }
   .wa-excl { padding:7px 9px; border:1px solid var(--line); border-radius:6px;
              background:var(--card); min-width:0; }
   .wa-excl .wa-name { font-weight:600; font-size:13px; line-height:1.25;

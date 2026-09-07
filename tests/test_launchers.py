@@ -138,3 +138,42 @@ def test_the_launcher_stops_an_old_relay_before_starting_a_new_one():
         assert "/t" in text.splitlines()[i], (
             "taskkill without /t leaves the node process orphaned"
         )
+
+
+def test_the_launcher_only_offers_phone_access_with_a_password_set():
+    """The dashboard refuses a wide binding without one, so passing --phone
+    regardless would just fail to start. Reading .env for the key first means
+    the normal desktop run is untouched for anyone who has not set it."""
+    import pathlib
+
+    text = pathlib.Path("Dashboard.bat").read_text()
+
+    assert "--phone" in text
+    assert "DASHBOARD_PASSWORD" in text
+    # The flag is a variable set only inside the password check, never passed
+    # unconditionally.
+    assert '"%APP%" dashboard %PHONE%' in text
+    assert '"%APP%" dashboard --phone' not in text
+
+
+def test_the_phone_check_is_not_written_as_a_nested_block():
+    """Inside a parenthesised block %ERRORLEVEL% is expanded when the block is
+    parsed, so it reads the value from before the block and the check tests
+    the wrong thing. The file's own setup routine avoids this trap; the phone
+    check reintroduced it and had to be chained with && instead."""
+    import pathlib
+
+    text = pathlib.Path("Dashboard.bat").read_text()
+    block = text.split("phone access", 1)[1].split('"%APP%" dashboard', 1)[0]
+    # REM lines stripped: the comment explaining this trap names the very
+    # thing the assertion forbids, so a plain search matches the prose and
+    # passes with the bug back in place.
+    commands = "\n".join(
+        line for line in block.splitlines()
+        if not line.strip().upper().startswith("REM")
+    )
+
+    assert '&& set "PHONE=--phone"' in commands
+    assert "%ERRORLEVEL%" not in commands, (
+        "an ERRORLEVEL check here is parsed before it is set"
+    )
