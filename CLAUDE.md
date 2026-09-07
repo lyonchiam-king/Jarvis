@@ -45,7 +45,7 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1189 tests, pytest, no CI -- the suite is the only gate
+tests/             1193 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -514,6 +514,23 @@ to reach it.
 fix a typo left the whole page magnified with no obvious way out. Inputs go to
 16px on small screens for that reason alone, and the login page -- the first
 thing a phone sees -- was built at 16px from the start.
+
+**Batch asks for a feature; Python decides whether it is allowed.** Phone
+access was decided in `Dashboard.bat` by a `findstr` regex against `.env` --
+untestable from a machine without Windows, and when it was wrong it did
+nothing at all: no flag passed, no phone access, and no line of output saying
+why. `--phone` is now a request rather than an address, and `serve` picks the
+binding from a password it has already read. The launcher has no logic left.
+Anything that must be right on Windows and cannot be run here belongs on the
+Python side of that line.
+
+**A refusal has to be audible.** The same failure was silent twice over: the
+launcher's check failed quietly, and the dashboard then started normally
+because nothing had asked it for anything. It now always says which state it
+is in -- the address to type, or the reason phone access is off and the line
+that fixes it. `lan_address()` prints the address itself so nobody reads the
+wrong line out of `ipconfig`, and the firewall prompt is named, being the
+most common reason a correct setup still fails.
 
 **A batch `if` block expands `%VAR%` when it is parsed.** The setup routine at
 the top of `Dashboard.bat` is a subroutine to avoid exactly this, and the phone

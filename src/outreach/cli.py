@@ -650,13 +650,14 @@ def dashboard_cmd(
     from .dashboard import UnsafeBinding, serve
 
     try:
+        # Passing the intent, not the address: whether serving to the network
+        # is safe depends on a password being set, and serve() is where that
+        # has already been read.
         serve(
             ctx.obj["config_path"],
             port=port,
             open_browser=not no_browser,
-            # 0.0.0.0 is every interface this machine has, which is what a
-            # phone on the same wifi needs to reach it.
-            host="0.0.0.0" if phone else "127.0.0.1",
+            phone=phone,
         )
     except UnsafeBinding as exc:
         raise SystemExit(f"\n{exc}\n")

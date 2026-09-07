@@ -320,21 +320,83 @@ def test_serving_to_the_network_is_allowed_once_a_password_is_set(monkeypatch):
     assert _serve_with(monkeypatch, config, host="0.0.0.0")["host"] == "0.0.0.0"
 
 
-def test_only_the_phone_flag_can_widen_the_binding():
-    """0.0.0.0 must appear in exactly one place -- behind the flag that asks
-    for it -- so it cannot creep into the default path."""
-    import re as _re
+def test_the_wide_address_is_named_once_and_guarded_where_it_is_used():
+    """0.0.0.0 must not be reachable by accident. It is one named constant,
+    used in one expression, and that expression requires a password."""
+    source = (SRC / "dashboard.py").read_text()
 
-    cli = (SRC / "cli.py").read_text()
-    dashboard = (SRC / "dashboard.py").read_text()
+    assert source.count('"0.0.0.0"') == 1, "the wide address is defined once"
+    assert "ALL_INTERFACES = " in source
+    # The only place it is chosen, and it cannot be chosen without a password.
+    assert "ALL_INTERFACES if (phone and has_password) else LOOPBACK" in source
+    # The CLI passes intent, never an address, so it cannot widen it alone.
+    assert "0.0.0.0" not in (SRC / "cli.py").read_text()
 
-    assert "0.0.0.0" not in dashboard, (
-        "the server module must not name a wide binding at all"
+
+def test_asking_for_phone_access_without_a_password_stays_local(monkeypatch):
+    """The failure that made this "not working": the launcher decided, got it
+    wrong, and said nothing. Asking now always produces an answer -- either
+    the network binding or a local one that explains itself."""
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, dashboard_password=""))
+
+    seen = _serve_with(monkeypatch, config, phone=True)
+
+    assert seen["host"] == "127.0.0.1", "no password means no network binding"
+
+
+def test_asking_for_phone_access_with_a_password_serves_the_network(monkeypatch):
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(
+        config, secrets=replace(config.secrets, dashboard_password="hunter2")
     )
-    # In the CLI: only as the true branch of the --phone flag.
-    uses = _re.findall(r'.*"0\.0\.0\.0".*', cli)
-    assert len(uses) == 1, f"expected one guarded use, found {uses}"
-    assert "if phone" in uses[0]
+
+    assert _serve_with(monkeypatch, config, phone=True)["host"] == "0.0.0.0"
+
+
+def test_the_reason_phone_access_is_off_is_printed(monkeypatch, capsys):
+    """Silence is what made the last attempt undebuggable."""
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, dashboard_password=""))
+
+    _serve_with(monkeypatch, config, phone=True)
+
+    out = capsys.readouterr().out
+    assert "Phone access is OFF" in out
+    assert "DASHBOARD_PASSWORD" in out, "the message must name the fix"
+
+
+def test_the_address_to_type_on_the_phone_is_printed(monkeypatch, capsys):
+    """So nobody has to run ipconfig and pick the right line out of it."""
+    from outreach import dashboard as dash
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(
+        config, secrets=replace(config.secrets, dashboard_password="hunter2")
+    )
+    monkeypatch.setattr(dash, "lan_address", lambda: "192.168.1.42")
+
+    _serve_with(monkeypatch, config, phone=True)
+
+    out = capsys.readouterr().out
+    assert "http://192.168.1.42:8765" in out
+    # The firewall prompt is the most common reason a correct setup fails.
+    assert "firewall" in out.lower()
+
+
+def test_a_machine_that_cannot_name_its_address_says_so(monkeypatch, capsys):
+    from outreach import dashboard as dash
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(
+        config, secrets=replace(config.secrets, dashboard_password="hunter2")
+    )
+    monkeypatch.setattr(dash, "lan_address", lambda: "")
+
+    _serve_with(monkeypatch, config, phone=True)
+
+    out = capsys.readouterr().out
+    assert "ipconfig" in out
 
 
 def test_dashboard_never_shells_out_to_a_string_command():

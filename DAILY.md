@@ -87,16 +87,28 @@ be open. Add a line to your `.env`:
 
     DASHBOARD_PASSWORD=something-only-you-know
 
-`Dashboard.bat` sees it and turns phone access on by itself. Without it,
-nothing changes and the dashboard stays on your machine only.
+Then start `Dashboard.bat`. **The black window now tells you which state you
+are in.** Either:
+
+    On your phone, on the same wifi, open:
+        http://192.168.1.42:8765
+
+— with your actual address, no `ipconfig` needed. Or:
+
+    Phone access is OFF: no password is set.
+
+If you see the second one, the password line did not take. Check there is no
+space around the `=`.
+
+**When Windows asks about the firewall, tick Private networks and allow it.**
+The phone cannot connect otherwise, and this is the most common reason a
+correct setup still fails.
 
 **Then, on your phone:**
 
-1. On the PC, run `ipconfig` and find the IPv4 Address — something like
-   `192.168.1.42`.
-2. On the phone, on the **same wifi**, open `http://192.168.1.42:8765`.
-3. Enter the password.
-4. Share button → **Add to Home Screen**.
+1. Same wifi as the PC. Open the address the window printed.
+2. Enter the password.
+3. Share button → **Add to Home Screen**.
 
 It now has its own icon and opens full-screen with no Safari bar. Approving
 briefs and sending messages work exactly as they do on the desktop.

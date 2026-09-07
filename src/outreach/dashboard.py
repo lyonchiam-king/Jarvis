@@ -2109,10 +2109,34 @@ def create_app(config: Config) -> Flask:
 # The only address that needs no password: nothing but this machine can
 # reach it. Every other value puts the dashboard on a network.
 LOOPBACK = "127.0.0.1"
+# Every interface this machine has, which is what a phone on the same wifi
+# needs in order to reach it.
+ALL_INTERFACES = "0.0.0.0"
 
 
 class UnsafeBinding(Exception):
     """Refusing to put an unauthenticated dashboard on a network."""
+
+
+def lan_address() -> str:
+    """This machine's address on its own network, or "" if it cannot tell.
+
+    Printed so nobody has to run ipconfig and read the right line out of it.
+    Opening a UDP socket sends no traffic and needs nothing to be reachable;
+    it only asks the routing table which local address would be used, which
+    is the one a phone on the same wifi must type.
+    """
+    import socket
+
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("8.8.8.8", 80))
+            return probe.getsockname()[0]
+        finally:
+            probe.close()
+    except OSError:
+        return ""
 
 
 def serve(
@@ -2120,16 +2144,31 @@ def serve(
     *,
     port: int = 8765,
     open_browser: bool = True,
-    host: str = LOOPBACK,
+    host: str | None = None,
+    phone: bool = False,
 ):
+    """Run the dashboard.
+
+    ``phone=True`` means "serve to the network as well, if that is safe" --
+    it is not a promise to do so. Whether it is safe depends on a password
+    being set, and that answer lives here, where the config has already been
+    read. It used to live in Dashboard.bat as a findstr against .env, which
+    is a regex I could not test on Windows from here and which silently did
+    nothing when it was wrong: no flag, no phone access, and no clue why.
+    One decision, in the one place that has the information.
+    """
     config = load_config(config_path)
+    has_password = bool(config.secrets.dashboard_password)
+
+    if host is None:
+        host = ALL_INTERFACES if (phone and has_password) else LOOPBACK
 
     # The one hard rule. The dashboard spends money, messages real
     # businesses and reads the Sheet, and it has no other protection -- on a
     # cafe or hotel network, everyone in the building is on that network.
     # Binding wide open without a password is not a thing to warn about; it
     # is a thing to refuse.
-    if host != LOOPBACK and not config.secrets.dashboard_password:
+    if host != LOOPBACK and not has_password:
         raise UnsafeBinding(
             f"Refusing to serve on {host} with no password set.\n\n"
             "Anyone on the same network could open this dashboard, spend "
@@ -2143,11 +2182,25 @@ def serve(
     url = f"http://{LOOPBACK}:{port}"
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+
     print(f"\n  Dashboard running at {url}")
-    if host != LOOPBACK:
-        print(f"  On your phone, on the same wifi: http://<this-pc-ip>:{port}")
-        print("  It will ask for your dashboard password.")
-    print("  Close this window when you're done.\n")
+    if host == LOOPBACK:
+        if phone and not has_password:
+            # Asked for, and not given. Saying nothing here is how the last
+            # attempt failed silently.
+            print("\n  Phone access is OFF: no password is set.")
+            print("  Add this line to your .env file and start again:")
+            print("      DASHBOARD_PASSWORD=something-only-you-know")
+    else:
+        where = lan_address()
+        print("\n  On your phone, on the same wifi, open:")
+        print(f"      http://{where or '<this-pc-ip>'}:{port}")
+        if not where:
+            print("      (run  ipconfig  and use the IPv4 Address)")
+        print("  It asks for your dashboard password.")
+        print("\n  If Windows asks about the firewall, tick Private networks")
+        print("  and allow it -- the phone cannot connect otherwise.")
+    print("\n  Close this window when you're done.\n")
     app.run(host=host, port=port, debug=False)
 
 

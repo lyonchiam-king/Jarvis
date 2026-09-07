@@ -154,25 +154,16 @@ if "%ERRORLEVEL%"=="0" (
 )
 
 REM ------------------------------------------------------- phone access
-REM Serving to the wifi as well as this machine, so an iPhone can open it.
-REM Off unless DASHBOARD_PASSWORD is set: the page spends money and messages
-REM real businesses, and on a cafe or hotel network everyone in the building
-REM is on that network. The dashboard refuses the wide binding without one,
-REM so this only ever passes the flag when the password exists.
-REM Chained with && rather than nested ifs: inside a parenthesised block
-REM %ERRORLEVEL% is expanded when the block is PARSED, so it reads the value
-REM from before the block and the check silently tests the wrong thing --
-REM the same trap the setup subroutine at the top of this file avoids.
-REM The pattern needs one character after the = , so a key present but blank
-REM does not count as set.
-set "PHONE="
-findstr /b /r /c:"DASHBOARD_PASSWORD=..*" .env >nul 2>&1 && set "PHONE=--phone"
-if defined PHONE echo   Phone access: on. Find this PC's address with  ipconfig
-if defined PHONE echo   then open  http://THAT-ADDRESS:8765  on your phone
-if defined PHONE echo.
-
+REM --phone means "serve to the wifi as well, if that is safe". It is not a
+REM promise: the dashboard itself checks whether DASHBOARD_PASSWORD is set
+REM and stays on this machine when it is not, printing why.
+REM
+REM That decision used to be made here, with a findstr regex against .env --
+REM untestable from a machine without Windows, and when it was wrong it did
+REM nothing at all: no flag, no phone access, no clue. Batch asks for the
+REM feature; Python decides whether it is allowed.
 echo.
-"%APP%" dashboard %PHONE%
+"%APP%" dashboard --phone
 set "EXITCODE=%ERRORLEVEL%"
 
 REM Clean up the relay when the dashboard stops.
