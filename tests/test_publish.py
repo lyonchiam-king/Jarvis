@@ -261,3 +261,119 @@ class TestWhatGetsUploaded:
 
         with pytest.raises(CloudflareError, match="no index.html"):
             site_files(folder)
+
+
+# ------------------------------------------------- which deployment goes live
+
+
+class RecordingSession:
+    """Stands in for requests, remembering what was posted."""
+
+    def __init__(self, production_branch="main", environment="production"):
+        self.production_branch = production_branch
+        self.environment = environment
+        self.posted = {}
+
+    def get(self, url, **kwargs):
+        return FakeResponse({
+            "success": True,
+            "result": {"production_branch": self.production_branch},
+        })
+
+    def post(self, url, **kwargs):
+        self.posted = kwargs
+        return FakeResponse({
+            "success": True,
+            "result": {
+                "id": "dep-1",
+                "url": "https://dep-1.example.pages.dev",
+                "environment": self.environment,
+            },
+        })
+
+
+class FakeResponse:
+    status_code = 200
+    ok = True
+
+    def __init__(self, payload):
+        self._payload = payload
+        self.text = str(payload)
+
+    def json(self):
+        return self._payload
+
+
+def a_site(tmp_path):
+    page = tmp_path / "kedai" / "index.html"
+    page.parent.mkdir(parents=True)
+    page.write_text("<h1>Kedai</h1>")
+    return tmp_path
+
+
+def test_publishing_sends_the_projects_production_branch(tmp_path):
+    """Without a branch, Cloudflare files a direct upload as a *preview*.
+
+    The upload succeeds, the API returns a URL that works, and the address
+    everybody visits goes on serving the previous deployment -- so every
+    publish looked like it worked and the live site never changed.
+    """
+    from outreach.providers.cloudflare import CloudflareClient
+
+    session = RecordingSession(production_branch="main")
+    client = CloudflareClient(token="t", account_id="a", session=session)
+
+    deployment = client.publish("coai-sites", a_site(tmp_path))
+
+    sent = dict(session.posted["files"])
+    assert "branch" in sent, "no branch means a preview deployment"
+    assert sent["branch"][1] == "main"
+    assert deployment.is_production is True
+
+
+def test_the_branch_comes_from_the_project_not_a_guess(tmp_path):
+    """A project made from a git repo can use any production branch."""
+    from outreach.providers.cloudflare import CloudflareClient
+
+    session = RecordingSession(production_branch="live")
+    client = CloudflareClient(token="t", account_id="a", session=session)
+
+    client.publish("coai-sites", a_site(tmp_path))
+
+    assert dict(session.posted["files"])["branch"][1] == "live"
+
+
+def test_a_deployment_that_landed_as_a_preview_says_so(tmp_path):
+    """Reporting it as done would leave a stale site and a happy message."""
+    from outreach.providers.cloudflare import CloudflareClient
+
+    session = RecordingSession(environment="preview")
+    client = CloudflareClient(token="t", account_id="a", session=session)
+
+    assert client.publish("coai-sites", a_site(tmp_path)).is_production is False
+
+
+def test_a_preview_deployment_is_reported_as_an_error(tmp_path):
+    """Otherwise the Sheet records live URLs that show the old site.
+
+    The upload succeeded, so nothing else in the run looks wrong -- which is
+    exactly why it has to be said out loud.
+    """
+    from outreach.providers.cloudflare import Deployment
+
+    class PreviewClient:
+        def publish(self, project, folder):
+            return Deployment(
+                url="https://dep-2.example.pages.dev",
+                deployment_id="dep-2",
+                project=project,
+                branch="patch-1",
+                is_production=False,
+            )
+
+    make_site(tmp_path, "Salon A", "a")
+    report = publish.run(config(tmp_path), FakeSheets(*rows()), PreviewClient())
+
+    assert report.errors, "a preview deployment was reported as a clean publish"
+    assert "PREVIEW" in report.errors[0]
+    assert "patch-1" in report.errors[0]

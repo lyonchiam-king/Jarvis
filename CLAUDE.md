@@ -55,7 +55,7 @@ src/outreach/
   web/             the built React page -- generated, committed, never edited
 config/campaigns/  penang-my.yaml is the live campaign
 frontend/          React source for /app; `npm run build` writes src/outreach/web
-tests/             1245 tests, pytest, no CI -- the suite is the only gate
+tests/             1249 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -139,6 +139,18 @@ sites repo goes up in one deployment and each business keeps a stable path,
 `<base>/<slug>/`. Workers is the wrong tool here for the same reason it is
 the wrong shape: these are static pages with no logic to run, and routing
 them by hand would be work Pages does for nothing.
+
+**A direct upload with no branch is a preview, not the live site.**
+Cloudflare files a Pages deployment as *production* only when its branch
+matches the project's production branch, and `publish` sent no branch at all.
+So every publish succeeded, returned a working URL, and left
+`<project>.pages.dev` -- the address anyone actually visits, and the one
+written into every message -- serving the previous upload. Nothing looked
+wrong from this end. The branch is asked of the project now rather than
+guessed, because a project made from a git repo can use any name, and a
+deployment Cloudflare reports as a preview is recorded as an **error** on the
+run: the alternative is a clean report beside a stale site and a Sheet full
+of URLs showing the old pages.
 
 **A site can exist only at a URL.** Pages this pipeline generates sit on
 disk, but one built in Google AI Studio or Lovable exists only at its

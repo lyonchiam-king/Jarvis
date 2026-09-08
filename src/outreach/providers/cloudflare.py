@@ -26,6 +26,11 @@ log = logging.getLogger("outreach")
 
 API = "https://api.cloudflare.com/client/v4"
 
+# What Cloudflare calls a new project's production branch. Only a fallback:
+# the project is asked first, because a project made from a git repo can use
+# anything.
+DEFAULT_BRANCH = "main"
+
 # What a site is allowed to be made of. A publish should carry a page and
 # its pictures, not a repository's worth of source, licences and lockfiles.
 PUBLISHABLE = frozenset(
@@ -47,6 +52,11 @@ class Deployment:
     url: str
     deployment_id: str
     project: str
+    # Which branch it landed on, and whether that made it the live site.
+    # A publish that quietly became a preview is the difference between
+    # "done" and "nothing anyone visits has changed".
+    branch: str = ""
+    is_production: bool = True
 
 
 def site_files(folder: Path) -> list[Path]:
@@ -133,9 +143,36 @@ class CloudflareClient:
             if p.get("name")
         ]
 
-    def publish(self, project: str, folder: Path) -> Deployment:
-        """Upload a folder as a new deployment of ``project``."""
+    def production_branch(self, project: str) -> str:
+        """The branch Cloudflare treats as this project's live deployment.
+
+        Asked rather than assumed: a project created from a git repository
+        can have any production branch, and naming the wrong one produces a
+        preview -- which is the failure this exists to avoid.
+        """
+        data = self._get(f"/accounts/{self._account}/pages/projects/{project}")
+        result = data.get("result") or {}
+        return str(result.get("production_branch") or "") or DEFAULT_BRANCH
+
+    def publish(self, project: str, folder: Path, *, branch: str | None = None) -> Deployment:
+        """Upload a folder as the project's live deployment.
+
+        The ``branch`` is what makes it live. Cloudflare treats a direct
+        upload whose branch is not the project's production branch as a
+        *preview*: it gets its own URL, the upload succeeds, the API returns
+        a URL that works -- and the address everybody actually visits,
+        ``<project>.pages.dev``, goes on serving the previous deployment.
+        Sending no branch at all was exactly that, so every publish looked
+        like it worked and nothing on the live site ever changed.
+        """
         files = site_files(Path(folder))
+        if branch is None:
+            try:
+                branch = self.production_branch(project)
+            except CloudflareError:
+                # A token without project-read permission can still deploy.
+                # Guessing the common default beats refusing to publish.
+                branch = DEFAULT_BRANCH
         parts = []
         opened = []
         try:
@@ -148,6 +185,8 @@ class CloudflareClient:
                 opened.append(handle)
                 mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
                 parts.append(("file", (rel, handle, mime)))
+
+            parts.append(("branch", (None, branch)))
 
             resp = self._session.post(
                 f"{API}/accounts/{self._account}/pages/projects/{project}/deployments",
@@ -168,7 +207,15 @@ class CloudflareClient:
                 f"{project}. Raw reply: {str(data)[:300]}"
             )
         return Deployment(
-            url=url, deployment_id=str(result.get("id") or ""), project=project
+            url=url,
+            deployment_id=str(result.get("id") or ""),
+            project=project,
+            # What Cloudflare says it did, not what was asked for. A
+            # deployment reported as preview means the live address did not
+            # change, and saying so beats a success message and a stale site.
+            branch=str(result.get("deployment_trigger", {})
+                       .get("metadata", {}).get("branch") or branch),
+            is_production=str(result.get("environment") or "production") == "production",
         )
 
     # ---------------------------------------------------------------- http

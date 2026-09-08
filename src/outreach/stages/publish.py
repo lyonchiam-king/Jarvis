@@ -165,6 +165,19 @@ def run(config, sheets, client=None, *, limit: int = 0) -> PublishReport:
         log.warning("Publish failed: %s", exc)
         return report
 
+    # A preview deployment succeeds, returns a working URL, and leaves the
+    # address everyone visits serving the previous upload. Recording the
+    # per-business live URLs after that would write addresses that show the
+    # old site -- so it is reported as an error rather than passed over.
+    if not deployment.is_production:
+        report.errors.append(
+            f"Cloudflare filed this as a PREVIEW deployment on branch "
+            f"{deployment.branch!r}, so {project}'s live address still shows "
+            f"the previous upload. The new one is at {deployment.url}. Check "
+            f"the project's production branch in the Cloudflare dashboard."
+        )
+        log.warning("Published to a preview, not the live site: %s", deployment.url)
+
     published = {
         lead_id: public_url(config, folder_name)
         for lead_id, folder_name in waiting.items()
