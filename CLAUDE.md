@@ -55,7 +55,7 @@ src/outreach/
   web/             the built React page -- generated, committed, never edited
 config/campaigns/  penang-my.yaml is the live campaign
 frontend/          React source for /app; `npm run build` writes src/outreach/web
-tests/             1221 tests, pytest, no CI -- the suite is the only gate
+tests/             1228 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -534,6 +534,17 @@ binding from a password it has already read. The launcher has no logic left.
 Anything that must be right on Windows and cannot be run here belongs on the
 Python side of that line.
 
+**Four failures that look identical from a phone need four sentences.**
+No password, a dashboard not running, one running without phone access, and
+a firewall blocking the port all present as the same thing: a Safari tab that
+spins. "Still not working" is the only report a person can make about that,
+and it is not their fault. `outreach phone-check` asks each separately and
+names the one that failed -- with the `netsh` line to paste for the firewall,
+which is the usual answer, because that request never reaches Python and so
+leaves nothing in any log. `Phone-Check.bat` is the double-click. The
+running-but-not-reachable case is the cruellest: everything on the desk works
+and only the phone fails.
+
 **A refusal has to be audible.** The same failure was silent twice over: the
 launcher's check failed quietly, and the dashboard then started normally
 because nothing had asked it for anything. It now always says which state it
@@ -695,8 +706,11 @@ ends -- so it goes on deliberately, not as a side effect of a `git pull`.
 
 Say so rather than implying otherwise:
 
-- The Windows launchers (`Dashboard.bat`, `run.bat`, `Schedule-Daily.ps1`) have
-  never been executed on Windows here.
+- The Windows launchers (`Dashboard.bat`, `run.bat`, `Schedule-Daily.ps1`,
+  `Phone-Check.bat`) have never been executed on Windows here, and neither
+  has the `netsh` firewall query behind `phone-check` -- its branches are
+  driven by tests with the platform faked, which proves the wiring and not
+  the command.
 - The React page at `/app` renders under headless Chromium here
   (`scripts/verify/render-check.mjs`), which covers the first paint, console
   errors, failed requests and the phone-width layout. It has never run in

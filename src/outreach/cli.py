@@ -924,6 +924,116 @@ def cloudflare_check(ctx: click.Context, folder: str) -> None:
         )
 
 
+@main.command("phone-check")
+@click.option("--port", default=8765, help="The port the dashboard serves on.")
+@click.pass_context
+def phone_check(ctx: click.Context, port: int) -> None:
+    """Answer "why can't my phone reach the dashboard" in one command.
+
+    Every part of this was reported as "still not working", which is the only
+    thing a person can say when four different failures look identical from a
+    phone: a spinning Safari tab. So each part is asked separately and named.
+
+    Run it with the dashboard already running in its own window -- that is the
+    state being diagnosed.
+    """
+    import socket
+
+    from pathlib import Path
+
+    from .dashboard import lan_address
+    from .env_edit import is_set
+
+    def say(ok: bool | None, line: str) -> None:
+        click.echo(f"  {'OK  ' if ok else '--  ' if ok is None else 'NO  '}{line}")
+
+    click.echo("\nPhone access check\n")
+
+    # 1. The password, without which serve() refuses to leave this machine.
+    #    Presence only: no key is ever echoed to a page, a log or a report.
+    has_password = is_set(Path(".env"), "DASHBOARD_PASSWORD")
+    say(has_password, "A dashboard password is set" if has_password else "No dashboard password")
+    if not has_password:
+        click.echo("\n      Phone access is refused without one, because anyone on the")
+        click.echo("      same wifi could then spend your credits and message businesses.")
+        click.echo("      Add this line to .env and start the dashboard again:")
+        click.echo("\n          DASHBOARD_PASSWORD=something-only-you-know\n")
+        return
+
+    # 2. The address a phone must type.
+    where = lan_address()
+    say(bool(where), f"This PC is {where} on its network" if where
+        else "Could not work out this PC's network address")
+    if not where:
+        click.echo("\n      Run  ipconfig  and use the IPv4 Address.\n")
+        return
+
+    # 3. Is anything actually listening? Distinguishes "dashboard not running"
+    #    from "running but unreachable", which look the same from a phone.
+    def reachable(host: str) -> bool:
+        try:
+            with socket.create_connection((host, port), timeout=3):
+                return True
+        except OSError:
+            return False
+
+    on_loopback = reachable("127.0.0.1")
+    say(on_loopback, f"The dashboard is running on this PC (port {port})")
+    if not on_loopback:
+        click.echo("\n      Start it first: run Dashboard.bat, leave that window open,")
+        click.echo("      then run this check again.\n")
+        return
+
+    # 4. Reachable on the network address, not just loopback. This is the one
+    #    the phone uses, and a dashboard started without --phone answers the
+    #    first and not this one.
+    on_lan = reachable(where)
+    say(on_lan, f"It is listening on {where}, not only on this PC")
+    if not on_lan:
+        click.echo("\n      The dashboard is running but only for this machine.")
+        click.echo("      Close it and start it with Dashboard.bat, which asks for")
+        click.echo("      phone access. Starting it any other way does not.\n")
+        return
+
+    # 5. The firewall. Windows blocks the port inbound by default, and the
+    #    result on the phone is a tab that spins and times out -- identical to
+    #    a wrong address, which is why this is asked rather than guessed at.
+    if sys.platform == "win32":
+        import subprocess
+
+        rule = "SME Outreach dashboard"
+        found = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "show", "rule", f"name={rule}"],
+            capture_output=True, text=True,
+        )
+        allowed = found.returncode == 0 and "No rules match" not in found.stdout
+        say(allowed, f"Windows Firewall allows port {port}" if allowed
+            else f"No firewall rule for port {port}")
+        if not allowed:
+            click.echo("\n      This is the usual reason a correct setup still fails: the")
+            click.echo("      phone's request never reaches Python, so nothing is logged")
+            click.echo("      and the phone just spins.")
+            click.echo("\n      If Windows asked about the firewall when the dashboard")
+            click.echo("      started, tick Private networks and allow it.")
+            click.echo("\n      Otherwise open PowerShell as Administrator -- right-click")
+            click.echo("      Start, 'Terminal (Admin)' -- and paste this one line:")
+            click.echo(
+                f'\n          netsh advfirewall firewall add rule name="{rule}" '
+                f'dir=in action=allow protocol=TCP localport={port}\n'
+            )
+            return
+    else:
+        say(None, "Not Windows, so no firewall rule to check")
+
+    click.echo(f"\n  Everything this machine can check is fine.")
+    click.echo(f"  On your phone, on the same wifi, open:\n")
+    click.echo(f"      http://{where}:{port}/app\n")
+    click.echo("  If that still does not load, the wifi itself is separating")
+    click.echo("  devices -- common on guest networks, and on some routers the")
+    click.echo("  2.4GHz and 5GHz bands are isolated from each other. Check the")
+    click.echo("  phone is on the same network name as this PC.\n")
+
+
 @main.command("shot-check")
 @click.argument("source", required=False, default="")
 @click.pass_context

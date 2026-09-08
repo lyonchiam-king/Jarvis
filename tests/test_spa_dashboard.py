@@ -437,3 +437,111 @@ def test_the_link_to_the_new_page_is_a_button_not_a_footnote(client):
     page = client.get("/").get_data(as_text=True)
     link = page[page.index('href="/app"'):][:400]
     assert "background" in link, "the link to the new dashboard is not styled as a button"
+
+
+# ------------------------------------------------------- phone access check
+
+
+def run_phone_check(monkeypatch, *, password=True, lan="192.168.1.50",
+                    open_ports=(), platform="win32", firewall_rule=True):
+    """Drive `outreach phone-check` with the machine's answers faked.
+
+    Every branch is a different real failure that looks the same from a
+    phone, so each one is exercised rather than assumed.
+    """
+    import socket
+    import subprocess
+
+    from click.testing import CliRunner
+
+    import outreach.cli as cli_mod
+    import outreach.dashboard as dash_mod
+    import outreach.env_edit as env_edit_mod
+
+    monkeypatch.setattr(env_edit_mod, "is_set", lambda path, key: password)
+    monkeypatch.setattr(dash_mod, "lan_address", lambda: lan)
+    monkeypatch.setattr(cli_mod.sys, "platform", platform)
+
+    def fake_connect(address, timeout=None):
+        if address[0] not in open_ports:
+            raise OSError("refused")
+
+        class Socket:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        return Socket()
+
+    monkeypatch.setattr(socket, "create_connection", fake_connect)
+
+    class Completed:
+        returncode = 0 if firewall_rule else 1
+        stdout = "Rule Name: SME Outreach dashboard" if firewall_rule else "No rules match"
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Completed())
+
+    return CliRunner().invoke(cli_mod.main, ["phone-check"]).output
+
+
+def test_phone_check_names_a_missing_password_and_the_line_that_fixes_it(monkeypatch):
+    out = run_phone_check(monkeypatch, password=False)
+    assert "No dashboard password" in out
+    assert "DASHBOARD_PASSWORD=" in out
+
+
+def test_phone_check_never_prints_the_password(monkeypatch):
+    """Secrets are write-only, and a diagnostic is still a report."""
+    out = run_phone_check(monkeypatch, password=True, open_ports=("127.0.0.1", "192.168.1.50"))
+    assert "hunter2" not in out
+    # `is_set` reports presence; nothing here has access to the value at all.
+    assert "DASHBOARD_PASSWORD=" not in out.split("A dashboard password is set")[1]
+
+
+def test_phone_check_says_when_the_dashboard_is_not_running(monkeypatch):
+    out = run_phone_check(monkeypatch, open_ports=())
+    assert "Start it first" in out
+    assert "Dashboard.bat" in out
+
+
+def test_phone_check_separates_running_from_reachable(monkeypatch):
+    """The failure that looks most like success.
+
+    Started without phone access the dashboard answers on this PC and
+    nowhere else -- so everything on the desk works and the phone times out.
+    """
+    out = run_phone_check(monkeypatch, open_ports=("127.0.0.1",))
+    assert "only for this machine" in out
+    assert "192.168.1.50" in out
+
+
+def test_phone_check_gives_the_firewall_command_when_the_rule_is_missing(monkeypatch):
+    """The usual reason a correct setup still fails.
+
+    The request never reaches Python, so nothing is logged and the phone
+    just spins -- indistinguishable from a wrong address.
+    """
+    out = run_phone_check(
+        monkeypatch, open_ports=("127.0.0.1", "192.168.1.50"), firewall_rule=False,
+    )
+    assert "netsh advfirewall firewall add rule" in out
+    assert "localport=8765" in out
+    assert "Administrator" in out
+
+
+def test_phone_check_ends_on_the_address_to_type(monkeypatch):
+    out = run_phone_check(
+        monkeypatch, open_ports=("127.0.0.1", "192.168.1.50"), firewall_rule=True,
+    )
+    assert "http://192.168.1.50:8765/app" in out
+    # The last thing it can be, once the machine is ruled out.
+    assert "separating" in out
+
+
+def test_phone_check_does_not_ask_windows_questions_elsewhere(monkeypatch):
+    out = run_phone_check(
+        monkeypatch, open_ports=("127.0.0.1", "192.168.1.50"), platform="linux",
+    )
+    assert "no firewall rule to check" in out
