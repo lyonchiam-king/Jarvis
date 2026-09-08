@@ -8,9 +8,15 @@ pitch: nothing is sent to a business until their site exists.
 programmer, and drives the tool through `Dashboard.bat` -- not the CLI. Anything
 that only works on Linux, or only works from a terminal, is not finished.
 
-**Stack:** Python 3.11+, few dependencies. The dashboard is a single Flask file
-serving one page of hand-written HTML/JS -- no templates on disk, no frontend
-build step, no npm. Google Sheets is the database.
+**Stack:** Python 3.11+, few dependencies. Google Sheets is the database.
+
+The dashboard is a single Flask file serving **two** front ends. `/` is the
+original page: one Python string of hand-written HTML/JS, no build step, and
+still the one Lyon uses. `/app` is a React page built from `frontend/` --
+TypeScript, Tailwind, Vite -- whose output is committed to
+`src/outreach/web/` so that a Windows checkout with Python alone can serve
+it. **Lyon never runs npm.** The build runs here; if `frontend/` changes and
+`src/outreach/web/` does not, the page he loads is the old one.
 
 ## Commands
 
@@ -19,6 +25,8 @@ build step, no npm. Google Sheets is the database.
 .venv/bin/pytest tests/test_research.py -q
 python -m outreach run discovery --limit 10
 python -m outreach dashboard
+
+cd frontend && npm install && npm run build   # only after editing frontend/
 ```
 
 On Windows the equivalents are `run.bat` and `Dashboard.bat`.
@@ -44,8 +52,10 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
+  web/             the built React page -- generated, committed, never edited
 config/campaigns/  penang-my.yaml is the live campaign
-tests/             1193 tests, pytest, no CI -- the suite is the only gate
+frontend/          React source for /app; `npm run build` writes src/outreach/web
+tests/             1214 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -542,6 +552,43 @@ assertion forbids and otherwise matches the prose.
 **Secrets are write-only.** `env_edit.set_key` writes; `is_set` reports presence
 and never the value. No key is ever echoed to a page, a log, or a report.
 
+**A typecheck with no types is a green light wired to nothing.** The React
+front end arrived from Google AI Studio with `@types/react` missing and
+`strict` off, so every component was `any` -- `tsc --noEmit` exited 0 over a
+view reading three fields that did not exist on its own type, and over a
+`saveModel({model_key})` the server has never accepted. It was cited as proof
+the wiring was right. The types are installed and `strict` is on; `npm run
+build` runs `tsc` first so a build cannot ship what the checker rejects. This
+is the same failure as the 646 green tests beside a dead dashboard: ask what
+the check would have caught.
+
+**TypeScript cannot see Python.** It proves a view calls a method the client
+has; nothing proves that method names a URL Flask answers. A path typed one
+character wrong compiles, builds, ships, and 404s to a page that shows an
+empty queue and calls it "nothing to do".
+`test_every_endpoint_the_page_calls_is_a_route_the_app_serves` reads the
+endpoint strings out of `client.ts` and checks each against the real URL map,
+and `test_the_built_page_asks_for_assets_the_app_can_serve` follows the asset
+URLs in the built HTML -- Vite's default base is `/`, which the dashboard does
+not serve, and the symptom is a blank white page with nothing in the Python
+log.
+
+**The new page translates; it does not invent.** `client.ts` is the only place
+that knows Flask answers `name` where a view wants `business_name`, or
+`dialled` where it wants `e164_phone`. Where Jarvis genuinely does not know
+something the field is left empty. The generated page shipped a hardcoded
+`+1 (504) 555-0199` as the "connected" WhatsApp number, a claim that keys were
+"encrypted on the backend" when they are plain text in `.env`, and a promise
+that a failed send would be "copied to clipboard" -- three sentences that read
+as facts and were not. A dashboard that spends money and messages real
+businesses is the worst place for a convincing guess.
+
+**`/app` is additive, and `/` does not move.** The React page is new, has never
+run on Lyon's machine, and replacing the working dashboard with it would make
+a bad first render into a lost morning. Both pages get their own
+`start_url` manifest so each has its own home-screen icon; the old one stays
+the default until he says otherwise.
+
 ## Conventions
 
 - Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`, `chore:`)
@@ -596,5 +643,8 @@ Say so rather than implying otherwise:
 
 - The Windows launchers (`Dashboard.bat`, `run.bat`, `Schedule-Daily.ps1`) have
   never been executed on Windows here.
+- The React page at `/app` has never been rendered in a browser from this
+  container -- it typechecks, builds, and its routes and assets are served in
+  tests, but no test proves what it looks like or that a click works.
 - The Ollama / OpenRouter transports have never reached a real endpoint --
   outbound egress is blocked. `modelcheck` is how Lyon verifies them himself.

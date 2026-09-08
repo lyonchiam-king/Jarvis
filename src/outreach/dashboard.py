@@ -28,8 +28,10 @@ from flask import (
     redirect,
     render_template_string,
     request,
+    send_from_directory,
     session,
 )
+from werkzeug.exceptions import NotFound
 
 from . import schema
 from .config import Config, load_config
@@ -772,11 +774,21 @@ def create_app(config: Config) -> Flask:
         gets the whole screen with no address bar, which is the difference
         between an app and a bookmark.
         """
-        return jsonify({
-            "name": "SME Outreach",
-            "short_name": "Outreach",
-            "start_url": "/",
-            "scope": "/",
+        return jsonify(_manifest("SME Outreach", "Outreach", "/"))
+
+    def _manifest(name: str, short: str, start: str) -> dict:
+        """One manifest shape, two pages.
+
+        The start_url is what the icon opens, so each page needs its own --
+        a shared manifest would send both home-screen icons to whichever
+        address it happened to name, and the second icon would be a
+        duplicate of the first.
+        """
+        return {
+            "name": name,
+            "short_name": short,
+            "start_url": start,
+            "scope": start,
             "display": "standalone",
             "background_color": "#f6f5f2",
             "theme_color": "#f6f5f2",
@@ -784,7 +796,7 @@ def create_app(config: Config) -> Flask:
                 {"src": "/icon.png", "sizes": "512x512", "type": "image/png",
                  "purpose": "any maskable"},
             ],
-        })
+        }
 
     @app.route("/icon.png")
     def icon():
@@ -833,6 +845,57 @@ def create_app(config: Config) -> Flask:
 
         return render_template_string(GUIDE_PAGE, body=guide_html())
 
+    # ------------------------------------------------------- the newer page
+    #
+    # A second front end, built from React sources in `frontend/` and served
+    # from disk as plain static files. It lives at /app rather than / so the
+    # hand-written page stays exactly where it is: this one is new, nothing
+    # about it is proven on Lyon's machine yet, and a dashboard that spends
+    # money is not the place to find out by replacing the working one.
+    #
+    # Same origin on purpose. Served from anywhere else it would need CORS,
+    # a public address and a second way to sign in; served from here the
+    # login cookie, the API and the page are one thing, and `Dashboard.bat`
+    # needs no new steps.
+    WEB_ROOT = Path(__file__).parent / "web"
+
+    @app.route("/app")
+    @app.route("/app/")
+    def spa_index():
+        index = WEB_ROOT / "index.html"
+        if not index.exists():
+            # Said plainly, because the only way this happens is a checkout
+            # without the built files, and "404" would send someone hunting
+            # for a route that is present.
+            return (
+                "The new dashboard was not built into this copy. "
+                "The old one is still at /.",
+                404,
+            )
+        return send_from_directory(WEB_ROOT, "index.html")
+
+    @app.route("/app/manifest.webmanifest")
+    def spa_manifest():
+        return jsonify(_manifest("SME Outreach", "Outreach", "/app/"))
+
+    @app.route("/app/<path:asset>")
+    def spa_asset(asset: str):
+        """Serve one built file, and nothing outside the build directory.
+
+        `send_from_directory` resolves the path and refuses anything that
+        escapes the root, so a crafted `../../.env` gets a 404 rather than a
+        secret. That guarantee is the reason this does not join paths itself.
+        """
+        try:
+            return send_from_directory(WEB_ROOT, asset)
+        except NotFound:
+            # A single-page app owns its own routing: /app/leads is a screen,
+            # not a file. Anything that is not a real file and does not look
+            # like one gets the page, which then reads the address itself.
+            if "." in Path(asset).name:
+                raise
+            return spa_index()
+
     @app.route("/api/campaign")
     def api_campaign():
         c = current()
@@ -843,6 +906,10 @@ def create_app(config: Config) -> Flask:
                 "areas": list(c.campaign.areas),
                 "sender_name": c.outreach.sender_name,
                 "batch_size": c.batch_size,
+                # Where the compliance footer says the message is sent from.
+                # Shown, not edited here: it is a legal setting, and every
+                # lead's own country is read off its number anyway.
+                "country_code": c.compliance.country_code,
                 "file": str(c.source_path),
             }
         )
@@ -884,6 +951,9 @@ def create_app(config: Config) -> Flask:
                 "key_env": env_name,
                 "key_needed": c.research.provider != "ollama",
                 "key_set": bool(env_name) and is_set(Path(".env"), env_name),
+                # Presence only, never the value -- same rule as every other
+                # key on this page.
+                "places_key_set": bool(c.secrets.places_api_key),
                 "guaranteed": c.research.provider == "anthropic",
             }
         )
@@ -915,6 +985,10 @@ def create_app(config: Config) -> Flask:
             outreach_model = outreach_model.strip()
         base_url = payload.get("base_url")
         api_key = payload.get("api_key") or ""
+        # The Places key rides along on the same save, because the setup
+        # checklist asks for both keys on one screen and two save buttons for
+        # one action is how a half-configured install happens.
+        places_key = (payload.get("places_key") or "").strip()
 
         if provider is not None and provider not in PROVIDER_DEFAULTS:
             return jsonify({"error": f"Unknown provider {provider!r}"}), 400
@@ -928,6 +1002,13 @@ def create_app(config: Config) -> Flask:
             try:
                 set_key(Path(".env"), env_name, api_key.strip())
                 os.environ[env_name] = api_key.strip()
+            except EnvEditError as exc:
+                return jsonify({"error": str(exc)}), 200
+
+        if places_key:
+            try:
+                set_key(Path(".env"), "PLACES_API_KEY", places_key)
+                os.environ["PLACES_API_KEY"] = places_key
             except EnvEditError as exc:
                 return jsonify({"error": str(exc)}), 200
 
@@ -1458,8 +1539,13 @@ def create_app(config: Config) -> Flask:
         try:
             from .providers.whatsapp import WhatsAppClient
 
-            client = WhatsAppClient(port=c.outreach.whatsapp_relay_port)
-            return jsonify({"enabled": True, **client.get_status()})
+            port = c.outreach.whatsapp_relay_port
+            client = WhatsAppClient(port=port)
+            return jsonify({
+                "enabled": True,
+                "relay_url": f"http://127.0.0.1:{port}",
+                **client.get_status(),
+            })
         except Exception as exc:  # noqa: BLE001
             return jsonify({"enabled": True, "connected": False, "error": str(exc)})
 
@@ -1636,6 +1722,172 @@ def create_app(config: Config) -> Flask:
         if path is None:
             return jsonify({"error": "No screenshot for this lead yet"}), 404
         return send_file(path.resolve(), mimetype="image/png")
+
+    @app.route("/api/leads")
+    def api_leads():
+        """The Leads tab, as rows the page can render.
+
+        The old page never needed this -- it worked queue by queue, and a
+        lead only appeared when some stage was ready to act on it. A table
+        view needs the whole sheet, so this is a plain read with the column
+        names mapped to the field names the page uses. Nothing is computed
+        here: what the Sheet says is what is shown, which is the only way a
+        table and the Sheet can be trusted to agree.
+        """
+        c = current()
+        if not c.secrets.sheet_id:
+            return jsonify({"leads": []})
+        try:
+            rows = _sheets_client(c).read_rows(schema.LEADS)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+
+        def number(raw: str) -> float | int:
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                return 0
+            return int(value) if value.is_integer() else value
+
+        leads = [
+            {
+                "place_id": lead_id,
+                "stage": row.get("Stage", ""),
+                "business_name": row.get("Business Name", ""),
+                "category": row.get("Category", ""),
+                "address": row.get("Address", ""),
+                "phone": row.get("Phone", ""),
+                "rating": number(row.get("Rating", "")),
+                "review_count": number(row.get("Review Count", "")),
+                "website_status": row.get("Website Status", "") or "none",
+                "website_url": row.get("Website URL", ""),
+                "maps_url": row.get("Maps URL", ""),
+                "campaign": row.get("Campaign", ""),
+                "country": row.get("Country", ""),
+                "discovered_at": row.get("Discovered At", ""),
+                "last_refreshed": row.get("Last Refreshed", ""),
+                "priority": row.get("Priority", ""),
+                "owner_notes": row.get("Owner Notes", ""),
+                "next_action": row.get("Next Action", ""),
+                "whatsapp_reachable": row.get("WhatsApp Reachable", "") or "unknown",
+                "whatsapp_checked_at": row.get("WhatsApp Checked At", ""),
+            }
+            for lead_id, (_n, row) in rows.items()
+        ]
+        return jsonify({"leads": leads})
+
+    @app.route("/api/lead-note", methods=["POST"])
+    def api_lead_note():
+        """Write your own note against one lead.
+
+        Owner Notes is a manual column, so no stage may touch it. This is
+        the exception the rule names: you pressed save on a row you are
+        looking at, which is exactly what `user_edit` is for.
+        """
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+        note = str(payload.get("note") or "")
+
+        try:
+            written = _sheets_client(current()).update_column(
+                schema.LEADS, "Owner Notes", {lead_id: note}, user_edit=True
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+        if not written:
+            return jsonify({"error": f"No Leads row for {lead_id}"}), 200
+        return jsonify({"ok": True})
+
+    @app.route("/api/test-key", methods=["POST"])
+    def api_test_key():
+        """Ask the service itself whether a key works.
+
+        A key that is merely *present* proves nothing -- the pipeline has
+        failed on a pasted-with-quotes key, a key for the wrong project, and
+        a key whose API was never enabled, and each of those only showed up
+        as a failed run twenty leads later. So this spends one real request
+        and reports what came back.
+
+        The key under test is taken from the request when one is supplied,
+        so it can be checked *before* being saved, and is never echoed back
+        -- only the verdict is.
+        """
+        payload = request.json or {}
+        kind = (payload.get("type") or "").strip().casefold()
+        given = (payload.get("key") or "").strip()
+        c = current()
+
+        if kind == "places":
+            key = given or c.secrets.places_api_key
+            if not key:
+                return jsonify({"valid": False, "message": "No Places key to test."})
+            from .providers.places import PlacesClient, PlacesError
+
+            try:
+                # One page, one result: the smallest question that still
+                # proves the key, the project and the enabled API.
+                client = PlacesClient(api_key=key)
+                next(iter(client.search_text("cafe", page_size=1, max_pages=1)), None)
+            except PlacesError as exc:
+                return jsonify({"valid": False, "message": str(exc)})
+            except Exception as exc:  # noqa: BLE001
+                return jsonify({"valid": False, "message": f"{type(exc).__name__}: {exc}"})
+            return jsonify({"valid": True, "message": "Places answered. The key works."})
+
+        if kind == "model":
+            from .config import PROVIDER_DEFAULTS, PROVIDER_KEY_ENV
+            from .providers.llm import (
+                BriefWriter,
+                LLMError,
+                OpenAICompatibleWriter,
+                build_areas_prompt,
+            )
+
+            provider = (payload.get("provider") or c.research.provider).strip()
+            if provider not in PROVIDER_DEFAULTS:
+                return jsonify({"valid": False, "message": f"Unknown provider {provider!r}."})
+            model = (payload.get("model") or c.research.model).strip()
+
+            # Built here rather than through `make_writer` so a key can be
+            # tested before it is saved -- which is the whole point of a test
+            # button. It follows make_writer's shape exactly; if that gains a
+            # provider this must too.
+            try:
+                if provider == "anthropic":
+                    writer = BriefWriter(
+                        given or c.secrets.anthropic_api_key,
+                        model=model,
+                        effort=c.research.effort,
+                    )
+                else:
+                    key = given or c.secrets.llm_api_key
+                    if provider != "ollama" and not key:
+                        return jsonify({
+                            "valid": False,
+                            "message": f"{PROVIDER_KEY_ENV.get(provider, 'The API key')} "
+                                       f"is not set, and none was given to test.",
+                        })
+                    writer = OpenAICompatibleWriter(
+                        key,
+                        base_url=c.research.base_url or PROVIDER_DEFAULTS[provider],
+                        model=model,
+                    )
+                # A real round trip that also proves the model can return the
+                # JSON shape the pipeline needs. A key that authenticates but
+                # whose model cannot produce a schema is not a working setup.
+                writer.suggest_areas(build_areas_prompt("Penang, Malaysia", 3))
+            except LLMError as exc:
+                return jsonify({"valid": False, "message": str(exc)})
+            except Exception as exc:  # noqa: BLE001
+                return jsonify({"valid": False, "message": f"{type(exc).__name__}: {exc}"})
+            return jsonify({
+                "valid": True,
+                "message": f"{model} answered, in the right shape.",
+            })
+
+        return jsonify({"error": "type must be 'places' or 'model'"}), 400
 
     @app.route("/api/create-sheet", methods=["POST"])
     def api_create_sheet():
@@ -2490,7 +2742,10 @@ PAGE = """<!doctype html>
   </header>
   <div class="row" style="justify-content:space-between;align-items:baseline">
     <div class="sub" id="totals">Loading&hellip;</div>
-    <a class="sub" href="/guide" target="_blank" rel="noopener"><b>Handbook &rsaquo;</b></a>
+    <div class="row" style="gap:14px">
+      <a class="sub" href="/app"><b>Try the new look &rsaquo;</b></a>
+      <a class="sub" href="/guide" target="_blank" rel="noopener"><b>Handbook &rsaquo;</b></a>
+    </div>
   </div>
   <h2>What you're hunting</h2>
   <div class="card" id="target">Loading&hellip;</div>

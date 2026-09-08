@@ -37,3 +37,8 @@ node_modules/
 
 # Relay output, so a crash leaves a trace the window would have taken with it.
 relay-log.txt
+
+# The React front end's dependencies. Restored with `npm install` in
+# frontend/, and only ever needed on a machine that rebuilds the page --
+# never on Lyon's, which serves the committed build in src/outreach/web/.
+frontend/node_modules/
