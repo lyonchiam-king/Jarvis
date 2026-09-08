@@ -1025,12 +1025,21 @@ def phone_check(ctx: click.Context, port: int) -> None:
     else:
         say(None, "Not Windows, so no firewall rule to check")
 
-    click.echo(f"\n  Everything this machine can check is fine.")
-    click.echo(f"  On your phone, on the same wifi, open:\n")
+    click.echo("\n  Everything this machine can check is fine.")
+    click.echo("  On your phone, on the same wifi, open:\n")
     click.echo(f"      http://{where}:{port}/app\n")
-    click.echo("  If that still does not load, the wifi itself is separating")
-    click.echo("  devices -- common on guest networks, and on some routers the")
-    click.echo("  2.4GHz and 5GHz bands are isolated from each other. Check the")
+    # Typed without a scheme, Safari and Chrome now try https first. This
+    # dashboard speaks plain http and has no certificate, so the phone shows
+    # a security warning -- which reads as "blocked" rather than "wrong
+    # address", and is the one failure that means everything else worked.
+    click.echo("  Type it with  http://  at the front. Left off, phones try")
+    click.echo("  https first and show \"connection is not private\" -- that")
+    click.echo("  warning means the phone REACHED this PC, so everything else")
+    click.echo("  is already working. There is no certificate here and nothing")
+    click.echo("  to fix; the address just has to start with http.")
+    click.echo("\n  If it still does not load at all, the wifi itself is")
+    click.echo("  separating devices -- common on guest networks, and on some")
+    click.echo("  routers the 2.4GHz and 5GHz bands are isolated. Check the")
     click.echo("  phone is on the same network name as this PC.\n")
 
 

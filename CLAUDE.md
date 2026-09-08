@@ -545,6 +545,15 @@ leaves nothing in any log. `Phone-Check.bat` is the double-click. The
 running-but-not-reachable case is the cruellest: everything on the desk works
 and only the phone fails.
 
+**A certificate warning on a plain-http page means it worked.** Phones try
+https first for an address typed without a scheme, so the dashboard -- which
+has no certificate and needs none on a home network -- answers with "your
+connection is not private". That reads as blocked, and it is the one failure
+that proves the firewall, the binding and the wifi are all already fine. Both
+the startup banner and `phone-check` say to type `http://` and say what the
+warning means, because the alternative is a person concluding the tool is
+broken at the exact moment it started working.
+
 **A refusal has to be audible.** The same failure was silent twice over: the
 launcher's check failed quietly, and the dashboard then started normally
 because nothing had asked it for anything. It now always says which state it

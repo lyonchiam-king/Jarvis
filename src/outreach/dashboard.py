@@ -2487,6 +2487,8 @@ def serve(
         print(f"      http://{host_part}:{port}/app")
         if not where:
             print("      (run  ipconfig  and use the IPv4 Address)")
+        print("  Type http:// at the front -- without it phones try https,")
+        print("  and show a security warning for a page that is fine.")
         print("  It asks for your dashboard password, then shows the new")
         print("  dashboard. Share -> Add to Home Screen makes it an app.")
         print(f"\n  The older page is at  http://{host_part}:{port}/")

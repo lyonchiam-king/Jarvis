@@ -157,6 +157,7 @@ def test_the_phone_instructions_name_the_new_page(capsys, monkeypatch):
     printed = capsys.readouterr().out
     assert "http://192.168.1.50:8765/app" in printed
     assert "Add to Home Screen" in printed
+    assert "https" in printed, "the startup banner does not warn about the scheme"
 
 
 # --------------------------------------------------- endpoints for the page
@@ -536,6 +537,11 @@ def test_phone_check_ends_on_the_address_to_type(monkeypatch):
         monkeypatch, open_ports=("127.0.0.1", "192.168.1.50"), firewall_rule=True,
     )
     assert "http://192.168.1.50:8765/app" in out
+    # The one failure that means everything else worked: phones try https
+    # for an address typed without a scheme, and the certificate warning
+    # reads as "blocked" rather than "wrong address".
+    assert "not private" in out
+    assert "http://" in out
     # The last thing it can be, once the machine is ruled out.
     assert "separating" in out
 
