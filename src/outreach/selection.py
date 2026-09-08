@@ -104,12 +104,14 @@ def select_pending(
             not_ready += 1
             continue
 
-        if rank(current) >= rank(target):
-            # Past this stage already, but missing its output row -- someone
-            # deleted it, or an older run half-completed.
-            already += 1
-            continue
-
+        # A lead past the target stage with no output row is not "already
+        # done" -- it is a half-completed run, or a row someone deleted. The
+        # old code counted it as done and skipped it, which meant the stage
+        # could never repair its own missing output: the lead sat past the
+        # target with nothing for the next stage to read, for ever. Falling
+        # through to the requires check instead makes the stage rerun for it
+        # and heal the gap. Its output row's presence is what already counted
+        # it as done, via done_ids above.
         if rank(current) < rank(requires):
             # Upstream stage hasn't run yet.
             not_ready += 1

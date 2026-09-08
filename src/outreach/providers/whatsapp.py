@@ -44,7 +44,20 @@ def is_mobile_number(phone: str, country: str = "") -> bool:
 # send queue and the "WhatsApp to send" count check this set, so the two views
 # can never drift apart -- the bug that had the top count show a lead section 4
 # had correctly hidden, making a drafted message look like it never landed.
-WA_SENT_STATUSES = frozenset({"sent", "delivered", "read"})
+# "unconfirmed" belongs here, and leaving it out is what kept a sent message
+# in the send queue for ever. WhatsApp confirms delivery late often enough --
+# a first message to a new contact especially -- that the relay reports
+# `unconfirmed` whenever no ack arrives inside its window. That means the
+# message left; it does not mean it failed. Treating it as still-to-send put
+# the lead back at the top of the queue with nothing to show it had already
+# gone, which invites sending a real business the same message twice.
+#
+# "pending" is the same state under the name the relay used before the ack
+# was softened from a gate into evidence. Rows carrying it are on the Sheet
+# already and were written by the same send path, so they mean the same thing.
+WA_SENT_STATUSES = frozenset(
+    {"sent", "delivered", "read", "unconfirmed", "pending"}
+)
 
 
 class WhatsAppError(Exception):
@@ -100,6 +113,40 @@ class WhatsAppClient:
             return data.get("qr") or None
         except Exception:
             return None
+
+    # ------------------------------------------------------------------ reset
+
+    def logout(self) -> str:
+        """Unlink the relay's WhatsApp account so another can be paired.
+
+        Returns a note to show the user. Raises WhatsAppError when the relay
+        could not do it -- most usefully when the saved session could not be
+        deleted, because a relay that reconnects to the same account after a
+        reset is worse than one that refuses: the button looks like it did
+        nothing.
+
+        The timeout is its own, and generous. Logging out talks to WhatsApp
+        before touching the disk, and the default ten seconds is sized for
+        localhost round-trips rather than a remote handshake.
+        """
+        try:
+            resp = requests.post(f"{self._base}/logout", timeout=30.0)
+        except requests.RequestException as exc:
+            raise WhatsAppError(
+                "The WhatsApp relay is not running, so there is no session to "
+                f"reset ({exc})."
+            ) from exc
+
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {}
+
+        if resp.status_code >= 400 or not data.get("ok"):
+            raise WhatsAppError(
+                data.get("error") or f"The relay refused the reset (HTTP {resp.status_code})."
+            )
+        return data.get("note") or "Logged out."
 
     # ------------------------------------------------------------------- send
 

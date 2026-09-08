@@ -15,12 +15,23 @@ import sys
 import threading
 import time
 import webbrowser
+import hmac
+import secrets as _secrets
 from collections import deque
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template_string, request
+from flask import (
+    Flask,
+    jsonify,
+    redirect,
+    render_template_string,
+    request,
+    send_from_directory,
+    session,
+)
+from werkzeug.exceptions import NotFound
 
 from . import schema
 from .config import Config, load_config
@@ -102,6 +113,18 @@ MAX_LIMIT = 500
 # run before it happens, so it follows the How-many box -- but sixty names is
 # a wall, not a list, so it stops here and says so.
 PREVIEW_CAP = 25
+
+# Long enough to find the right Google account, read the consent screen and
+# think about it; short enough that a tab someone closed does not hold a
+# request thread until the dashboard is restarted.
+CONSENT_TIMEOUT = 300
+
+# One Sheet creation at a time. The guard that refuses a second Sheet is
+# checked before a consent flow that then blocks for minutes, so two presses
+# arriving in that window would both pass it -- and Flask serves them on
+# separate threads. The button disables itself, but a page reload mid-consent
+# brings it back.
+_create_sheet_lock = threading.Lock()
 
 
 def stage_args(
@@ -396,6 +419,12 @@ class Runner:
                 self.lines.append(f"$ outreach {' '.join(args)}")
                 process = subprocess.Popen(
                     [sys.executable, "-m", "outreach", *args],
+                    # No stdin: a stage that tries to prompt (spending
+                    # credits, say) would otherwise inherit this console and
+                    # wait on a question the page never shows. With the null
+                    # device the CLI's confirm helper sees no terminal and
+                    # skips instead of hanging the run.
+                    stdin=subprocess.DEVNULL,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -617,9 +646,108 @@ def _load_summary(config: Config) -> Summary:
     return summary
 
 
+LOGIN_PAGE = """<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sign in</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fbfaf9; --ink:#1a1714; --line:#e3ded7;
+          --accent:#b4541f; --muted:#6f6862; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#151311; --ink:#efeae4; --line:#2f2a26; --accent:#e08a4e; --muted:#a49a90; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100dvh; display:flex; align-items:center;
+         justify-content:center; background:var(--bg); color:var(--ink);
+         font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+         padding:24px calc(20px + env(safe-area-inset-left)) calc(24px + env(safe-area-inset-bottom)); }
+  form { width:100%; max-width:340px; }
+  h1 { font-size:20px; margin:0 0 6px; }
+  p { color:var(--muted); font-size:14px; margin:0 0 18px; }
+  /* 16px minimum: Safari zooms the whole page on focus below that, and the
+     zoom does not come back on its own. */
+  input { width:100%; font-size:16px; padding:13px 14px; border-radius:10px;
+          border:1px solid var(--line); background:transparent; color:var(--ink); }
+  button { width:100%; margin-top:12px; font-size:16px; padding:14px;
+           border-radius:10px; border:1px solid var(--accent);
+           background:var(--accent); color:#fff; font-weight:600; }
+  .err { color:var(--accent); font-size:14px; margin:12px 0 0; }
+</style>
+<form method="post">
+  <h1>SME Outreach</h1>
+  <p>This dashboard can spend money and message businesses, so it asks first.</p>
+  <input type="password" name="password" placeholder="Dashboard password"
+         autocomplete="current-password" autofocus>
+  <button type="submit">Sign in</button>
+  {% if error %}<p class="err">{{ error }}</p>{% endif %}
+</form>
+"""
+
+
 def create_app(config: Config) -> Flask:
     app = Flask(__name__)
     runner = Runner()
+
+    # Signed-cookie sessions, with a per-process key. Restarting the
+    # dashboard signs every device out, which is the right trade for a tool
+    # that is started and stopped by hand: no secret to store, and a laptop
+    # that was closed does not leave a phone logged in for ever.
+    app.secret_key = _secrets.token_urlsafe(32)
+
+    # Failed attempts, so a password cannot be guessed at machine speed by
+    # anything else on the network. Keyed by source address, bounded.
+    login_failures: dict[str, list[float]] = {}
+    LOGIN_WINDOW = 300.0
+    LOGIN_MAX = 8
+
+    def _too_many_attempts(who: str) -> bool:
+        now = time.time()
+        recent = [t for t in login_failures.get(who, []) if now - t < LOGIN_WINDOW]
+        login_failures[who] = recent
+        if len(login_failures) > 200:  # bounded: a table, not a log
+            login_failures.clear()
+        return len(recent) >= LOGIN_MAX
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        wanted = current().secrets.dashboard_password
+        if not wanted:
+            # Nothing to sign in to. Say so rather than showing a box that
+            # accepts anything.
+            return redirect("/")
+
+        error = ""
+        if request.method == "POST":
+            who = request.remote_addr or "unknown"
+            if _too_many_attempts(who):
+                error = "Too many attempts. Wait a few minutes."
+            else:
+                given = (request.form.get("password") or "").strip()
+                # compare_digest, not ==: a plain comparison returns faster on
+                # a wrong first character, which is measurable over a network.
+                if hmac.compare_digest(given, wanted):
+                    session["in"] = True
+                    session.permanent = True
+                    return redirect("/")
+                login_failures.setdefault(who, []).append(time.time())
+                error = "Wrong password."
+        return render_template_string(LOGIN_PAGE, error=error), (
+            200 if request.method == "GET" else 401
+        )
+
+    @app.before_request
+    def _require_login():
+        # No password set means no login -- which is safe only on localhost,
+        # and `serve` refuses to bind anywhere else without one.
+        if not current().secrets.dashboard_password:
+            return None
+        if session.get("in") or request.endpoint == "login":
+            return None
+        # An API call gets JSON it can act on; a page gets the login form.
+        # A browser handed JSON shows raw text and a phone shows nothing.
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Signed out. Reload the page."}), 401
+        return redirect("/login")
 
     # The campaign target is editable from the page, so config is state rather
     # than a constant. Every handler reads through `current()` so a save takes
@@ -638,11 +766,146 @@ def create_app(config: Config) -> Flask:
             whatsapp_enabled=current().outreach.whatsapp_enabled,
         )
 
+    @app.route("/manifest.webmanifest")
+    def manifest():
+        """What "Add to Home Screen" reads to make this an app.
+
+        `standalone` is the part that matters: opened from the icon the page
+        gets the whole screen with no address bar, which is the difference
+        between an app and a bookmark.
+        """
+        return jsonify(_manifest("SME Outreach", "Outreach", "/"))
+
+    def _manifest(name: str, short: str, start: str) -> dict:
+        """One manifest shape, two pages.
+
+        The start_url is what the icon opens, so each page needs its own --
+        a shared manifest would send both home-screen icons to whichever
+        address it happened to name, and the second icon would be a
+        duplicate of the first.
+        """
+        return {
+            "name": name,
+            "short_name": short,
+            "start_url": start,
+            "scope": start,
+            "display": "standalone",
+            "background_color": "#f6f5f2",
+            "theme_color": "#f6f5f2",
+            "icons": [
+                {"src": "/icon.png", "sizes": "512x512", "type": "image/png",
+                 "purpose": "any maskable"},
+            ],
+        }
+
+    @app.route("/favicon.ico")
+    def favicon():
+        """Browsers ask for this unprompted, on every page, always.
+
+        Without it every visit logged a 404 -- which is noise in itself, and
+        worse, noise of exactly the shape a real broken asset would make. The
+        page icon already exists; this points at it rather than adding a
+        second one.
+        """
+        return redirect("/icon.png")
+
+    @app.route("/icon.png")
+    def icon():
+        """The Home Screen icon, drawn here rather than shipped as a file.
+
+        A binary in the repository would be one more thing to keep in step
+        with the palette, and this is a flat mark: the accent colour with a
+        rounded square knocked out of it. Written by hand as a minimal PNG so
+        nothing new has to be installed to draw it.
+        """
+        import struct
+        import zlib
+
+        size = 512
+        bg = (0xB4, 0x55, 0x2D)      # --accent
+        fg = (0xF6, 0xF5, 0xF2)      # --bg, the mark
+        # A thick ring: an O for Outreach, legible at 60px on a home screen.
+        cx = cy = size / 2
+        outer, inner = size * 0.34, size * 0.20
+
+        rows = bytearray()
+        for y in range(size):
+            rows.append(0)  # PNG filter byte: none
+            for x in range(size):
+                d = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+                rows.extend(fg if inner <= d <= outer else bg)
+
+        def chunk(tag: bytes, data: bytes) -> bytes:
+            return (
+                struct.pack(">I", len(data))
+                + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+            )
+
+        png = (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(rows), 6))
+            + chunk(b"IEND", b"")
+        )
+        return app.response_class(png, mimetype="image/png")
+
     @app.route("/guide")
     def guide():
         from .guide import guide_html
 
         return render_template_string(GUIDE_PAGE, body=guide_html())
+
+    # ------------------------------------------------------- the newer page
+    #
+    # A second front end, built from React sources in `frontend/` and served
+    # from disk as plain static files. It lives at /app rather than / so the
+    # hand-written page stays exactly where it is: this one is new, nothing
+    # about it is proven on Lyon's machine yet, and a dashboard that spends
+    # money is not the place to find out by replacing the working one.
+    #
+    # Same origin on purpose. Served from anywhere else it would need CORS,
+    # a public address and a second way to sign in; served from here the
+    # login cookie, the API and the page are one thing, and `Dashboard.bat`
+    # needs no new steps.
+    WEB_ROOT = Path(__file__).parent / "web"
+
+    @app.route("/app")
+    @app.route("/app/")
+    def spa_index():
+        index = WEB_ROOT / "index.html"
+        if not index.exists():
+            # Said plainly, because the only way this happens is a checkout
+            # without the built files, and "404" would send someone hunting
+            # for a route that is present.
+            return (
+                "The new dashboard was not built into this copy. "
+                "The old one is still at /.",
+                404,
+            )
+        return send_from_directory(WEB_ROOT, "index.html")
+
+    @app.route("/app/manifest.webmanifest")
+    def spa_manifest():
+        return jsonify(_manifest("SME Outreach", "Outreach", "/app/"))
+
+    @app.route("/app/<path:asset>")
+    def spa_asset(asset: str):
+        """Serve one built file, and nothing outside the build directory.
+
+        `send_from_directory` resolves the path and refuses anything that
+        escapes the root, so a crafted `../../.env` gets a 404 rather than a
+        secret. That guarantee is the reason this does not join paths itself.
+        """
+        try:
+            return send_from_directory(WEB_ROOT, asset)
+        except NotFound:
+            # A single-page app owns its own routing: /app/leads is a screen,
+            # not a file. Anything that is not a real file and does not look
+            # like one gets the page, which then reads the address itself.
+            if "." in Path(asset).name:
+                raise
+            return spa_index()
 
     @app.route("/api/campaign")
     def api_campaign():
@@ -654,6 +917,10 @@ def create_app(config: Config) -> Flask:
                 "areas": list(c.campaign.areas),
                 "sender_name": c.outreach.sender_name,
                 "batch_size": c.batch_size,
+                # Where the compliance footer says the message is sent from.
+                # Shown, not edited here: it is a legal setting, and every
+                # lead's own country is read off its number anyway.
+                "country_code": c.compliance.country_code,
                 "file": str(c.source_path),
             }
         )
@@ -695,6 +962,9 @@ def create_app(config: Config) -> Flask:
                 "key_env": env_name,
                 "key_needed": c.research.provider != "ollama",
                 "key_set": bool(env_name) and is_set(Path(".env"), env_name),
+                # Presence only, never the value -- same rule as every other
+                # key on this page.
+                "places_key_set": bool(c.secrets.places_api_key),
                 "guaranteed": c.research.provider == "anthropic",
             }
         )
@@ -726,6 +996,10 @@ def create_app(config: Config) -> Flask:
             outreach_model = outreach_model.strip()
         base_url = payload.get("base_url")
         api_key = payload.get("api_key") or ""
+        # The Places key rides along on the same save, because the setup
+        # checklist asks for both keys on one screen and two save buttons for
+        # one action is how a half-configured install happens.
+        places_key = (payload.get("places_key") or "").strip()
 
         if provider is not None and provider not in PROVIDER_DEFAULTS:
             return jsonify({"error": f"Unknown provider {provider!r}"}), 400
@@ -739,6 +1013,13 @@ def create_app(config: Config) -> Flask:
             try:
                 set_key(Path(".env"), env_name, api_key.strip())
                 os.environ[env_name] = api_key.strip()
+            except EnvEditError as exc:
+                return jsonify({"error": str(exc)}), 200
+
+        if places_key:
+            try:
+                set_key(Path(".env"), "PLACES_API_KEY", places_key)
+                os.environ["PLACES_API_KEY"] = places_key
             except EnvEditError as exc:
                 return jsonify({"error": str(exc)}), 200
 
@@ -844,15 +1125,24 @@ def create_app(config: Config) -> Flask:
         # Distinguish "set up but empty" from "not set up yet". Without this
         # the page says "no leads yet, press Find leads" at someone whose keys
         # aren't filled in, and the button they press just fails.
+        from .config import PROVIDER_KEY_ENV
+        from .env_edit import is_set
+
         missing = [
             name
             for name, value in (
                 ("SHEET_ID", c.secrets.sheet_id),
                 ("PLACES_API_KEY", c.secrets.places_api_key),
-                ("ANTHROPIC_API_KEY", c.secrets.anthropic_api_key),
             )
             if not value
         ]
+        # Which model key matters depends on the provider in use. The old
+        # list hardcoded ANTHROPIC_API_KEY, so an Ollama run was told it was
+        # "not set up" over a key it should never have been asked for, and an
+        # OpenRouter run was waved through while its own key was missing.
+        env_name = PROVIDER_KEY_ENV.get(c.research.provider, "")
+        if env_name and not is_set(Path(".env"), env_name):
+            missing.append(env_name)
         if missing:
             return jsonify({"setup_needed": missing})
 
@@ -1074,7 +1364,7 @@ def create_app(config: Config) -> Flask:
         URL in the outreach email, and with require_site on, a lead that is
         never marked built is never written to at all.
         """
-        from .stage import Stage
+        from .stage import Stage, advance
 
         payload = request.json or {}
         lead_id = (payload.get("lead_id") or "").strip()
@@ -1086,6 +1376,17 @@ def create_app(config: Config) -> Flask:
 
         try:
             sheets = _sheets_client(current())
+            # Same gate as the CLI's briefs-record: a disqualified lead's
+            # build must not be recorded, or they drop straight back into
+            # the outreach queue with a live site behind the message.
+            leads = sheets.read_rows(schema.LEADS)
+            entry = leads.get(lead_id)
+            current_stage = (entry[1].get("Stage") if entry else "") or ""
+            if current_stage.strip() == Stage.DISQUALIFIED.value:
+                return jsonify(
+                    {"error": "This lead is disqualified -- the build will not "
+                    "be recorded for it."}
+                ), 200
             sheets.update_column(
                 schema.SITE_BRIEFS, "Lovable Project ID", {lead_id: "built-by-hand"}
             )
@@ -1093,8 +1394,11 @@ def create_app(config: Config) -> Flask:
                 sheets.update_column(
                     schema.SITE_BRIEFS, "Preview URL", {lead_id: preview_url}
                 )
+            # advance(), not a bare Stage value: never move a lead backwards.
             sheets.update_column(
-                schema.LEADS, "Stage", {lead_id: Stage.SITE_BUILT.value}
+                schema.LEADS,
+                "Stage",
+                {lead_id: advance(current_stage, Stage.SITE_BUILT).value},
             )
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
@@ -1137,6 +1441,106 @@ def create_app(config: Config) -> Flask:
 
     # -------------------------------------------------------------- WhatsApp
 
+    @app.route("/api/design-level", methods=["GET", "POST"])
+    def api_design_level():
+        """Read or set how much art direction the site prompt carries.
+
+        A craft constant for the whole campaign, not a per-business field --
+        every business gets the same answer, so it lives in the campaign file
+        as template text rather than costing a schema field per lead.
+        """
+        from .campaign_edit import CampaignEditError, rewrite_design_level
+        from .config import DESIGN_LEVELS
+
+        if request.method == "GET":
+            return jsonify({
+                "level": current().build.design_level,
+                "levels": sorted(DESIGN_LEVELS),
+            })
+
+        level = ((request.json or {}).get("level") or "").strip().lower()
+        if level not in DESIGN_LEVELS:
+            return jsonify({
+                "error": f"Unknown design level {level!r}. "
+                         f"Expected one of {sorted(DESIGN_LEVELS)}."
+            }), 400
+
+        try:
+            path = _writable_campaign()
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        try:
+            original = path.read_text()
+            path.write_text(rewrite_design_level(original, level))
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        except OSError as exc:
+            return jsonify({"error": f"Could not save {path}: {exc}"}), 200
+
+        try:
+            state["config"] = load_config(path)
+        except ConfigError as exc:
+            # Same shape as every other campaign edit: put the file back
+            # rather than leave a campaign the pipeline cannot load.
+            path.write_text(original)
+            return jsonify({"error": f"Reverted -- {exc}"}), 200
+
+        return jsonify({"ok": True, "level": level})
+
+    @app.route("/api/services", methods=["GET", "POST"])
+    def api_services():
+        """Read or set the other services listed at the end of every message.
+
+        A campaign-level constant, not a per-business field: every lead gets
+        the same list. It is here rather than only in the campaign file
+        because the wording is the part Lyon will want to tune after reading
+        a few replies, and a setting he can only reach by editing YAML is a
+        setting he does not have.
+        """
+        from .campaign_edit import CampaignEditError, rewrite_services
+
+        if request.method == "GET":
+            c = current()
+            return jsonify({
+                "intro": c.outreach.services_intro,
+                "services": list(c.outreach.services),
+            })
+
+        payload = request.json or {}
+        intro = (payload.get("intro") or "").strip()
+        raw = payload.get("services")
+        if isinstance(raw, str):
+            raw = raw.splitlines()
+        if not isinstance(raw, list):
+            return jsonify({"error": "services must be a list of lines"}), 400
+        services = [str(line).strip() for line in raw if str(line).strip()]
+
+        if services and not intro:
+            return jsonify({
+                "error": "Add the line that introduces the list, or the "
+                         "bullets arrive with no explanation."
+            }), 200
+
+        try:
+            path = _writable_campaign()
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        try:
+            original = path.read_text()
+            path.write_text(rewrite_services(original, intro, services))
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        except OSError as exc:
+            return jsonify({"error": f"Could not save {path}: {exc}"}), 200
+
+        try:
+            state["config"] = load_config(path)
+        except ConfigError as exc:
+            path.write_text(original)
+            return jsonify({"error": f"Reverted -- {exc}"}), 200
+
+        return jsonify({"ok": True, "services": services})
+
     @app.route("/api/whatsapp/status")
     def api_whatsapp_status():
         """Relay connection state + daily counters."""
@@ -1146,8 +1550,13 @@ def create_app(config: Config) -> Flask:
         try:
             from .providers.whatsapp import WhatsAppClient
 
-            client = WhatsAppClient(port=c.outreach.whatsapp_relay_port)
-            return jsonify({"enabled": True, **client.get_status()})
+            port = c.outreach.whatsapp_relay_port
+            client = WhatsAppClient(port=port)
+            return jsonify({
+                "enabled": True,
+                "relay_url": f"http://127.0.0.1:{port}",
+                **client.get_status(),
+            })
         except Exception as exc:  # noqa: BLE001
             return jsonify({"enabled": True, "connected": False, "error": str(exc)})
 
@@ -1164,6 +1573,30 @@ def create_app(config: Config) -> Flask:
             return jsonify({"qr": client.get_qr()})
         except Exception:
             return jsonify({"qr": None})
+
+    @app.route("/api/whatsapp/reset", methods=["POST"])
+    def api_whatsapp_reset():
+        """Unlink the paired WhatsApp account and offer a fresh QR.
+
+        For switching phones, or re-pairing when the link has gone stale.
+        The relay does the work; this exists because a relay endpoint with no
+        button in the dashboard may as well not be there -- /logout shipped
+        months ago and had never once been called.
+        """
+        c = current()
+        if not c.outreach.whatsapp_enabled:
+            return jsonify({"error": "WhatsApp is switched off for this campaign."}), 400
+
+        from .providers.whatsapp import WhatsAppClient, WhatsAppError
+
+        client = WhatsAppClient(port=c.outreach.whatsapp_relay_port)
+        try:
+            note = client.logout()
+        except WhatsAppError as exc:
+            return jsonify({"error": str(exc)}), 200
+        except Exception as exc:  # noqa: BLE001 -- surfaced on the page
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+        return jsonify({"ok": True, "note": note})
 
     @app.route("/api/suggest-areas", methods=["POST"])
     def api_suggest_areas():
@@ -1301,6 +1734,265 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": "No screenshot for this lead yet"}), 404
         return send_file(path.resolve(), mimetype="image/png")
 
+    @app.route("/api/leads")
+    def api_leads():
+        """The Leads tab, as rows the page can render.
+
+        The old page never needed this -- it worked queue by queue, and a
+        lead only appeared when some stage was ready to act on it. A table
+        view needs the whole sheet, so this is a plain read with the column
+        names mapped to the field names the page uses. Nothing is computed
+        here: what the Sheet says is what is shown, which is the only way a
+        table and the Sheet can be trusted to agree.
+        """
+        c = current()
+        if not c.secrets.sheet_id:
+            return jsonify({"leads": []})
+        try:
+            rows = _sheets_client(c).read_rows(schema.LEADS)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+
+        def number(raw: str) -> float | int:
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                return 0
+            return int(value) if value.is_integer() else value
+
+        leads = [
+            {
+                "place_id": lead_id,
+                "stage": row.get("Stage", ""),
+                "business_name": row.get("Business Name", ""),
+                "category": row.get("Category", ""),
+                "address": row.get("Address", ""),
+                "phone": row.get("Phone", ""),
+                "rating": number(row.get("Rating", "")),
+                "review_count": number(row.get("Review Count", "")),
+                "website_status": row.get("Website Status", "") or "none",
+                "website_url": row.get("Website URL", ""),
+                "maps_url": row.get("Maps URL", ""),
+                "campaign": row.get("Campaign", ""),
+                "country": row.get("Country", ""),
+                "discovered_at": row.get("Discovered At", ""),
+                "last_refreshed": row.get("Last Refreshed", ""),
+                "priority": row.get("Priority", ""),
+                "owner_notes": row.get("Owner Notes", ""),
+                "next_action": row.get("Next Action", ""),
+                "whatsapp_reachable": row.get("WhatsApp Reachable", "") or "unknown",
+                "whatsapp_checked_at": row.get("WhatsApp Checked At", ""),
+            }
+            for lead_id, (_n, row) in rows.items()
+        ]
+        return jsonify({"leads": leads})
+
+    @app.route("/api/lead-note", methods=["POST"])
+    def api_lead_note():
+        """Write your own note against one lead.
+
+        Owner Notes is a manual column, so no stage may touch it. This is
+        the exception the rule names: you pressed save on a row you are
+        looking at, which is exactly what `user_edit` is for.
+        """
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+        note = str(payload.get("note") or "")
+
+        try:
+            written = _sheets_client(current()).update_column(
+                schema.LEADS, "Owner Notes", {lead_id: note}, user_edit=True
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+        if not written:
+            return jsonify({"error": f"No Leads row for {lead_id}"}), 200
+        return jsonify({"ok": True})
+
+    @app.route("/api/test-key", methods=["POST"])
+    def api_test_key():
+        """Ask the service itself whether a key works.
+
+        A key that is merely *present* proves nothing -- the pipeline has
+        failed on a pasted-with-quotes key, a key for the wrong project, and
+        a key whose API was never enabled, and each of those only showed up
+        as a failed run twenty leads later. So this spends one real request
+        and reports what came back.
+
+        The key under test is taken from the request when one is supplied,
+        so it can be checked *before* being saved, and is never echoed back
+        -- only the verdict is.
+        """
+        payload = request.json or {}
+        kind = (payload.get("type") or "").strip().casefold()
+        given = (payload.get("key") or "").strip()
+        c = current()
+
+        if kind == "places":
+            key = given or c.secrets.places_api_key
+            if not key:
+                return jsonify({"valid": False, "message": "No Places key to test."})
+            from .providers.places import PlacesClient, PlacesError
+
+            try:
+                # One page, one result: the smallest question that still
+                # proves the key, the project and the enabled API.
+                client = PlacesClient(api_key=key)
+                next(iter(client.search_text("cafe", page_size=1, max_pages=1)), None)
+            except PlacesError as exc:
+                return jsonify({"valid": False, "message": str(exc)})
+            except Exception as exc:  # noqa: BLE001
+                return jsonify({"valid": False, "message": f"{type(exc).__name__}: {exc}"})
+            return jsonify({"valid": True, "message": "Places answered. The key works."})
+
+        if kind == "model":
+            from .config import PROVIDER_DEFAULTS, PROVIDER_KEY_ENV
+            from .providers.llm import (
+                BriefWriter,
+                LLMError,
+                OpenAICompatibleWriter,
+                build_areas_prompt,
+            )
+
+            provider = (payload.get("provider") or c.research.provider).strip()
+            if provider not in PROVIDER_DEFAULTS:
+                return jsonify({"valid": False, "message": f"Unknown provider {provider!r}."})
+            model = (payload.get("model") or c.research.model).strip()
+
+            # Built here rather than through `make_writer` so a key can be
+            # tested before it is saved -- which is the whole point of a test
+            # button. It follows make_writer's shape exactly; if that gains a
+            # provider this must too.
+            try:
+                if provider == "anthropic":
+                    writer = BriefWriter(
+                        given or c.secrets.anthropic_api_key,
+                        model=model,
+                        effort=c.research.effort,
+                    )
+                else:
+                    key = given or c.secrets.llm_api_key
+                    if provider != "ollama" and not key:
+                        return jsonify({
+                            "valid": False,
+                            "message": f"{PROVIDER_KEY_ENV.get(provider, 'The API key')} "
+                                       f"is not set, and none was given to test.",
+                        })
+                    writer = OpenAICompatibleWriter(
+                        key,
+                        base_url=c.research.base_url or PROVIDER_DEFAULTS[provider],
+                        model=model,
+                    )
+                # A real round trip that also proves the model can return the
+                # JSON shape the pipeline needs. A key that authenticates but
+                # whose model cannot produce a schema is not a working setup.
+                writer.suggest_areas(build_areas_prompt("Penang, Malaysia", 3))
+            except LLMError as exc:
+                return jsonify({"valid": False, "message": str(exc)})
+            except Exception as exc:  # noqa: BLE001
+                return jsonify({"valid": False, "message": f"{type(exc).__name__}: {exc}"})
+            return jsonify({
+                "valid": True,
+                "message": f"{model} answered, in the right shape.",
+            })
+
+        return jsonify({"error": "type must be 'places' or 'model'"}), 400
+
+    @app.route("/api/create-sheet", methods=["POST"])
+    def api_create_sheet():
+        """Make this person their own Sheet, in their own Google account.
+
+        The first thing a new user needed to do was create a spreadsheet by
+        hand, find its ID in the URL, and paste it into a file -- three
+        chances to go wrong before anything worked. Signing in already
+        proves whose account it is, so the Sheet may as well be made for
+        them and the ID written where it belongs.
+        """
+        if not _create_sheet_lock.acquire(blocking=False):
+            return jsonify({
+                "error": "Still working on the last one. Finish the Google "
+                         "sign-in in the window that opened, or wait a moment "
+                         "and press again."
+            }), 409
+        try:
+            return _make_the_sheet()
+        finally:
+            _create_sheet_lock.release()
+
+    def _make_the_sheet():
+        from .auth import AuthError, get_credentials
+        from .env_edit import EnvEditError, set_key
+        from .sheets import SheetsClient, SheetsError
+
+        c = current()
+        # Both, because they can disagree: the reload at the end of a
+        # successful run is allowed to fail, and if the guard trusted only
+        # the in-memory config a second press would then make a second,
+        # empty Sheet -- which is the one thing this guard exists to stop.
+        if c.secrets.sheet_id or os.environ.get("SHEET_ID"):
+            return jsonify({
+                "error": "A Sheet is already set up. Clear SHEET_ID in .env "
+                         "first if you really want a new, empty one."
+            }), 400
+
+        try:
+            # Consent has to be allowed here -- on a first run there is no
+            # token to reuse -- but it is bounded, so a sign-in someone walks
+            # away from fails the request instead of parking this thread on a
+            # callback that will never arrive.
+            creds = get_credentials(
+                c.secrets.oauth_client_file,
+                c.secrets.token_file,
+                consent_timeout=CONSENT_TIMEOUT,
+            )
+        except AuthError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        # Named the way its owner would search for it, not after the
+        # campaign slug: this Sheet lands in someone else's Drive alongside
+        # everything else they own, and "penang-hair-salons" means nothing
+        # there a month later.
+        title = f"Outreach -- {c.campaign.category} in {c.campaign.location}"
+        try:
+            sheets = SheetsClient(creds)
+            sheet_id = sheets.create_spreadsheet(title)
+            sheets.ensure_tabs(schema.ALL_TABS)
+        except SheetsError as exc:
+            return jsonify({"error": str(exc)}), 502
+        except Exception as exc:  # noqa: BLE001 -- surfaced on the page
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 502
+
+        # Written to .env, not held in memory: the CLI and tomorrow's run
+        # both read it from there, and a Sheet nobody can find again would
+        # be worse than not creating one.
+        try:
+            set_key(Path(".env"), "SHEET_ID", sheet_id)
+        except (EnvEditError, OSError) as exc:
+            # The Sheet exists at this point, so the URL goes in the message.
+            # Losing it here would mean an orphaned spreadsheet and a button
+            # that just says it failed.
+            return jsonify({
+                "error": f"Your Sheet was created -- {sheets.url} -- but the "
+                         f"ID could not be saved: {exc}. Put SHEET_ID="
+                         f"{sheet_id} in your .env file by hand."
+            }), 200
+
+        # Both, and in this order: the env var so this process sees it at
+        # once, then a reload so every panel is rebuilt against the new
+        # config rather than the one captured at startup.
+        os.environ["SHEET_ID"] = sheet_id
+        try:
+            state["config"] = load_config(current().source_path)
+        except Exception:  # noqa: BLE001
+            # Every exception, not just ConfigError: the Sheet exists and
+            # .env is written by now, so anything raised here is a worse
+            # outcome reported than swallowed. A restart picks it up.
+            log.warning("Sheet created, but reloading config failed", exc_info=True)
+
+        return jsonify({"ok": True, "url": sheets.url, "title": title})
+
     @app.route("/api/whatsapp/queue")
     def api_whatsapp_queue():
         """Leads waiting for WhatsApp send, with phone + message text."""
@@ -1429,6 +2121,121 @@ def create_app(config: Config) -> Flask:
 
         return jsonify({"queue": queue, "excluded": excluded})
 
+    @app.route("/api/whatsapp/undo-send", methods=["POST"])
+    def api_whatsapp_undo_send():
+        """Put one already-sent lead back in the send queue.
+
+        A message can be reported as sent and still not arrive -- the
+        "Waiting for this message" messages were exactly that: acknowledged
+        by WhatsApp, unreadable on the phone. The Sheet is then wrong, and
+        the only way to correct it was to open the Sheet and clear a cell by
+        hand, which is precisely what the dashboard exists to avoid.
+
+        Only what is blocking the resend is written. The message, the
+        screenshot and the draft are untouched, so pressing Send afterwards
+        sends the same thing again rather than a regenerated one.
+        """
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+
+        c = current()
+        try:
+            sheets = _sheets_client(c)
+            rows = sheets.read_rows(schema.OUTREACH_LOG)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+
+        found = rows.get(lead_id)
+        if found is None:
+            return jsonify({
+                "error": "No drafted message for this lead, so there is "
+                         "nothing to send again."
+            }), 200
+        row = found[1]
+
+        cleared = []
+        try:
+            # The two the dashboard wrote when it sent. Clearing the status
+            # is what returns the lead to the queue; clearing the timestamp
+            # keeps the row honest, since it is no longer true that this
+            # went out at that moment.
+            if (row.get("WhatsApp Status") or "").strip():
+                sheets.update_column(
+                    schema.OUTREACH_LOG, "WhatsApp Status", {lead_id: ""}
+                )
+                cleared.append("WhatsApp Status")
+            if (row.get("WhatsApp Sent At") or "").strip():
+                sheets.update_column(
+                    schema.OUTREACH_LOG, "WhatsApp Sent At", {lead_id: ""}
+                )
+                cleared.append("WhatsApp Sent At")
+
+            # Status is a manual column, so a stage may never write it. This
+            # is the exception the rule names: a dashboard action on one
+            # named row the user has just clicked. Only written when it is
+            # actually what is holding the lead out of the queue -- a row
+            # already saying Drafted is left alone.
+            status = (row.get("Status") or "").strip()
+            if status and status.casefold() != "drafted":
+                sheets.update_column(
+                    schema.OUTREACH_LOG,
+                    "Status",
+                    {lead_id: "Drafted"},
+                    user_edit=True,
+                )
+                cleared.append(f"Status ({status} -> Drafted)")
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+
+        if not cleared:
+            return jsonify({
+                "error": "Nothing was blocking this one -- it should already "
+                         "be in the send list."
+            }), 200
+        return jsonify({"ok": True, "cleared": cleared})
+
+    @app.route("/api/whatsapp/skip", methods=["POST"])
+    def api_whatsapp_skip():
+        """Take one message out of the send list without sending it.
+
+        Not a disqualification: the lead keeps its research, its site and its
+        drafted message, and the row moves down to the excluded list where
+        **Send again** puts it straight back. It is the answer to "not this
+        one, not now", which previously meant either sending it anyway or
+        editing the Sheet by hand.
+        """
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+
+        c = current()
+        try:
+            sheets = _sheets_client(c)
+            rows = sheets.read_rows(schema.OUTREACH_LOG)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+
+        if lead_id not in rows:
+            return jsonify({
+                "error": "No drafted message for this lead, so there is "
+                         "nothing to skip."
+            }), 200
+
+        try:
+            # Status is manual, and this is the exception the rule names: one
+            # named row the user has just clicked. "Skipped" is not a stage,
+            # only a note in the Status cell -- what actually removes the row
+            # from the queue is that it no longer reads "Drafted".
+            sheets.update_column(
+                schema.OUTREACH_LOG, "Status", {lead_id: "Skipped"}, user_edit=True
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+        return jsonify({"ok": True})
+
     @app.route("/api/whatsapp/send", methods=["POST"])
     def api_whatsapp_send():
         """Send one WhatsApp message and record the result in the Sheet."""
@@ -1458,6 +2265,36 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": "phone is required"}), 400
         if not message:
             return jsonify({"error": "message is required"}), 400
+
+        # The cap in the campaign config was read and never applied -- the
+        # relay enforces only its own MAX_PER_DAY, so the number Lyon set in
+        # his campaign YAML did nothing. Count what today has already sent
+        # and refuse past it. Timestamps are ISO, so the date is the first
+        # ten characters.
+        from .models import utc_now
+
+        cap = c.outreach.whatsapp_max_per_day
+        if cap > 0:
+            today = utc_now()[:10]
+            try:
+                # A set comprehension over row dicts once raised
+                # "unhashable type" on every call and was swallowed into
+                # sent_today = 0, so the cap never tripped. Count in one
+                # pass instead.
+                sent_today = sum(
+                    1 for row in _sheets_client(c).read_rows(schema.OUTREACH_LOG).values()
+                    if (row[1].get("WhatsApp Sent At") or "")[:10] == today
+                )
+            except Exception:  # noqa: BLE001 -- never let bookkeeping stop a send
+                sent_today = 0
+            if sent_today >= cap:
+                return jsonify(
+                    {
+                        "error": f"Daily cap reached: {sent_today} of {cap} WhatsApp "
+                        "messages already sent today. Wait until tomorrow, or "
+                        "raise outreach.max_per_day in your campaign."
+                    }
+                ), 429
 
         from . import screenshot
         from .providers.whatsapp import WhatsAppClient, WhatsAppError
@@ -1532,16 +2369,102 @@ def create_app(config: Config) -> Flask:
     return app
 
 
-def serve(config_path: str | None = None, *, port: int = 8765, open_browser: bool = True):
+# The only address that needs no password: nothing but this machine can
+# reach it. Every other value puts the dashboard on a network.
+LOOPBACK = "127.0.0.1"
+# Every interface this machine has, which is what a phone on the same wifi
+# needs in order to reach it.
+ALL_INTERFACES = "0.0.0.0"
+
+
+class UnsafeBinding(Exception):
+    """Refusing to put an unauthenticated dashboard on a network."""
+
+
+def lan_address() -> str:
+    """This machine's address on its own network, or "" if it cannot tell.
+
+    Printed so nobody has to run ipconfig and read the right line out of it.
+    Opening a UDP socket sends no traffic and needs nothing to be reachable;
+    it only asks the routing table which local address would be used, which
+    is the one a phone on the same wifi must type.
+    """
+    import socket
+
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.connect(("8.8.8.8", 80))
+            return probe.getsockname()[0]
+        finally:
+            probe.close()
+    except OSError:
+        return ""
+
+
+def serve(
+    config_path: str | None = None,
+    *,
+    port: int = 8765,
+    open_browser: bool = True,
+    host: str | None = None,
+    phone: bool = False,
+):
+    """Run the dashboard.
+
+    ``phone=True`` means "serve to the network as well, if that is safe" --
+    it is not a promise to do so. Whether it is safe depends on a password
+    being set, and that answer lives here, where the config has already been
+    read. It used to live in Dashboard.bat as a findstr against .env, which
+    is a regex I could not test on Windows from here and which silently did
+    nothing when it was wrong: no flag, no phone access, and no clue why.
+    One decision, in the one place that has the information.
+    """
     config = load_config(config_path)
+    has_password = bool(config.secrets.dashboard_password)
+
+    if host is None:
+        host = ALL_INTERFACES if (phone and has_password) else LOOPBACK
+
+    # The one hard rule. The dashboard spends money, messages real
+    # businesses and reads the Sheet, and it has no other protection -- on a
+    # cafe or hotel network, everyone in the building is on that network.
+    # Binding wide open without a password is not a thing to warn about; it
+    # is a thing to refuse.
+    if host != LOOPBACK and not has_password:
+        raise UnsafeBinding(
+            f"Refusing to serve on {host} with no password set.\n\n"
+            "Anyone on the same network could open this dashboard, spend "
+            "your API credits and message businesses as you.\n\n"
+            "Set one first:\n"
+            "    DASHBOARD_PASSWORD=something-only-you-know\n"
+            "in your .env file, then start it again."
+        )
+
     app = create_app(config)
-    url = f"http://127.0.0.1:{port}"
+    url = f"http://{LOOPBACK}:{port}"
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+
     print(f"\n  Dashboard running at {url}")
-    print("  Close this window when you're done.\n")
-    # 127.0.0.1 only -- never exposed to the network.
-    app.run(host="127.0.0.1", port=port, debug=False)
+    if host == LOOPBACK:
+        if phone and not has_password:
+            # Asked for, and not given. Saying nothing here is how the last
+            # attempt failed silently.
+            print("\n  Phone access is OFF: no password is set.")
+            print("  Add this line to your .env file and start again:")
+            print("      DASHBOARD_PASSWORD=something-only-you-know")
+    else:
+        where = lan_address()
+        print("\n  On your phone, on the same wifi, open:")
+        print(f"      http://{where or '<this-pc-ip>'}:{port}")
+        if not where:
+            print("      (run  ipconfig  and use the IPv4 Address)")
+        print("  It asks for your dashboard password.")
+        print("\n  If Windows asks about the firewall, tick Private networks")
+        print("  and allow it -- the phone cannot connect otherwise.")
+    print("\n  Close this window when you're done.\n")
+    app.run(host=host, port=port, debug=False)
 
 
 GUIDE_PAGE = """<!doctype html>
@@ -1615,8 +2538,21 @@ PAGE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- viewport-fit=cover lets the page paint under the Dynamic Island and the
+     home indicator; the safe-area padding below keeps content out of both. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>SME Outreach</title>
+<!-- Added to the Home Screen this opens without Safari's chrome, which is
+     what makes it feel like an app rather than a bookmark. No store, no
+     build step -- the same single page, installed. -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Outreach">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#f6f5f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#151311" media="(prefers-color-scheme: dark)">
+<link rel="apple-touch-icon" href="/icon.png">
 <style>
   :root {
     --bg:#f6f5f2; --card:#fff; --ink:#1b1a17; --muted:#6b6862;
@@ -1699,6 +2635,23 @@ PAGE = """<!doctype html>
   .wa-panel { margin-top:12px; }
   .wa-status { display:flex; align-items:center; gap:8px; margin-bottom:12px;
                font-size:14px; }
+  /* Sits at the far right of the status row: reachable when wanted, never
+     next to the thumb that is pressing Send. */
+  .wa-status .wa-reset { margin-left:auto; font-size:12.5px; padding:5px 10px;
+                         color:var(--muted); }
+  .wa-status .wa-reset:hover:not(:disabled) { color:var(--accent);
+                                              border-color:var(--accent); }
+  .wa-reset-note { margin:-6px 0 12px; font-size:13px; color:var(--muted); }
+  /* Small, and inside the cell it acts on, so there is never a question of
+     which business a press applies to. */
+  .wa-undo { margin-top:6px; font-size:11.5px; padding:3px 8px; width:100%; }
+  /* Quieter than Send, and never beside it without a gap: this sits next to
+     the button that spends the message. */
+  .wa-skip { color:var(--muted); margin-right:6px; }
+  .wa-skip:hover:not(:disabled) { color:var(--accent); border-color:var(--accent); }
+  .reach-drop { font-size:11.5px; padding:2px 8px; color:var(--muted); }
+  .reach-drop:hover:not(:disabled) { color:var(--accent); border-color:var(--accent); }
+  .reach-note { font-size:12.5px; color:var(--muted); padding:2px 0 2px 10px; }
   .wa-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
   .wa-dot.on { background:var(--ok); }
   .wa-dot.off { background:var(--accent); }
@@ -1744,6 +2697,42 @@ PAGE = """<!doctype html>
   .wa-excl-grid { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr));
                   gap:8px; max-height:230px; overflow-y:auto; padding-right:4px; }
   @media (max-width:900px) { .wa-excl-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+
+  /* ---- phone ----
+     Everything below is for using this from a phone on the same wifi. The
+     page was built for a desktop and reflows well enough, but three things
+     do not survive the move without saying so. */
+  @media (max-width:640px) {
+    /* Under the Dynamic Island and around the home indicator. viewport-fit
+       is cover, so without this the first heading sits under the clock. */
+    .wrap { padding:calc(16px + env(safe-area-inset-top))
+                    calc(14px + env(safe-area-inset-right))
+                    calc(40px + env(safe-area-inset-bottom))
+                    calc(14px + env(safe-area-inset-left)); }
+
+    /* 16px is the threshold below which Safari zooms the whole page in on
+       focus -- and it does not zoom back out. Tapping the message box to fix
+       a typo left the page magnified with no obvious way back. */
+    input, textarea, select, .wa-msg-card .wa-edit { font-size:16px; }
+
+    /* A finger is not a mouse pointer. 44px is Apple's own minimum and these
+       are buttons that send messages to real businesses. */
+    button { min-height:44px; padding:11px 16px; }
+    .wa-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .wa-actions button, .wa-msg-card .wa-row button { width:100%; }
+    .wa-msg-card .wa-row { flex-wrap:wrap; gap:8px; }
+
+    /* One column: two 160px cards side by side on a phone are unreadable,
+       and the excluded grid was five across. */
+    .wa-excl-grid { grid-template-columns:1fr; }
+    .steps, .funnel { gap:6px; }
+    .q input { flex:1 1 100%; }
+    .sendrow { flex-wrap:wrap; gap:6px; }
+    h2 { font-size:19px; margin:32px 0 10px; }
+    /* Wide content scrolls inside itself rather than pushing the page sideways.
+       A horizontally scrolling page on a phone feels broken. */
+    table { display:block; overflow-x:auto; }
+  }
   .wa-excl { padding:7px 9px; border:1px solid var(--line); border-radius:6px;
              background:var(--card); min-width:0; }
   .wa-excl .wa-name { font-weight:600; font-size:13px; line-height:1.25;
@@ -1764,7 +2753,10 @@ PAGE = """<!doctype html>
   </header>
   <div class="row" style="justify-content:space-between;align-items:baseline">
     <div class="sub" id="totals">Loading&hellip;</div>
-    <a class="sub" href="/guide" target="_blank" rel="noopener"><b>Handbook &rsaquo;</b></a>
+    <div class="row" style="gap:14px">
+      <a class="sub" href="/app"><b>Try the new look &rsaquo;</b></a>
+      <a class="sub" href="/guide" target="_blank" rel="noopener"><b>Handbook &rsaquo;</b></a>
+    </div>
   </div>
   <h2>What you're hunting</h2>
   <div class="card" id="target">Loading&hellip;</div>
@@ -1871,7 +2863,18 @@ PAGE = """<!doctype html>
       <a class="sub" href="/guide#3-build-the-ones-you-approved" target="_blank" rel="noopener">What is this?</a></h2>
   <div class="row" style="margin-bottom:10px">
     <button data-run="site-generate">Generate pages with Gemini</button>
+    <label class="sub" style="display:flex;align-items:center;gap:7px;margin-left:auto">
+      <input type="checkbox" id="design-showcase" onchange="setDesignLevel(this.checked)"
+             style="width:auto">
+      Full art direction
+    </label>
+    <span class="hint" id="design-note"></span>
   </div>
+  <p class="hint" id="design-help">Adds the craft rules to every site prompt
+    &mdash; type as a scale, layout that breaks the centred column, colour
+    ratio, motion given in real durations. It changes only the prompt you
+    paste, never the research, so it costs nothing per lead. Turn it off if
+    the pages come back worse.</p>
   <p class="hint">Writes each approved brief to a file in your
     <code>sites\\</code> folder using Gemini. Nothing is published and nothing
     is sent &mdash; the run prints the path of every page so you can open one
@@ -1880,6 +2883,22 @@ PAGE = """<!doctype html>
     seven minutes, mostly waiting. Pages already written are skipped and
     cost nothing.</p>
   <div id="queue"></div>
+
+  <details class="card" style="margin-bottom:14px">
+    <summary class="sub"><b>Other services listed at the end of every message</b></summary>
+    <p class="hint" style="margin:8px 0">Appended word for word to every
+      message, email and WhatsApp alike &mdash; the model never rewrites these.
+      One service per line. Leave the list empty and messages end as they did
+      before.</p>
+    <label class="sub">The line that introduces them
+      <input id="svc-intro" style="width:100%;margin:4px 0 10px"></label>
+    <label class="sub">One service per line
+      <textarea id="svc-list" rows="4" style="height:auto"></textarea></label>
+    <div class="row" style="margin-top:8px">
+      <button onclick="saveServices()">Save services</button>
+      <span class="hint" id="svc-note"></span>
+    </div>
+  </details>
 
   <h2><span class="stepno">4</span> Send
       <a class="sub" href="/guide#4-open-gmail-drafts" target="_blank" rel="noopener">What is this?</a></h2>
@@ -1925,6 +2944,25 @@ function panelDead(sel, what) {
   }
 }
 
+async function createSheet() {
+  const btn = $('#mk-sheet');
+  const note = $('#mk-sheet-note');
+  btn.disabled = true;
+  note.textContent = 'Opening Google to sign in\u2026 finish in the browser window.';
+  try {
+    const r = await fetch('/api/create-sheet', {method: 'POST'});
+    const d = await r.json();
+    if (d.error) { note.innerHTML = '<span class="err">' + esc(d.error) + '</span>'; return; }
+    note.innerHTML = 'Made it \u2014 <a href="' + esc(d.url) +
+      '" target="_blank" rel="noopener">open your Sheet</a>';
+    refresh();
+  } catch (e) {
+    note.innerHTML = '<span class="err">Could not reach the dashboard.</span>';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function refresh() {
   let d;
   try { d = await (await fetch('/api/summary')).json(); } catch { panelDead('#totals', 'the totals'); return; }
@@ -1935,19 +2973,51 @@ async function refresh() {
   }
 
   if (d.setup_needed) {
+    setupReady = false;
     $('#totals').innerHTML = '<span class="err">Not set up yet</span>';
+
+    // The Sheet is the one missing piece we can just make for them. The
+    // keys have to be pasted, but nobody should have to create a
+    // spreadsheet by hand and copy an id out of a URL.
+    const needsSheet = d.setup_needed.includes('SHEET_ID');
+    const keys = d.setup_needed.filter(k => k !== 'SHEET_ID');
+
     $('#todo').innerHTML = `<div class="card" style="grid-column:1/-1">
-      <div class="what"><b>Before this can run, three keys need filling in.</b></div>
-      <div class="sub" style="margin:8px 0">
-        Still missing from your <code>.env</code> file:
-        <b>${d.setup_needed.join('</b>, <b>')}</b></div>
-      <div class="sub">The <a href="/guide#getting-it-onto-your-computer"
-        target="_blank" rel="noopener">handbook</a> shows where each one comes
-        from. Fill them in, save, then reload this page.</div></div>`;
+      <div class="what"><b>First run &mdash; three things to set up.</b></div>
+
+      <div class="sub" style="margin:10px 0 4px"><b>1. Your own Google Sheet</b></div>
+      ${needsSheet
+        ? `<div class="sub">This is where your leads live. Press the button and
+             sign in with your own Google account &mdash; the Sheet is made in
+             your account, with the right tabs, and remembered for you.</div>
+           <div class="row" style="margin:8px 0 14px">
+             <button class="primary" onclick="createSheet()" id="mk-sheet">Create my Google Sheet</button>
+             <span class="hint" id="mk-sheet-note"></span>
+           </div>`
+        : '<div class="sub" style="margin-bottom:14px">Done.</div>'}
+
+      <div class="sub" style="margin:0 0 4px"><b>2. Your keys</b></div>
+      ${keys.length
+        ? `<div class="sub">Still missing: <b>${keys.join('</b>, <b>')}</b>.
+             Put them in the <b>Model</b> and settings panels on this page &mdash;
+             they are written for you, no file to edit. The
+             <a href="/guide#getting-it-onto-your-computer" target="_blank"
+                rel="noopener">handbook</a> says where each one comes from.</div>`
+        : '<div class="sub">Done.</div>'}
+
+      <div class="sub" style="margin:14px 0 4px"><b>3. Your WhatsApp</b></div>
+      <div class="sub">Once the two above are done, section 4 shows a QR code.
+        Scan it from WhatsApp &rarr; Linked devices. It links your own phone,
+        and only needs doing once.</div>
+      </div>`;
     $('#funnel').innerHTML = '';
     $('#send').innerHTML = '<div class="sub">Nothing yet.</div>';
     return;
   }
+
+  // Setup is complete: the next poll tick re-arms the stage buttons it
+  // disabled when the page was still missing its keys.
+  setupReady = true;
   $('#totals').innerHTML = d.total
     ? `${d.total} leads &middot; ${d.disqualified} disqualified &middot;
        <a href="${d.sheet_url}" target="_blank" rel="noopener">Open Sheet</a>`
@@ -1998,6 +3068,40 @@ let waState = null;  // last /api/whatsapp/status response
 let waQueue = [];    // last /api/whatsapp/queue response
 let waExcluded = []; // drafted WhatsApp leads dropped from the queue, with reasons
 
+// Per-lead interface state, keyed by Lead ID: whether a card is waiting for
+// its confirm, mid-send, sent, failed, and any edit made to its text.
+//
+// It is keyed by lead rather than kept on the queue objects because
+// loadWhatsAppInline replaces the whole array with fresh objects from the
+// server -- so a flag set on a queue object was thrown away by the next
+// refresh, which runs on a 30-second timer. That is why pressing Send twice
+// sometimes did nothing at all: the first press armed the confirmation, a
+// refresh landed in between and discarded it, and the second press only
+// armed it again. The same discard is why the Sending and Sent states
+// never appeared.
+const waUi = {};
+
+function uiFor(leadId) {
+  if (!waUi[leadId]) waUi[leadId] = {};
+  return waUi[leadId];
+}
+
+// A DOM-safe id per lead. Lead IDs are Google place_ids, but they are not
+// ours to assume anything about, so anything outside the safe set is
+// replaced rather than trusted in an id or a selector.
+function waKey(leadId) {
+  return String(leadId || '').replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
+// True while any card is mid-interaction. The periodic refresh stands aside
+// for it: redrawing then would discard a pending confirmation and any edit
+// made to the message text.
+function waBusy() {
+  return Object.values(waUi).some(
+    u => u.confirming || u.sending || u.draft !== undefined
+  );
+}
+
 async function loadWhatsAppInline() {
   const el = $('#wa-inline');
   if (!el) return;
@@ -2027,11 +3131,34 @@ async function loadWhatsAppInline() {
   }
 
   // Connection indicator
-  const dot = waState.connected ? 'on' : waState.paired === false ? 'wait' : 'off';
+  const dot = waState.connected ? 'on'
+    : (waState.reconnecting || waState.resetting || waState.connecting) ? 'wait'
+    : waState.paired === false ? 'wait' : 'off';
+  // last_error is the relay's own account of what went wrong, and it beats
+  // "Relay not running" -- which describes the symptom of a crash, a wrong
+  // port and a relay never started all in the same four words.
+  // A relay working its way back is not one that has given up, and saying
+  // "not connected" for both is what made a passing network blip look like
+  // something broken that needed a restart.
   const label = waState.connected
     ? `Connected \\u2014 ${waState.daily_sent || 0} / ${waState.daily_cap || 30} sent today`
-    : waState.error || 'Relay not running';
-  html += `<div class="wa-status"><span class="wa-dot ${dot}"></span>${esc(label)}</div>`;
+    : waState.resetting ? 'Resetting\\u2026'
+    : waState.connecting ? 'Connecting to WhatsApp\\u2026'
+    : waState.reconnecting
+      ? `Reconnecting\\u2026 next try in ${waState.retry_in_seconds || 0}s`
+        + (waState.last_error ? ' \\u2014 ' + waState.last_error : '')
+    : waState.last_error || waState.error || 'Relay not running';
+  // Offered whenever the relay itself answered -- connected or not. An
+  // unpaired relay showing a QR that has gone stale is exactly when someone
+  // needs this, so gating it on "connected" would hide it in the one state
+  // it is most wanted.
+  const canReset = waState.enabled !== false && !waState.error;
+  const resetBtn = canReset
+    ? `<button class="wa-reset" id="wa-reset-btn" onclick="resetWhatsApp()"
+         title="Unlink this WhatsApp account and show a new QR code, so you can sign in again or link a different phone.">Log out / switch account</button>`
+    : '';
+  html += `<div class="wa-status"><span class="wa-dot ${dot}"></span>${esc(label)}${resetBtn}</div>`;
+  html += `<div class="wa-reset-note" id="wa-reset-note"></div>`;
 
   // QR when unpaired
   if (!waState.connected && !waState.paired) {
@@ -2048,25 +3175,34 @@ async function loadWhatsAppInline() {
 
   // Message cards — each has an editable textarea and a Send button
   if (waQueue.length) {
-    html += waQueue.map((m, i) => {
-      const msgText = esc(m.message || '');
-      const sending = m._sending;
-      const sent = m._sent;
-      const failed = m._failed;
+    html += waQueue.map((m) => {
+      const k = waKey(m.lead_id);
+      const u = uiFor(m.lead_id);
+      // The edit in progress wins over the server's copy, so a refresh
+      // landing mid-typing does not wipe what has been written.
+      const msgText = esc(u.draft !== undefined ? u.draft : (m.message || ''));
       let actions = '';
-      if (sending) {
+      if (u.confirming) {
+        actions = `<span class="wa-state">Send to ${esc(m.phone)}?</span>
+          <button class="wa-send confirm" onclick="sendWhatsApp('${esc(m.lead_id)}')">Yes, send</button>
+          <button onclick="cancelSend('${esc(m.lead_id)}')">Cancel</button>`;
+      } else if (u.sending) {
         actions = `<span class="wa-state"><span class="wa-spin"></span>Sending\\u2026</span>`;
-      } else if (sent) {
-        actions = m._note
-          ? `<span class="wa-state ok" title="${esc(m._note)}">Sent \\u2714 (not yet confirmed)</span>`
+      } else if (u.sent) {
+        actions = u.note
+          ? `<span class="wa-state ok" title="${esc(u.note)}">Sent \\u2714 (not yet confirmed)</span>`
           : `<span class="wa-state ok">Sent \\u2714</span>`;
-      } else if (failed) {
-        actions = `<span class="wa-state err">${esc(m._error || 'Failed')}</span>
-          <button class="wa-send" onclick="retryWhatsApp(${i})">Retry</button>`;
+      } else if (u.failed) {
+        actions = `<span class="wa-state err">${esc(u.error || 'Failed')}</span>
+          <button class="wa-send" onclick="retryWhatsApp('${esc(m.lead_id)}')">Retry</button>
+          <button class="wa-skip" onclick="skipWhatsApp('${esc(m.lead_id)}')"
+            title="Take this one off the list without sending. It keeps its message and its site, and Send again below puts it back.">Not this one</button>`;
       } else {
         actions = `<div class="wa-actions">
-          <button class="wa-rewrite" onclick="rewriteWhatsApp(${i}, '${esc(m.lead_id)}')">Rewrite</button>
-          <button class="wa-send" onclick="sendWhatsApp(${i}, '${esc(m.lead_id)}', '${esc(m.phone)}')">Send</button>
+          <button class="wa-rewrite" onclick="rewriteWhatsApp('${esc(m.lead_id)}')">Rewrite</button>
+          <button class="wa-skip" onclick="skipWhatsApp('${esc(m.lead_id)}')"
+            title="Take this one off the list without sending. It keeps its message and its site, and Send again below puts it back.">Not this one</button>
+          <button class="wa-send" onclick="sendWhatsApp('${esc(m.lead_id)}')">Send</button>
         </div>`;
       }
       // The picture that will ride with the message. Shown small, and
@@ -2080,11 +3216,12 @@ async function loadWhatsAppInline() {
         : '<div class="sub" style="margin:6px 0">No screenshot &mdash; the text '
           + 'will send on its own.</div>';
 
-      return `<div class="wa-msg-card" id="wa-msg-${i}">
+      return `<div class="wa-msg-card" id="wa-msg-${k}">
         <div class="wa-name">${esc(m.name)}</div>
         <div class="wa-phone">${esc(m.phone)}</div>
         ${shot}
-        <textarea class="wa-edit" id="wa-text-${i}" rows="4">${msgText}</textarea>
+        <textarea class="wa-edit" id="wa-text-${k}" rows="4"
+          oninput="noteEdit('${esc(m.lead_id)}', this.value)">${msgText}</textarea>
         <div class="wa-row">${actions}</div>
       </div>`;
     }).join('');
@@ -2122,14 +3259,27 @@ async function loadWhatsAppInline() {
         `Channel: ${x.channel || 'blank'}`,
         `The Channel cell says \\u2018${x.channel || ''}\\u2019, which isn\\u2019t WhatsApp, Email or Unreachable. Fix it in the Sheet and this lead comes back.`],
       status_not_drafted: (x) => [
-        `Status: ${x.status || 'blank'}`,
-        `This lead has a drafted message, but its Status cell says \\u2018${x.status || ''}\\u2019 rather than \\u2018Drafted\\u2019. Set it back to Drafted and it returns to the send list.`],
+        (x.status || '').toLowerCase() === 'skipped'
+          ? 'Skipped' : `Status: ${x.status || 'blank'}`,
+        (x.status || '').toLowerCase() === 'skipped'
+          ? 'You took this one off the send list. Nothing was sent, and it still has its message and its site \\u2014 press Send again to put it back.'
+          : `This lead has a drafted message, but its Status cell says \\u2018${x.status || ''}\\u2019 rather than \\u2018Drafted\\u2019. Press Send again to put it back in the list.`],
     };
-    const items = waExcluded.map((x) => {
+    // Only these two are undoable by clearing a cell. The rest -- no phone,
+    // no Leads row, drafted as email -- need a different fix each, and a
+    // button promising to undo them would simply not work.
+    const UNDOABLE = {already_sent: 1, status_not_drafted: 1};
+    const items = waExcluded.map((x, i) => {
       const pair = (reasons[x.reason] || (() => ['Hidden', 'Hidden from the send list.']))(x);
+      const undo = UNDOABLE[x.reason]
+        ? `<button class="wa-undo" id="wa-undo-${i}"
+             onclick="undoSend(${i}, '${esc(x.lead_id)}')"
+             title="Put this back in the send list so you can send it again. The message and its screenshot are kept.">Send again</button>`
+        : '';
       return `<div class="wa-excl" title="${esc(x.name || x.lead_id)} \\u2014 ${esc(pair[1])}">
         <div class="wa-name">${esc(x.name || x.lead_id)}</div>
         <div class="wa-why">${esc(pair[0])}</div>
+        ${undo}
       </div>`;
     }).join('');
     html += `<div class="wa-excl-wrap">
@@ -2141,64 +3291,219 @@ async function loadWhatsAppInline() {
   el.innerHTML = html;
 }
 
-function sendWhatsApp(idx, leadId, phone) {
-  const card = $(`#wa-msg-${idx}`);
-  if (!card) return;
-  const msg = waQueue[idx];
-  if (!msg) return;
+// Put an already-sent lead back in the send list.
+//
+// A message can be acknowledged by WhatsApp and still never arrive -- that
+// is what the "Waiting for this message" ones were. The Sheet then says sent
+// when it is not, and correcting it used to mean opening the Sheet and
+// clearing a cell by hand.
+async function undoSend(idx, leadId) {
+  const btn = $(`#wa-undo-${idx}`);
+  if (btn) { btn.disabled = true; btn.textContent = 'Working\\u2026'; }
 
-  // Read the current text from the textarea (user may have edited it)
-  const textarea = $(`#wa-text-${idx}`);
-  const message = textarea ? textarea.value : msg.message;
-
-  // First click: confirm
-  if (!msg._confirming) {
-    msg._confirming = true;
-    const row = card.querySelector('.wa-row');
-    row.innerHTML = `<span class="wa-state">Send to ${esc(phone)}?</span>
-      <button class="wa-send confirm" onclick="sendWhatsApp(${idx}, '${esc(leadId)}', '${esc(phone)}')">Yes, send</button>
-      <button onclick="cancelSend(${idx})">Cancel</button>`;
+  let d;
+  try {
+    d = await (await fetch('/api/whatsapp/undo-send', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lead_id: leadId}),
+    })).json();
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Send again'; }
     return;
   }
 
-  // Second click: send
-  msg._confirming = false;
-  msg._sending = true;
+  if (d.error) {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Send again';
+      btn.title = d.error;
+      btn.classList.add('err');
+    }
+    return;
+  }
+
+  // Forget how the previous send ended. The card is about to reappear in the
+  // queue, and a leftover "Sent" from the attempt being undone would render
+  // it as already done.
+  delete waUi[leadId];
+
+  // Redraw the whole panel: the lead has moved out of the excluded grid and
+  // into the queue above, which is the confirmation that it worked.
+  await loadWhatsAppInline();
+  refresh();
+}
+
+// Unlink the paired account and wait for the new QR.
+//
+// Two presses on purpose. This is not destructive to any data, but it does
+// end a link that takes a phone in hand to restore -- and it sits a few
+// pixels from the Send buttons.
+let waResetting = false;
+
+async function resetWhatsApp() {
+  const btn = $('#wa-reset-btn');
+  const note = $('#wa-reset-note');
+  if (!note) return;
+
+  if (!waResetting) {
+    waResetting = true;
+    note.innerHTML = `<b>Log out of WhatsApp on this computer?</b>
+      Messages already sent stay in your phone. You will scan a new QR code to
+      link again \u2014 this phone, or a different one.
+      <button class="wa-send confirm" onclick="resetWhatsApp()">Yes, log out</button>
+      <button onclick="cancelWhatsAppReset()">Cancel</button>`;
+    return;
+  }
+
+  waResetting = false;
+  if (btn) btn.disabled = true;
+  note.textContent = 'Logging out\u2026';
+
+  let d;
+  try {
+    d = await (await fetch('/api/whatsapp/reset', {method: 'POST'})).json();
+  } catch (e) {
+    note.innerHTML = '<span class="err">Could not reach the dashboard.</span>';
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  if (d.error) {
+    note.innerHTML = '<span class="err">' + esc(d.error) + '</span>';
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  // The relay reconnects in the background, so the QR is not there the
+  // instant this returns. Poll rather than redraw once onto an empty box
+  // and leave the user thinking it failed.
+  note.textContent = 'Logged out. Waiting for the new QR code\u2026';
+  for (let i = 0; i < 12; i++) {
+    await new Promise(r => setTimeout(r, 1500));
+    let qr = null;
+    try { qr = (await (await fetch('/api/whatsapp/qr')).json()).qr; } catch {}
+    if (qr) {
+      await loadWhatsAppInline();
+      const n = $('#wa-reset-note');
+      if (n) n.textContent = 'Scan the code below with the phone you want to use.';
+      return;
+    }
+  }
+
+  await loadWhatsAppInline();
+  const n = $('#wa-reset-note');
+  if (n) {
+    n.innerHTML = '<span class="err">Logged out, but no new QR code appeared. '
+      + 'Restart the relay window and reload this page.</span>';
+  }
+}
+
+function cancelWhatsAppReset() {
+  waResetting = false;
+  const note = $('#wa-reset-note');
+  if (note) note.textContent = '';
+}
+
+function noteEdit(leadId, value) {
+  uiFor(leadId).draft = value;
+}
+
+// Look the message up by Lead ID, never by position. The queue is rebuilt
+// from the server on a timer, and a card's index moves the moment anything
+// enters or leaves the list -- so an index captured when the button was
+// drawn could address a different business by the time it was pressed.
+function waMessage(leadId) {
+  return waQueue.find(m => m.lead_id === leadId);
+}
+
+function sendWhatsApp(leadId) {
+  const msg = waMessage(leadId);
+  if (!msg) return;
+  const u = uiFor(leadId);
+
+  // First press: arm the confirmation. It lives in waUi, so a refresh
+  // landing before the second press cannot quietly discard it.
+  if (!u.confirming) {
+    u.confirming = true;
+    loadWhatsAppInline();
+    return;
+  }
+
+  const message = u.draft !== undefined ? u.draft : msg.message;
+  u.confirming = false;
+  u.sending = true;
   loadWhatsAppInline();
 
   fetch('/api/whatsapp/send', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     // phone is the display form; phone_e164 is what actually gets dialled.
-    body: JSON.stringify({lead_id: leadId, phone: phone,
+    body: JSON.stringify({lead_id: leadId, phone: msg.phone,
                           phone_e164: msg.phone_e164 || '', message: message}),
   }).then(r => r.json()).then(d => {
-    msg._sending = false;
-    if (d.error) { msg._failed = true; msg._error = d.error; }
-    else { msg._sent = true; msg._note = d.note || ''; }
+    u.sending = false;
+    if (d.error) { u.failed = true; u.error = d.error; }
+    else {
+      u.sent = true;
+      u.note = d.note || '';
+      // The edit has been sent, so it is no longer an unsaved change and
+      // must not hold off the refresh that moves this card to the sent list.
+      delete u.draft;
+    }
     loadWhatsAppInline();
     refresh();  // update counts
   }).catch(e => {
-    msg._sending = false;
-    msg._failed = true;
-    msg._error = e.message || 'Network error';
+    u.sending = false;
+    u.failed = true;
+    u.error = e.message || 'Network error';
     loadWhatsAppInline();
   });
 }
 
-function cancelSend(idx) {
-  waQueue[idx]._confirming = false;
+// Take one message off the send list without sending it.
+//
+// Not a disqualification: the lead keeps everything, the row moves down to
+// the excluded list, and Send again there puts it straight back. That undo
+// is why this does not stop to confirm.
+function skipWhatsApp(leadId) {
+  const card = $(`#wa-msg-${waKey(leadId)}`);
+  const btn = card && card.querySelector('.wa-skip');
+  if (btn) { btn.disabled = true; btn.textContent = 'Skipping\\u2026'; }
+
+  fetch('/api/whatsapp/skip', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({lead_id: leadId}),
+  }).then(r => r.json()).then(d => {
+    if (d.error) {
+      const row = card && card.querySelector('.wa-row');
+      if (row) row.innerHTML = `<span class="wa-state err">${esc(d.error)}</span>`;
+      return;
+    }
+    // Nothing of this card's state should follow it into the excluded list.
+    delete waUi[leadId];
+    loadWhatsAppInline();
+    refresh();
+  }).catch(e => {
+    if (btn) { btn.disabled = false; btn.textContent = 'Not this one'; }
+  });
+}
+
+function cancelSend(leadId) {
+  uiFor(leadId).confirming = false;
   loadWhatsAppInline();
 }
 
-function retryWhatsApp(idx) {
-  waQueue[idx]._failed = false;
-  waQueue[idx]._error = null;
+function retryWhatsApp(leadId) {
+  const u = uiFor(leadId);
+  u.failed = false;
+  u.error = null;
   loadWhatsAppInline();
 }
 
-function rewriteWhatsApp(idx, leadId) {
-  const card = $(`#wa-msg-${idx}`);
+function rewriteWhatsApp(leadId) {
+  const card = $(`#wa-msg-${waKey(leadId)}`);
   if (!card) return;
   const btn = card.querySelector('.wa-rewrite');
   if (btn) { btn.disabled = true; btn.textContent = 'Rewriting\\u2026'; }
@@ -2213,6 +3518,8 @@ function rewriteWhatsApp(idx, leadId) {
       if (row) row.innerHTML = `<span class="wa-state err">${esc(d.error)}</span>`;
       return;
     }
+    // The server has written a new message, so any local edit is stale.
+    delete uiFor(leadId).draft;
     loadWhatsAppInline();
   }).catch(e => {
     const row = card.querySelector('.wa-row');
@@ -2220,11 +3527,24 @@ function rewriteWhatsApp(idx, leadId) {
   });
 }
 
-// Poll WhatsApp state every 30 seconds
+// Poll WhatsApp state every 30 seconds -- but never over the top of someone
+// mid-decision. A redraw while a confirmation is armed or a message is being
+// edited throws that away, and the press that follows lands on a card that
+// has quietly reset itself.
 if (WA_ENABLED) {
   loadWhatsAppInline();
-  setInterval(loadWhatsAppInline, 30000);
+  setInterval(() => { if (!waBusy()) loadWhatsAppInline(); }, 30000);
 }
+
+// First-run setup state. While keys or the Sheet are missing, the stage
+// buttons stay dead -- pressing one only fails at the stage with an error
+// naming a key, which reads like the app is broken. The setup card above
+// is the way out. Checking setup and testing the model are exempt: they
+// are part of getting set up.
+const SETUP_LOCKED = new Set(['full', 'discovery', 'discovery-refresh', 'research',
+  'reachability', 'reachability-recheck', 'site-brief', 'site-build',
+  'publish', 'outreach-draft', 'site-brief-rewrite', 'site-generate']);
+let setupReady = true;
 
 async function poll() {
   let d;
@@ -2234,6 +3554,10 @@ async function poll() {
   const busy = !!d.running;
   $('#running').textContent = busy ? `Running ${d.running}\\u2026` : '';
   document.querySelectorAll('button[data-run]').forEach(b => b.disabled = busy);
+  document.querySelectorAll('button[data-run]').forEach(b => {
+    if (!SETUP_LOCKED.has(b.dataset.run)) return;
+    b.disabled = busy || !setupReady;
+  });
   if (!busy && poll.wasBusy) {
     loadModel();
     loadNextUp();
@@ -2435,7 +3759,7 @@ async function dropLead(leadId, btn) {
   }
   // Redraw rather than just hiding the row: dropping one pulls the next lead
   // up into the list, and seeing that happen is the point of the preview.
-  await drawNextUp();
+  await loadNextUp();
   await refresh();
 }
 
@@ -2759,18 +4083,35 @@ async function loadReach() {
     return;
   }
 
-  const rows = list => list.map(e =>
-    `<tr><td style="padding:2px 10px 2px 0">${esc(e.name)}</td>` +
+  // `drop` adds a per-row Remove button. Only the "not on WhatsApp" list
+  // gets one: those are the answered dead ends, and removing a lead that is
+  // merely unchecked would throw away one the relay has not answered for yet.
+  const rows = (list, drop) => list.map((e, i) =>
+    `<tr id="reach-row-${drop ? 'x' : 'v'}-${i}">` +
+    `<td style="padding:2px 10px 2px 0">${esc(e.name)}</td>` +
     `<td style="white-space:nowrap;padding:2px 0">${esc(e.dialled || e.phone)}</td>` +
-    `<td style="padding:2px 0 2px 10px">${e.email ? 'has email' : ''}</td></tr>`
+    `<td style="padding:2px 0 2px 10px">${e.email ? 'has email' : ''}</td>` +
+    (drop
+      ? `<td style="padding:2px 0 2px 10px;text-align:right">` +
+        `<button class="reach-drop" id="reach-drop-${i}"
+           onclick="dropUnreachable(${i}, '${esc(e.lead_id)}', '${esc(e.name)}', ${e.email ? 1 : 0})"
+           title="Disqualify this lead so it is never researched or built.">Remove</button></td>`
+      : '') +
+    `</tr>`
   ).join('');
 
   // Only the ones needing a decision are shown outright. The verified and
   // rejected lists are the long ones and are answered questions, so they
   // fold away -- the counts are what Lyon actually reads each morning.
-  const fold = (label, list) => list.length
+  const fold = (label, list, drop) => list.length
     ? `<details style="margin-top:8px"><summary class="sub">${label} (${list.length})</summary>` +
-      `<table style="width:100%;border-collapse:collapse;margin-top:6px">${rows(list)}</table></details>`
+      (drop
+        ? '<p class="hint" style="margin:6px 0 0">These have no WhatsApp account. ' +
+          '<b>Remove</b> disqualifies one for good, so it is never researched or ' +
+          'built. A lead marked <b>has email</b> can still be reached that way &mdash; ' +
+          'removing it gives that up too.</p>'
+        : '') +
+      `<table style="width:100%;border-collapse:collapse;margin-top:6px">${rows(list, drop)}</table></details>`
     : '';
 
   el.innerHTML =
@@ -2787,7 +4128,147 @@ async function loadReach() {
         `${rows(d.waiting || [])}</table>`
       : '') +
     fold('On WhatsApp', d.verified || []) +
-    fold('Not on WhatsApp', d.rejected || []);
+    fold('Not on WhatsApp', d.rejected || [], true);
+}
+
+// Disqualify one lead from the "not on WhatsApp" list.
+//
+// Two presses. It is terminal -- Disqualified is a stage nothing moves a
+// lead out of -- and the rows sit close together in a narrow table.
+let reachDropping = null;
+
+async function dropUnreachable(idx, leadId, name, hasEmail) {
+  const btn = $(`#reach-drop-${idx}`);
+  const row = $(`#reach-row-x-${idx}`);
+  if (!btn || !row) return;
+
+  if (reachDropping !== idx) {
+    reachDropping = idx;
+    btn.textContent = hasEmail ? 'Remove anyway?' : 'Sure?';
+    btn.title = hasEmail
+      ? `${name} has an email address and could still be contacted that way.`
+      : `Disqualify ${name} for good.`;
+    btn.classList.add('confirm');
+    return;
+  }
+
+  reachDropping = null;
+  btn.disabled = true;
+  btn.textContent = 'Removing\\u2026';
+
+  let d;
+  try {
+    d = await (await fetch('/api/drop', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lead_id: leadId}),
+    })).json();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'Remove';
+    return;
+  }
+
+  if (d.error) {
+    btn.disabled = false;
+    btn.textContent = 'Remove';
+    btn.title = d.error;
+    btn.classList.add('err');
+    return;
+  }
+
+  // Redrawn rather than hidden: the counts at the top of the panel move too,
+  // and "buildable" is the number that decides spend.
+  await loadReach();
+  refresh();
+}
+
+// How much art direction the site prompt carries. A campaign setting rather
+// than a per-lead one -- every business gets the same craft rules.
+async function loadDesignLevel() {
+  const box = $('#design-showcase');
+  if (!box) return;
+  try {
+    const d = await (await fetch('/api/design-level')).json();
+    box.checked = d.level === 'showcase';
+  } catch { /* leave it alone rather than showing a wrong state */ }
+}
+
+async function setDesignLevel(on) {
+  const box = $('#design-showcase');
+  const note = $('#design-note');
+  const wanted = on ? 'showcase' : 'standard';
+  if (box) box.disabled = true;
+  if (note) note.textContent = 'Saving\\u2026';
+
+  let d;
+  try {
+    d = await (await fetch('/api/design-level', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({level: wanted}),
+    })).json();
+  } catch (e) {
+    if (note) note.innerHTML = '<span class="err">Could not reach the dashboard.</span>';
+    if (box) { box.disabled = false; box.checked = !on; }
+    return;
+  }
+
+  if (box) box.disabled = false;
+  if (d.error) {
+    if (note) note.innerHTML = '<span class="err">' + esc(d.error) + '</span>';
+    // Put the box back where it was: the setting did not change.
+    if (box) box.checked = !on;
+    return;
+  }
+  if (note) {
+    note.textContent = on
+      ? 'On \\u2014 briefs written from now on carry it.'
+      : 'Off \\u2014 back to the shorter prompt.';
+  }
+}
+
+// The services listed at the end of every message. A campaign constant --
+// every lead gets the same list -- but the wording is the part worth tuning
+// after reading a few replies, so it is editable here rather than in YAML.
+async function loadServices() {
+  const intro = $('#svc-intro');
+  const list = $('#svc-list');
+  if (!intro || !list) return;
+  try {
+    const d = await (await fetch('/api/services')).json();
+    intro.value = d.intro || '';
+    list.value = (d.services || []).join('\\n');
+  } catch { /* leave the boxes alone rather than showing a wrong state */ }
+}
+
+async function saveServices() {
+  const note = $('#svc-note');
+  const intro = $('#svc-intro').value;
+  const services = $('#svc-list').value.split('\\n');
+  if (note) note.textContent = 'Saving\\u2026';
+
+  let d;
+  try {
+    d = await (await fetch('/api/services', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({intro: intro, services: services}),
+    })).json();
+  } catch (e) {
+    if (note) note.innerHTML = '<span class="err">Could not reach the dashboard.</span>';
+    return;
+  }
+
+  if (d.error) {
+    if (note) note.innerHTML = '<span class="err">' + esc(d.error) + '</span>';
+    return;
+  }
+  if (note) {
+    note.textContent = d.services.length
+      ? `Saved \\u2014 ${d.services.length} service(s) on every message from now on.`
+      : 'Saved \\u2014 no services listed, messages end as before.';
+  }
+  loadServices();
 }
 
 async function loadQueue() {
@@ -2802,7 +4283,7 @@ async function loadQueue() {
   }
   el.innerHTML = d.queue.map((q, i) => `
     <div class="card q">
-      <h3>${q.name}</h3>
+      <h3>${esc(q.name)}</h3>
       <textarea id="p${i}" readonly>${q.prompt.replace(/</g,'&lt;')}</textarea>
       <div class="row" style="margin-top:10px">
         <button onclick="copyPrompt(${i})">Copy prompt</button>
@@ -2845,6 +4326,8 @@ loadNextUp();
 loadReview();
 loadQueue();
 loadReach();
+loadDesignLevel();
+loadServices();
 poll();
 setInterval(poll, 1200);
 setInterval(refresh, 30000);

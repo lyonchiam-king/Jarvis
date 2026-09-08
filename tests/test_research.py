@@ -47,6 +47,11 @@ def test_skips_leads_that_already_have_a_research_row():
 
 
 def test_skips_leads_already_past_discovered():
+    # a and b have moved past discovery AND have Research rows -- the normal
+    # case, so they are skipped via done_ids. A past-stage lead with NO
+    # output row is a half-completed run and is healed instead (see
+    # test_selection.py), so this test passes the done_ids the real caller
+    # would have read off the Research tab.
     leads = leads_index(
         [
             lead_row("a", stage="Researched"),
@@ -54,7 +59,9 @@ def test_skips_leads_already_past_discovered():
             lead_row("c", stage="Discovered"),
         ]
     )
-    selected, already, _ = research.select_leads(leads, set(), batch_size=100)
+    selected, already, _ = research.select_leads(
+        leads, {"a", "b"}, batch_size=100
+    )
 
     assert [r["Lead ID"] for r in selected] == ["c"]
     assert already == 2

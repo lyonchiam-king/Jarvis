@@ -1,0 +1,168 @@
+Build a website for Sun Salon, a hair salon in Georgetown, Penang, Malaysia.
+
+This business has never had a website. This site is the first impression anyone gets of them online, and the owner will see it before their customers do.
+
+STUDY THESE FIRST, BEFORE YOU DESIGN ANYTHING
+- Google Business Profile: https://maps.google.com/?cid=12345
+  Read the recent reviews and look at the customer photos. Take the words customers actually use for this place and put them in the copy -- they write better than either of us. Match the real interior: if the photos show a bright corner shoplot, do not design a dark luxury salon.
+- Instagram: @sunsalon -- https://instagram.com/sunsalon
+
+These are the business's own public pages. Use them for their real colours, their real photographs, their actual tone of voice, and what they genuinely offer. If you cannot open one, say so plainly and work from the brief below -- do not invent what you would have found there.
+
+IMAGERY
+Pull every photo you can from the sources above before you design anything: Google Business Profile photos (the owner's own, and the ones customers attached to their reviews -- this one almost always opens), then Instagram, then Facebook. Instagram and Facebook are login-walled and often will not let a fetch through; if one will not open, say which one plainly and work from whichever sources did -- never invent a photo you could not see.
+
+Then select. Sharp, well-lit, and it shows the actual place or the actual work -- use it as-is; a real customer photo of this Penang shoplot outranks any stock image, however polished. The actual place or work but blurry or a dated phone snapshot -- recreate the same subject and framing to a higher standard; a dim 2019 snapshot does not outrank a stock image, the shot it should have been does. Never substitute stock photography for either, and never fill a gap with an invented photo -- an honest tinted placeholder beats a fabricated one. The hero image must come from the real premises or the real work; nothing generic sits above the fold.
+
+WHO IT IS FOR
+A commuter on their phone deciding where to get a haircut tonight
+
+THE ONE JOB
+Get a booking
+
+Every element serves this. If a section does not move someone toward "Book Now", it does not belong on the page.
+
+PAGES
+- Home
+
+HERO (use this copy as written)
+Headline: Fresh cuts, fast
+Subcopy:  Walk in or book ahead
+Button:   Book Now
+
+HOME PAGE, IN SCROLL ORDER
+1. Hero -- overlay -- headline and CTA
+2. Services -- card grid -- our cuts
+
+HIGHLIGHTS STRIP (directly under the hero, one row of badges)
+- Walk-ins Welcome
+- Open Late
+- Cash or Card
+
+WHAT THEY OFFER (build a card for each, in this order)
+1. Classic Cut -- sharp, fast
+2. Beard Trim -- precise, quick
+
+Each card: image area, name, its tags as small badges, and a tap target opening a modal with a little more detail. Follow IMAGERY above for the photo -- never a stock photo.
+
+THE INTERACTIVE PIECE (build this properly -- it is the thing that
+makes the site feel made for them)
+A three-step style picker that ends at Book Now
+
+It must work with a thumb, hold its state as they move through it, show what they have chosen so far, and finish by handing them to "Book Now" with their choices already filled in.
+
+PROOF (all verified -- show these, invent nothing further)
+- 4.8 stars from 120 reviews
+
+ART DIRECTION
+Palette: #1a1a1a background, #f5f5f5 text, #d4a373 accent
+Type:    Playfair Display for headings, Inter for body
+Feel:    Warm and modern, a neighbourhood spot
+
+DESIGN SYSTEM (declare once, build everything from it)
+- Put the palette, spacing scale, radius and type steps into the Tailwind theme (tailwind.config, extend) and use those names in the markup -- bg-surface, text-muted, rounded-card. Arbitrary values like p-[13px] or text-[#3a2b1f] scattered through the JSX are the design system leaking.
+- One shadow level for the whole page, or none. A component that wants a second one is really asking for a border.
+- One card, one badge, one button, reused. Twelve slightly different cards is what a generated page looks like; one card used twelve times is what a designed one looks like.
+- shadcn's defaults are recognisable on sight. Override the base before building on it -- radius, border, ring, shadow and font in the theme -- so a Dialog and a Button read as this business rather than as the default theme every shadcn site ships with.
+
+TYPE AS A SYSTEM (the largest single difference between a designed page and a generated one)
+- Pick one scale and stay on it -- about 1.25 between steps on mobile, 1.33 from the large breakpoint up. Every size on the page is a step on that scale. A one-off font-size is the system leaking.
+- Leading tightens as size grows: body around 1.6, sub-heads about 1.3, the hero headline 1.0 to 1.1. Display type set at body leading is the most common reason a large headline looks amateur.
+- Cap the measure at 65-75 characters. A paragraph running the full width of a desktop container is hard to read whatever the typeface.
+- Tighten tracking on display sizes (around -0.02em), leave body alone, and open it slightly on any all-caps label.
+- Anything that sits in a column or changes in place -- prices, hours, a running total -- uses tabular figures, so the digits stop jittering.
+- Two families at most. Weight and size carry the hierarchy; a third typeface is decoration.
+
+LAYOUT (break the centred column -- a stack of identical centred boxes is exactly what a generated page looks like)
+- Not every section shares one container width. Let at least one run full-bleed edge to edge, and at least one sit narrower than the rest. That change in width is most of what gives a page rhythm.
+- Vary vertical density on purpose. A dense proof strip against a generous hero reads as designed; the same padding on every section reads as a template.
+- Let one thing break the grid -- an image crossing a section boundary, a heading starting left of its column. One deliberate asymmetry per page is plenty, and it is the part people remember.
+- Line up what sits side by side. Two adjacent cards whose text does not share a baseline is the detail that reads as sloppy without anyone being able to say why.
+
+COLOUR DISCIPLINE
+- Roughly 60 / 30 / 10: ground, secondary surface, accent. The accent is the smallest quantity on the page, and it is what the eye follows.
+- The accent belongs to the primary action. Spend it on headings, borders, icons and badges as well and the primary action stops standing out -- which loses the one job the page has.
+- Separate surfaces with a tint or a hairline border before reaching for a shadow. A shadow on everything is the quickest way to look generic.
+- Check contrast at the sizes actually used: 4.5:1 for body, 3:1 for large text, and 3:1 for the focus ring against the surface it sits on rather than against the page.
+
+MOTION, IN NUMBERS (a motion language given as an adjective becomes a different guess in every component)
+- Micro-interactions 120-200ms. Entrances and reveals 400-700ms. Past about 800ms a thing reads as broken rather than slow.
+- Do not ship the default ease-in-out. Entrances ease out (quick, then settling); exits ease in. In Framer Motion that is a spring with a little overshoot for a snappy motion_language, or a tween on a custom cubic-bezier for a slow one -- which is what "weighty" or "snappy" actually means in practice.
+- Stagger siblings 60-80ms: enough to read as a sequence, not enough to leave the last card arriving late.
+- Move a short distance, 8-24px. A card sliding half the viewport is distracting, not expensive-looking.
+- One thing moves at a time in any one area of the screen. Two animations competing for the same attention cancel out.
+- Keep durations and easings in the Tailwind theme too, and reuse them. A transition timed by hand in each component is the same leak as a hand-picked colour.
+
+INTERACTION STATES (the cheapest quality there is -- elements with one state each are most of why a page feels dead)
+- Every link, button and input: default, hover, focus-visible, pressed, and disabled or error where it applies. Mark the current nav item.
+- focus-visible is a real visible ring in the accent colour. Never `outline: none` without replacing it -- that is the usual way a site becomes unusable by keyboard.
+- Anything that waits has a waiting state, so a slow connection reads as busy rather than broken.
+
+MOTION AND INTERACTION
+Signature moment: A before/after that wipes as you drag
+Motion language:   Snappy, 200ms, ease-out
+Micro-interactions:
+  - CTA -> scale down on press
+
+Stack: React + Tailwind + shadcn/ui. Framer Motion is already available -- use motion.* directly. whileInView with viewport={{ once: true }} for on-scroll reveals, AnimatePresence for the showcase modal, layoutId for the card-to-modal shared-element move, useReducedMotion() as the a11y fallback. Spring for a snappy motion_language, tween for a slow one. Reach for shadcn's Dialog, Sheet, Tabs and Accordion over hand-rolled equivalents -- they already handle focus and escape.
+
+BUILD ALL OF THESE -- a page with none of them is not a pass:
+1. The signature moment above, or the closest fit if none was given.
+2. Sections below the fold reveal on scroll, staggered sibling to sibling.
+3. The primary CTA answers the tap: a scale or opacity change on press, not only on hover, which does not exist on a phone.
+4. A showcase card expands into its modal as a shared-element move, not a hard cut.
+5. The mobile bar enters with its own animation once the visitor has scrolled past the hero -- it is not present from frame one.
+
+The hero itself does not animate: final position, full opacity, no entrance, no load gate, the instant the page paints. That alone protects the performance budget below -- everything after the hero is free to move.
+
+- Animate transform and opacity only -- width, height, top or left force layout on every frame and stutter on a mid-range phone.
+- Reveal on scroll with whileInView, viewport={{ once: true }}; never re-trigger. Content is in the DOM and readable even if the animation never runs.
+- Honour prefers-reduced-motion via useReducedMotion(): plain fade, or nothing. Some people get motion sickness from parallax.
+- Watch paint cost, not just layout: stacked large-radius shadows, full-page gradients and heavy blurs repaint every frame and turn a smooth animation into a stuttering one on the mid-range Android this is really for.
+- No scroll-jacking, no page-load animation gate, no cursor effects, no WebGL or Three.js. Those belong on a designer's portfolio, not a shop that needs the booking -- and the cursor ones do not exist on a phone.
+
+DO NOT (specific to this business)
+- No stock photos of models
+
+FLOATING BAR ON MOBILE (fixed to the bottom of the screen, always
+visible, above everything else)
+- Call -> tel: link
+- WhatsApp -> wa.me link
+
+This is where most phone conversions happen. It must never cover the last line of content -- pad the page bottom by its height. Add env(safe-area-inset-bottom) to the bar's own bottom padding: without it the bar sits under the home indicator on every recent iPhone, which is exactly where the thumb already is.
+
+REAL DETAILS (use exactly these, do not paraphrase)
+Phone: +60123456789 -- as a tappable tel: link, in the header
+Address: 123 Jalan Example, Georgetown -- with a link to Google Maps
+
+SOCIAL PROFILES (link every one, using these exact URLs)
+- Instagram: @sunsalon -- https://instagram.com/sunsalon
+
+Put them where a customer would look: in the header or the footer, as the platform's own icon, opening in a new tab. These are the only social links that may appear on the site -- do not invent a handle for a platform that is not listed here, and do not guess a URL from the business name.
+
+BUILD RULES
+- Mobile first, and thumb first. Assume a mid-range Android on a patchy
+  connection. Large tap targets, nothing that depends on hover, nothing
+  important more than three scrolls down.
+- Fast and light. No carousels, no popups, no cookie banner theatre, no
+  stock photos of models who have never been to this business.
+- Every claim must be one the owner can stand behind. Do not invent
+  prices, awards, testimonials, staff names, or years in business.
+- Where a real detail is needed but was not supplied, write it as
+  [TO CONFIRM] rather than guessing. That is the correct outcome.
+- Accessible by default: real contrast, real heading order, alt text,
+  and a form every keyboard can complete.
+- Icons are inline SVG on currentColor at one square size -- no icon
+  font, no icon library, no emoji standing in for an icon. Draw the
+  simple graphics (rules, badges, section shapes) in CSS, not images.
+- Assume the text runs longer than it looks here: names and badges must
+  survive a second line without the card jumping or the button clipping.
+- Performance budget governs the hero and the first tap, not the rest of the page: largest contentful paint under 2.5s on a mid-range Android on 4G, no layout shift as things load, primary action tappable within one second. The hero renders at final position and full opacity with no entrance animation and no load gate -- that alone protects the budget. Below the fold, animate freely inside the transform/opacity rule above. If an effect cannot fit inside the hero-and-first-tap budget, drop the effect -- not the budget.
+- Real images beat illustrations, but they must be sized and lazy
+  loaded below the fold, with width and height set so nothing jumps.
+- Send every booking or enquiry to a spreadsheet via the
+  Google Sheets connector, one row per enquiry with a timestamp.
+  This owner has never had a website and will not log into an
+  admin panel to check messages. A spreadsheet is a tool they already know.
+- Put a WhatsApp click-to-chat link next to any form. In this market that is
+  how people actually get in touch, and a form alone will lose enquiries.

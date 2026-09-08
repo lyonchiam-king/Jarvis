@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+/*
+ * Below 16px, Safari zooms the page when a field takes focus -- and it does
+ * not zoom back. Tapping the message box to fix a typo left the whole
+ * dashboard magnified with no obvious way out, which is why this rule exists
+ * at all. It is `!important` because the utility classes on these fields
+ * (`text-xs`, `text-sm`) are more specific than a bare element selector and
+ * would otherwise win, one field at a time, for ever.
+ */
+@media (max-width: 640px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* An iPhone's home indicator and notch overlap a full-bleed layout. */
+body {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}

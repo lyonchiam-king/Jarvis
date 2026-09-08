@@ -131,6 +131,20 @@ outreach:
   # a real postal address is a legal requirement for commercial email under
   # CAN-SPAM, GDPR/ePrivacy, and Australia's Spam Act.
   postal_address: "COAI, Level 16, Hunza Tower, Penang, Malaysia"
+  # The other services offered, appended verbatim to the end of every message
+  # -- email and WhatsApp alike. Written here rather than left to the model:
+  # it is the same list for every business, and a model told to mention them
+  # reliably rewords one, drops one, or invents a fourth that nobody sells.
+  #
+  # Leave `services` empty and the message ends as it always did.
+  # Framed as "as well as", not "instead of": the site is one way in, these
+  # are the others, and a reader who likes the site should still see them.
+  services_intro: "Whether or not the site is right for you, these are the other ways I get businesses in front of customers:"
+  services:
+    - "Google Business Profile optimisation, so you show up in Maps when someone nearby searches"
+    - "Meta ads on Facebook and Instagram, targeted to your area"
+    - "Google ads, so you appear the moment someone searches for what you do"
+
   # Places rarely returns email for these businesses, so WhatsApp leads.
   channel_priority:
     - whatsapp
@@ -172,6 +186,16 @@ lovable:
   auto_approve: false
 
 build:
+  # How much art direction every site prompt carries.
+  #   showcase  the craft rules as well -- type as a scale, layout that
+  #             breaks the centred column, colour ratio, motion given in
+  #             real durations. The default.
+  #   standard  the shorter prompt, as it was before the craft rules existed.
+  # It changes only the prompt handed to the site builder, never the research,
+  # so it costs nothing per lead either way. There is a tick box for it in
+  # step 3 of the dashboard.
+  design_level: showcase
+
   # Publishing to Cloudflare Pages. The sites are built in Google AI Studio
   # and pushed from there into a GitHub repository; point this at your local
   # clone of it, with one folder per business. Jarvis only ever reads it.

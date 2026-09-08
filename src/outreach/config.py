@@ -145,6 +145,21 @@ class OutreachSettings:
     # Required in every commercial email under CAN-SPAM, GDPR/ePrivacy, and
     # Australia's Spam Act. Appended to the footer of every draft.
     postal_address: str = ""
+    # The other services on offer, appended verbatim to every message.
+    #
+    # Assembled here rather than asked of the model for the same reason the
+    # compliance footer is: a model told to "mention the other services" will
+    # paraphrase one, drop one, or invent a fourth, and none of those is a
+    # thing anyone actually sells. It is also the same three lines for every
+    # lead, so paying a model to restate them per business buys nothing but a
+    # chance to get them wrong.
+    #
+    # Empty by default in code -- the campaign file supplies the real list.
+    # A campaign that names none simply gets the message as it was.
+    services: tuple[str, ...] = ()
+    # The one line that introduces the list. Without it the bullets arrive
+    # with no explanation, which reads as a price list rather than an offer.
+    services_intro: str = ""
     # Appended verbatim so the recipient always has a way out.
     opt_out_note: str = (
         "If you'd rather not hear from me again, just reply "
@@ -196,6 +211,13 @@ BUILD_TARGETS: frozenset[str] = frozenset({"lovable", "firebase"})
 # vs. a self-hosted Firebase page; the image provider is orthogonal to that.
 IMAGE_PROVIDERS: frozenset[str] = frozenset({"gemini", "vertex"})
 
+# How much art direction the site prompt carries. "showcase" adds the craft
+# blocks -- type as a scale, layout that breaks the centred column, colour
+# ratio, motion in numbers. Both levels produce the same spec: this changes
+# only the prompt handed to the site builder, so no research model sees the
+# extra text and a weaker one is not penalised for it.
+DESIGN_LEVELS: frozenset[str] = frozenset({"standard", "showcase"})
+
 
 @dataclass(frozen=True)
 class BuildSettings:
@@ -207,6 +229,9 @@ class BuildSettings:
     """
 
     target: str = "lovable"          # "lovable" | "firebase"
+    # "standard" | "showcase" -- see DESIGN_LEVELS. A campaign-level craft
+    # constant, like target above, not a per-business schema field.
+    design_level: str = "showcase"
     # The display label + button target for whatever tool Lyon pastes prompts
     # into. A campaign-level craft constant, not a per-business schema field
     # (per CLAUDE.md: craft rules are template text). Defaults match the tool
@@ -293,6 +318,12 @@ class Secrets:
     # which needs none.
     llm_api_key: str = ""
     gemini_api_key: str = ""
+    # Guards the dashboard. Empty means no login, which is safe only while
+    # the dashboard is bound to localhost -- nothing else can reach it. It is
+    # REQUIRED before the dashboard may bind to any other address: the page
+    # can spend money, message real businesses and read the Sheet, and on a
+    # cafe or hotel network everyone in the building is on that network.
+    dashboard_password: str = ""
     # Cloudflare Pages. The token is a secret and lives in .env; the
     # project and the repo folder are settings and live in the campaign.
     cloudflare_api_token: str = ""
@@ -336,6 +367,58 @@ def _require(mapping: dict, key: str, where: str) -> object:
     return mapping[key]
 
 
+def _merge_settings(template: dict, local: dict) -> dict:
+    """The local file wins, key by key, but never by omission.
+
+    Merged one level at a time so a section the user has edited keeps every
+    other key in it. Lists are replaced wholesale rather than concatenated:
+    a user who trimmed their search areas to three meant three, not three
+    plus the twelve that shipped.
+    """
+    merged = dict(template)
+    for key, value in local.items():
+        if (
+            isinstance(value, dict)
+            and isinstance(merged.get(key), dict)
+        ):
+            merged[key] = _merge_settings(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _inherit_from_template(path: Path, raw: dict) -> dict:
+    """Fill a `*.local.yaml` fork's gaps from the tracked file beside it.
+
+    The fork is copied from the template once and never again, so every
+    setting added to the template afterwards was invisible to anyone who had
+    already saved a setting from the dashboard -- their file simply had no
+    such key, and they got the code default instead. That is fine where the
+    default is the intended value, and silently wrong where it is not: the
+    outreach services list defaults to empty on purpose, so a pull that added
+    three services to the template changed nothing at all for the person who
+    most wanted them.
+
+    A key the fork carries always wins, including one deliberately set empty.
+    Only keys it has never heard of come from the template.
+    """
+    if not path.name.endswith(".local.yaml"):
+        return raw
+    template = path.with_name(path.name.removesuffix(".local.yaml") + ".yaml")
+    if not template.exists():
+        return raw
+    try:
+        base = yaml.safe_load(template.read_text()) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        # Never fatal: the fork alone is a working config, and a broken
+        # template must not take down someone whose own file is fine.
+        log.warning("Could not read %s to fill in defaults: %s", template, exc)
+        return raw
+    if not isinstance(base, dict):
+        return raw
+    return _merge_settings(base, raw)
+
+
 def load_config(
     config_path: str | os.PathLike[str] | None = None,
     *,
@@ -363,12 +446,16 @@ def load_config(
     if not path.exists() and not config_path and from_env:
         fallback = Path(DEFAULT_CAMPAIGN)
         if fallback.exists():
+            # Named with the value as the environment carried it, not as a
+            # Path renders it: the user will search .env for what they typed,
+            # and on Windows a normalised path shows backslashes the message
+            # then never matches.
             log.warning(
                 "CAMPAIGN_CONFIG points at %s, which does not exist. Falling "
                 "back to %s -- any settings saved from the dashboard are not "
                 "being applied. Save one again to recreate the file, or "
                 "remove CAMPAIGN_CONFIG from .env.",
-                path,
+                from_env,
                 fallback,
             )
             path = fallback
@@ -382,6 +469,8 @@ def load_config(
     raw = yaml.safe_load(path.read_text()) or {}
     if not isinstance(raw, dict):
         raise ConfigError(f"{path} must contain a YAML mapping at the top level")
+
+    raw = _inherit_from_template(path, raw)
 
     campaign_raw = raw.get("campaign") or {}
     where = f"{path} -> campaign"
@@ -486,12 +575,37 @@ def load_config(
 
     o = raw.get("outreach") or {}
     wa = o.get("whatsapp") or {}
+    # A string here is almost always someone writing one service on one line
+    # rather than a list. Taking it as a one-item list is friendlier than
+    # iterating its characters, which is what a bare tuple() would do.
+    raw_services = o.get("services") or []
+    if isinstance(raw_services, str):
+        raw_services = [raw_services]
+    if not isinstance(raw_services, list):
+        raise ConfigError(
+            "outreach.services must be a list of lines, one service each."
+        )
+    services = tuple(
+        str(line).strip() for line in raw_services if str(line).strip()
+    )
+    if services and not str(o.get("services_intro", "")).strip():
+        raise ConfigError(
+            "outreach.services is set but outreach.services_intro is empty.\n"
+            "The list needs a line introducing it, or the bullets arrive with "
+            "no explanation and read as a price list.\n"
+            "Add something like:\n"
+            '    services_intro: "If the site is not what you need, these are '
+            'the other ways I help:"'
+        )
+
     outreach = OutreachSettings(
         sender_name=str(o.get("sender_name", "")),
         sender_title=str(o.get("sender_title", "")),
         company=str(o.get("company", "")),
         channel_priority=tuple(o.get("channel_priority") or ("whatsapp", "email")),
         postal_address=str(o.get("postal_address", "")),
+        services=services,
+        services_intro=str(o.get("services_intro", "")).strip(),
         require_site=bool(o.get("require_site", False)),
         opt_out_note=str(
             o.get("opt_out_note")
@@ -517,6 +631,13 @@ def load_config(
         raise ConfigError(
             f"build.target must be one of {sorted(BUILD_TARGETS)}, got "
             f"{build_target!r}"
+        )
+    design_level = str(b.get("design_level", "showcase")).strip().lower()
+    if design_level not in DESIGN_LEVELS:
+        raise ConfigError(
+            f"build.design_level must be one of {sorted(DESIGN_LEVELS)}, got "
+            f"{design_level!r}. Use 'showcase' for the full art direction, or "
+            f"'standard' for the shorter prompt."
         )
     # Display label + button target for the site-builder tool. The name is
     # required (a blank button label is a broken UI); the URL is allowed to be
@@ -576,6 +697,7 @@ def load_config(
 
     build = BuildSettings(
         target=build_target,
+        design_level=design_level,
         site_builder_name=site_builder_name,
         site_builder_url=site_builder_url,
         enabled=bool(b.get("enabled", False)),
@@ -628,6 +750,7 @@ def load_config(
         ),
         token_file=Path(os.getenv("GOOGLE_TOKEN_FILE", "credentials/token.json")),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+        dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
         llm_api_key=os.getenv(
             PROVIDER_KEY_ENV.get(provider, "ANTHROPIC_API_KEY"), ""
         ),

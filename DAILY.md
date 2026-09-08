@@ -70,6 +70,91 @@ build if anyone ever changes that binding.
 
 ---
 
+## Using it from your phone
+
+The dashboard can run as an app on your iPhone. Two things to understand
+first.
+
+**Your PC is still doing the work.** The phone is a screen onto it. Discovery,
+research, building, the WhatsApp relay — all of that runs on the computer, so
+`Dashboard.bat` has to be running and the machine awake. Close the lid and the
+phone shows nothing.
+
+**It needs a password before it will leave your machine.** Until now the only
+thing protecting the dashboard was that nothing could reach it. It can spend
+your API credits and message real businesses, so on a shared wifi it must not
+be open. Add a line to your `.env`:
+
+    DASHBOARD_PASSWORD=something-only-you-know
+
+Then start `Dashboard.bat`. **The black window now tells you which state you
+are in.** Either:
+
+    On your phone, on the same wifi, open:
+        http://192.168.1.42:8765
+
+— with your actual address, no `ipconfig` needed. Or:
+
+    Phone access is OFF: no password is set.
+
+If you see the second one, the password line did not take. Check there is no
+space around the `=`.
+
+**When Windows asks about the firewall, tick Private networks and allow it.**
+The phone cannot connect otherwise, and this is the most common reason a
+correct setup still fails.
+
+**Then, on your phone:**
+
+1. Same wifi as the PC. Open the address the window printed.
+2. Enter the password.
+3. Share button → **Add to Home Screen**.
+
+It now has its own icon and opens full-screen with no Safari bar. Approving
+briefs and sending messages work exactly as they do on the desktop.
+
+**Away from home?** Install [Tailscale](https://tailscale.com) on both the PC
+and the phone and sign in with the same account. They join a private network
+of your own and the same address works from anywhere, with nothing exposed to
+the internet. Free for personal use.
+
+Never put this on a public address or forward the port on your router. The
+password is the only thing between the page and whoever finds it.
+
+## Giving it to someone else
+
+Everything in this tool is per-person. Someone you hand it to runs their own
+copy end to end: their Google account, their Sheet, their keys, their
+WhatsApp. Nothing is shared, and nothing of theirs comes back to you.
+
+Send them the folder (or the repository) and `SETUP.md`. **Never send your
+`.env`, your `credentials/` folder, or your `.whatsapp-session/` folder** —
+those are your keys, your Google account and your WhatsApp, and anyone
+holding them can spend your money and message as you.
+
+On their first run the dashboard opens onto a short setup list instead of the
+usual numbers:
+
+1. **Their own Google Sheet.** They press **Create my Google Sheet**, sign in
+   with their own Google account, and the spreadsheet is created in *their*
+   Drive with all five tabs already set up. The ID is saved for them — no
+   spreadsheet to make by hand, no ID to copy out of a web address. If they
+   close the Google window without finishing, nothing is created and they can
+   just press it again.
+2. **Their own keys.** Pasted into the Settings and Model panels on the page.
+3. **Their own WhatsApp.** Section 4 shows a QR code; they scan it from
+   WhatsApp → Linked devices, on their own phone, once.
+
+To change which phone is linked — yours or theirs — press **Log out /
+switch account** at the right of the connection line in section 4. It
+unlinks the account, forgets the saved session, and shows a fresh QR a few
+seconds later. Messages already sent stay in the phone; only the link goes.
+
+The button refuses to run a second time once a Sheet is set up — a second,
+empty Sheet would make every lead already gathered look lost.
+
+---
+
 ## Your first test run
 
 About twenty minutes, and it costs roughly a dollar. Do it once before you
@@ -498,6 +583,60 @@ So the debugging loop is:
 
 ---
 
+## The other services on every message
+
+Every message now ends with the other things you offer, under the website
+link:
+
+> Whether or not the site is right for you, these are the other ways I get
+> businesses in front of customers:
+> • Google Business Profile optimisation, so you show up in Maps when someone
+>   nearby searches
+> • Meta ads on Facebook and Instagram, targeted to your area
+> • Google ads, so you appear the moment someone searches for what you do
+
+The message opens on the gap rather than a compliment — the people who found
+them already rate them highly, and the people who have not cannot find them at
+all — then the site as the way to close it, then plainly what happens if they
+like it and if they do not. It ends on getting found being the wider job, which
+is what the list follows on from: the message finishes on their growth rather
+than on a yes-or-no about one website.
+
+> **If you pulled and the services did not appear:** your settings live in
+> `penang-my.local.yaml`, which was copied from the shipped file once, the
+> first time you saved a setting from the dashboard. Anything added to the
+> shipped file after that never reached your copy. That is fixed — your copy
+> now inherits any setting it does not mention — so a pull is enough.
+
+**Edit the wording** in the box above step 4, *Other services listed at the
+end of every message* — one service per line, plus the line that introduces
+them. It is added word for word, so what you type is what they read; the model
+never rewrites it. Clear the box and messages end as they did before.
+
+Only new drafts pick it up. To add it to messages already written, press
+**Draft messages** again for those leads, or **Rewrite** on a single one in
+the send list.
+
+## How much design the prompts ask for
+
+Step 3 has a tick box, **Full art direction**. It is on.
+
+With it on, every site prompt carries the craft rules as well as the brief:
+type as one scale rather than picked sizes, section widths that vary instead
+of a stack of identical centred boxes, a colour ratio that keeps the accent
+for the booking button, and motion given in real durations rather than the
+word "slow". It also tells the builder not to ship the component library's
+default look, which is most of why generated pages recognisably look
+generated.
+
+It changes only the prompt you paste. The research is untouched, so it costs
+nothing per lead and you can turn it on and off freely.
+
+Turn it off if the pages come back worse — a longer prompt is not always a
+better one, and you are the judge of that. To apply a change to briefs that
+already exist, run **site-brief --rewrite**; a normal run skips anything
+already briefed, by design.
+
 ## Where tomorrow's 60 come from
 
 Worth understanding, because it's the one thing that will eventually stop the
@@ -579,6 +718,108 @@ you cannot double-charge yourself or double-message anyone.
 ---
 
 ## When something goes wrong
+
+### "Waiting for this message. This may take a while."
+
+If messages you sent show this in your own WhatsApp, it is not your account
+and not the recipient — it is the relay, and it is fixed as of this version.
+
+WhatsApp encrypts separately for every device. When a device cannot decrypt
+something, it asks the sender for that message again. The relay used to throw
+the message away the moment it went out, so it had nothing to answer with, and
+the message stayed stuck for ever — on the recipient's phone as much as yours.
+
+**Update, then restart the relay window** (close it and run `Dashboard.bat`
+again). New messages will be readable. The four already stuck cannot be
+recovered; re-send those.
+
+### A message you do not want to send
+
+Every message in the send list has **Not this one** next to Send, and next to
+Retry if it failed. It takes that business off the list without sending
+anything.
+
+It is not a disqualification — the lead keeps its research, its site and its
+written message. The row moves down to the list at the bottom marked
+*Skipped*, and **Send again** there puts it straight back. That is why it does
+not stop to ask.
+
+### "Sent, but it stayed in the list"
+
+Fixed. WhatsApp often does not confirm delivery straight away — a first
+message to a new contact especially — and the relay reports that honestly as
+**unconfirmed**. The send list used to treat unconfirmed as "not sent yet", so
+the business stayed at the top of the queue looking untouched. Sending again
+from there would have messaged them twice.
+
+An unconfirmed message now moves down to the sent list like any other, marked
+so you can see it was not acknowledged. If it really did not arrive, use
+**Send again**.
+
+### A message says sent but never arrived
+
+At the bottom of section 4, every drafted message you cannot send from there
+is listed with the reason. The ones marked **Sent** now carry a **Send again**
+button: press it and that business drops back into the send list above, with
+the same message and the same screenshot, ready to send.
+
+Nothing is regenerated, so it costs nothing. Use it whenever WhatsApp claimed
+a message went out and it did not actually land.
+
+### Clearing out the leads with no WhatsApp
+
+Open **Not on WhatsApp** in the WhatsApp check panel. Each row has a
+**Remove** button, which disqualifies that business for good — it will never
+be researched, briefed or built.
+
+Two things to know. It asks once before acting, because nothing brings a
+disqualified lead back. And a row marked **has email** can still be reached
+that way, so removing it gives up a lead you could have contacted; the button
+says so when that is the case.
+
+### It connects, then drops, over and over
+
+Almost always two relays running at once. WhatsApp allows one connection per
+linked device, so a second copy does not sit quietly beside the first — they
+take the connection from each other, and what you see is a relay that connects,
+works for a moment, and drops.
+
+It happened because closing the dashboard window with the X never stopped the
+relay, so every later run started another one. Both halves are fixed:
+`Dashboard.bat` now stops any old relay before starting a new one, and a relay
+that finds the port already taken stops instead of fighting.
+
+**If it is still happening,** open Task Manager, end every **Node.js** process,
+then start `Dashboard.bat` again. Those are relays left over from before this
+fix and nothing will clear them but that.
+
+`relay-log.txt` now times every connect and drop, and says how long each
+connection held. Under thirty seconds, repeatedly, is the signature of
+something else using the same linked device — a second relay, or WhatsApp Web
+open in a browser.
+
+### It says "Reconnecting..."
+
+That is the relay working its way back after the connection dropped, and it
+needs nothing from you. It retries on its own, waiting a little longer each
+time up to a minute, and the line tells you when the next attempt is due. It
+goes back to **Connected** by itself.
+
+Previously a dropped connection could leave the relay up but permanently
+stuck, saying it was not connected and failing every send until you restarted
+it. That is fixed — it now keeps trying for as long as it is running.
+
+### The relay says "not working" and nothing explains why
+
+It now writes everything it prints to **`relay-log.txt`** in your project
+folder. The relay runs in a minimised window that closes the instant it
+stops, so before this a crash left no trace at all — a relay that had died
+and one that was never started looked exactly the same from the dashboard.
+
+Open that file and read the last few lines. The connection line in section 4
+also shows the relay's own reason now, rather than "Relay not running" for
+every possible cause.
+
 
 Open **Run one step on its own** in step 1 and press **Check setup**. It tests
 every connection and says what's broken in plain English.

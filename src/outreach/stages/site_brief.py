@@ -283,6 +283,7 @@ def run(
                 # The builder is told to open these and work from what the
                 # business actually looks like, rather than from adjectives.
                 maps_url=lead.get("Maps URL", ""),
+                design_level=config.build.design_level,
             )
 
             # No build happens here, ever. A brand-new row is seeded "Pending",
@@ -416,6 +417,7 @@ def _run_rewrite(
                 social_handle=research_row.get("Social Handle", ""),
                 social_profiles=social_profiles,
                 maps_url=lead.get("Maps URL", ""),
+                design_level=config.build.design_level,
             )
 
             # Only the two fields that are actually new. Everything else --
@@ -466,18 +468,26 @@ def _run_rewrite(
 class BuildReport:
     approved: int = 0
     already_built: int = 0
+    disqualified: int = 0
     built: int = 0
     skipped: int = 0
     errors: int = 0
 
     def summary_lines(self) -> list[str]:
-        return [
+        out = [
             f"Rows marked Approved      {self.approved}",
             f"  already built           {self.already_built}  (skipped)",
+        ]
+        if self.disqualified:
+            out.append(
+                f"  lead disqualified       {self.disqualified}  (skipped)"
+            )
+        out += [
             f"Projects created          {self.built}",
             f"Skipped                   {self.skipped}",
             f"Errors logged             {self.errors}",
         ]
+        return out
 
 
 @dataclass
@@ -664,6 +674,7 @@ def generate_sites(
                 social_handle=research_row.get("Social Handle", ""),
                 social_profiles=social_profiles,
                 maps_url=lead.get("Maps URL", ""),
+                design_level=config.build.design_level,
                 target="html",
                 images=manifest_lines(images),
             )
@@ -788,6 +799,7 @@ def regenerate_one(
         social_handle=research_row.get("Social Handle", ""),
         social_profiles=social_profiles,
         maps_url=lead.get("Maps URL", ""),
+        design_level=config.build.design_level,
         target="html" if config.build.target == "firebase" else "lovable",
     )
 
@@ -823,13 +835,23 @@ def build_approved(
         return report
 
     briefs = sheets.read_rows(schema.SITE_BRIEFS)
+    leads = sheets.read_rows(schema.LEADS)
     batch_size = min(limit or config.batch_size, config.batch_size)
 
     queue: list[dict[str, str]] = []
-    for _lead_id, (_row, row) in briefs.items():
+    for lead_id, (_row, row) in briefs.items():
         if not lovable.should_build(row.get("Approval Status", "")):
             continue
         report.approved += 1
+        # A lead disqualified after its brief was approved must not get a
+        # build -- spending credits, and writing a site for someone who
+        # asked not to be contacted. generate_sites already refuses them;
+        # this is the same gate on the paid path.
+        lead_entry = leads.get(lead_id)
+        if lead_entry is not None:
+            if (lead_entry[1].get("Stage") or "").strip() == Stage.DISQUALIFIED.value:
+                report.disqualified += 1
+                continue
         if row.get("Lovable Project ID", "").strip():
             report.already_built += 1
             continue
@@ -860,7 +882,16 @@ def build_approved(
 
             project_ids[lead_id] = project.project_id
             preview_urls[lead_id] = project.preview_url
-            stage_updates[lead_id] = Stage.SITE_BUILT.value
+            # advance(), not a bare Stage value: writing SITE_BUILT flat
+            # would drag back a lead already further along, and the
+            # mid-run disqualification the gate below misses would be
+            # resurrected. Re-read the lead's stage at write time rather
+            # than trusting the snapshot the queue was built from.
+            lead_entry = leads.get(lead_id)
+            current_stage = (
+                lead_entry[1].get("Stage") if lead_entry is not None else ""
+            )
+            stage_updates[lead_id] = advance(current_stage, Stage.SITE_BUILT)
             report.built += 1
 
     if project_ids:

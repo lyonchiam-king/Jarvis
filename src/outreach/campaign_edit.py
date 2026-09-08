@@ -308,6 +308,94 @@ def rewrite_research(
     return result
 
 
+def rewrite_design_level(text: str, level: str) -> str:
+    """Set ``build.design_level``, comments intact.
+
+    Inserted when absent: the shipped campaign file predates the setting, so
+    a campaign that has never been edited has nowhere for it to go.
+    """
+    from .config import DESIGN_LEVELS
+
+    cleaned = level.strip().lower()
+    if cleaned not in DESIGN_LEVELS:
+        raise CampaignEditError(
+            f"design_level must be one of {sorted(DESIGN_LEVELS)}, got {level!r}"
+        )
+
+    lines = text.splitlines()
+    bounds = _section_bounds(lines, "build")
+    if bounds is None:
+        raise CampaignEditError(
+            "This campaign file has no top-level `build:` section."
+        )
+    start, end = bounds
+    if not _replace_scalar(lines, start, end, "design_level", cleaned):
+        lines.insert(start, f"  design_level: {_scalar(cleaned)}")
+
+    result = "\n".join(lines)
+    if text.endswith("\n"):
+        result += "\n"
+    _validate(result)
+    return result
+
+
+def rewrite_services(text: str, intro: str, services: list[str]) -> str:
+    """Set ``outreach.services_intro`` and ``outreach.services``, comments intact.
+
+    The list is replaced wholesale rather than merged: it is short, the user
+    is editing it as one block on the page, and a merge would leave a line
+    they deleted still in the file.
+    """
+    cleaned = [str(line).strip() for line in services if str(line).strip()]
+    if cleaned and not intro.strip():
+        raise CampaignEditError(
+            "The services list needs a line introducing it, or the bullets "
+            "arrive with no explanation."
+        )
+
+    lines = text.splitlines()
+    bounds = _section_bounds(lines, "outreach")
+    if bounds is None:
+        raise CampaignEditError(
+            "This campaign file has no top-level `outreach:` section."
+        )
+    start, end = bounds
+
+    # Drop the existing block first -- the key and every item under it -- so a
+    # shorter list does not leave the old tail behind.
+    kept, i = [], start
+    while i < end:
+        line = lines[i]
+        stripped = line.strip()
+        if stripped.startswith("services:") or stripped.startswith("services_intro:"):
+            i += 1
+            # Its items, if any: the indented "- " lines that follow.
+            while i < end and lines[i].strip().startswith("- "):
+                i += 1
+            continue
+        kept.append(line)
+        i += 1
+    lines = lines[:start] + kept + lines[end:]
+
+    # Written even when empty, never omitted. A `*.local.yaml` fork inherits
+    # any key it does not carry from the tracked template beside it, so a key
+    # simply deleted here would come straight back on the next load -- which
+    # would make "clear the list" mean "restore whatever shipped".
+    block = [f"  services_intro: {_scalar(intro.strip())}"]
+    if cleaned:
+        block.append("  services:")
+        block += [f"    - {_scalar(line)}" for line in cleaned]
+    else:
+        block.append("  services: []")
+    lines = lines[:start] + block + lines[start:]
+
+    result = "\n".join(lines)
+    if text.endswith("\n"):
+        result += "\n"
+    _validate(result)
+    return result
+
+
 def rewrite_outreach(text: str, *, model: str | None = None) -> str:
     """Set ``outreach.model`` -- the smaller model that writes the message.
 

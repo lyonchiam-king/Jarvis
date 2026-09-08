@@ -114,3 +114,46 @@ def test_no_variable_is_read_inside_the_block_that_sets_it():
             if depth <= 0:
                 depth = 0
                 assigned.clear()
+
+
+def test_the_launcher_stops_an_old_relay_before_starting_a_new_one():
+    """The cleanup at the end only runs when the dashboard exits normally, so
+    closing the window with the X left the relay behind -- and every later run
+    added another. Two relays sharing one WhatsApp session take the connection
+    from each other, which reads as a relay that keeps dropping."""
+    import pathlib
+
+    text = pathlib.Path("Dashboard.bat").read_text()
+    kills = [i for i, line in enumerate(text.splitlines()) if "taskkill" in line]
+    start = next(
+        i for i, line in enumerate(text.splitlines())
+        if "start \"WhatsApp Relay\"" in line
+    )
+
+    assert any(i < start for i in kills), (
+        "nothing stops a relay left over from the last run"
+    )
+    # /t or the node process survives its cmd wrapper being killed.
+    for i in kills:
+        assert "/t" in text.splitlines()[i], (
+            "taskkill without /t leaves the node process orphaned"
+        )
+
+
+def test_the_launcher_asks_for_phone_access_and_lets_python_decide():
+    """The launcher states the intent; the dashboard decides whether it is
+    safe. That check used to be a findstr regex against .env here -- and a
+    batch regex is untestable from a machine without Windows, so when it was
+    wrong it silently passed no flag: no phone access, and no clue why."""
+    import pathlib
+
+    text = pathlib.Path("Dashboard.bat").read_text()
+    commands = "\n".join(
+        line for line in text.splitlines()
+        if not line.strip().upper().startswith("REM")
+    )
+
+    assert '"%APP%" dashboard --phone' in commands
+    # No decision logic left in batch at all.
+    assert "findstr" not in commands or "DASHBOARD_PASSWORD" not in commands
+    assert "%PHONE%" not in commands

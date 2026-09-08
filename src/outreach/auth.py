@@ -18,7 +18,7 @@ from pathlib import Path
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import InstalledAppFlow, WSGITimeoutError
 
 log = logging.getLogger("outreach")
 
@@ -52,6 +52,7 @@ def get_credentials(
     *,
     scopes: list[str] | None = None,
     allow_consent: bool = True,
+    consent_timeout: int | None = None,
 ) -> Credentials:
     """Load cached credentials, refreshing or running consent as needed.
 
@@ -114,7 +115,14 @@ def get_credentials(
         flow = InstalledAppFlow.from_client_secrets_file(str(client_file), scopes)
         # port=0 picks a free localhost port; the redirect URI is registered
         # automatically for Desktop app clients.
-        creds = flow.run_local_server(port=0)
+        creds = flow.run_local_server(port=0, timeout_seconds=consent_timeout)
+    except WSGITimeoutError as exc:
+        raise AuthError(
+            "The Google sign-in was never finished, so nothing was created.\n"
+            "A browser tab should have opened asking you to choose a Google "
+            "account and allow access.\n"
+            "Press the button again, and complete it in that tab."
+        ) from exc
     except Exception as exc:  # noqa: BLE001
         raise AuthError(f"OAuth consent failed: {exc}") from exc
 

@@ -34,3 +34,19 @@ node_modules/
 # WhatsApp session credentials -- the relay persists auth state here so a
 # restart does not require re-pairing the phone. Never commit.
 .whatsapp-session/
+
+# Relay output, so a crash leaves a trace the window would have taken with it.
+relay-log.txt
+
+# The React front end's dependencies. Restored with `npm install` in
+# frontend/, and only ever needed on a machine that rebuilds the page --
+# never on Lyon's, which serves the committed build in src/outreach/web/.
+frontend/node_modules/
+
+# The unlazy working ledger and its local state. The checker writes evidence
+# into GATES.md as it runs, so a tracked copy would dirty the tree on every
+# verification -- including the gate that checks the tree is clean.
+GATES.md
+.unlazy/
+.unlazy-hook-state.json
+.claude/settings.local.json

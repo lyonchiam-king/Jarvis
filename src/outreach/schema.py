@@ -164,7 +164,11 @@ OUTREACH_LOG = Tab(
         # column index, so inserting mid-tab shifts every value in every
         # existing row (see the append-only rule in CLAUDE.md).
         Column("WhatsApp Sent At", note="ISO timestamp set by the dashboard"),
-        Column("WhatsApp Status", note="pending | sent | delivered | read | failed"),
+        Column(
+            "WhatsApp Status",
+            note="sent | unconfirmed | delivered | read | failed -- "
+            "unconfirmed means it went out and WhatsApp has not confirmed yet",
+        ),
     ),
 )
 

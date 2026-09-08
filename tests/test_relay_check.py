@@ -18,6 +18,21 @@ def source() -> str:
     return RELAY.read_text()
 
 
+def code() -> str:
+    """The relay's source with its line comments stripped.
+
+    Assertions about what the code *does* must not be satisfiable by prose:
+    a test for "maxRetries" once passed against the comment explaining why
+    Windows needs it, with the option itself deleted. Anything checking for
+    the absence of a pattern especially needs this, since the comment
+    describing a bug quotes the very line the fix removed.
+    """
+    return "\n".join(
+        line for line in RELAY.read_text().splitlines()
+        if not line.lstrip().startswith("//")
+    )
+
+
 def test_the_relay_still_parses():
     """Same guard as the dashboard page: a syntax error here is silent until
     the process refuses to start."""
@@ -142,3 +157,369 @@ def test_an_oversized_body_answers_json_not_an_html_error_page():
 
     assert "entity.too.large" in text
     assert "larger than the relay accepts" in text
+
+
+# ------------------------------------------- "Waiting for this message"
+
+
+def test_the_socket_can_answer_a_retry_receipt():
+    """The cause of "Waiting for this message. This may take a while."
+
+    WhatsApp is encrypted per device. A device that cannot decrypt a message
+    does not give up -- it sends back a retry receipt asking for that message
+    again, and Baileys answers by calling `getMessage(key)` for the original
+    content and re-encrypting it. With no `getMessage` there is nothing to
+    answer with: the retry goes unfulfilled and the message stays "Waiting
+    for this message" for ever, on the recipient's phone and on the sender's
+    own. Nothing about the send looks wrong, because encryption is not what
+    failed.
+    """
+    src = source()
+
+    assert "getMessage:" in src, (
+        "makeWASocket has no getMessage, so no retry receipt can ever be "
+        "answered and undecryptable messages stay stuck for good"
+    )
+    # And it has to read from somewhere, not be a stub returning undefined.
+    assert re.search(r"getMessage:.*sentMessages\.get", src), (
+        "getMessage must look the message up in the store"
+    )
+
+
+def test_every_sent_message_is_kept_for_a_retry():
+    """A getMessage that reads an empty store answers nothing. The content
+    has to be recorded at the moment it is sent."""
+    src = source()
+
+    assert re.search(r"rememberMessage\(\s*key\?\.id,\s*result\?\.message", src), (
+        "the send path must record what it sent, keyed by message id"
+    )
+
+
+def test_the_retry_store_is_bounded():
+    """A retry buffer, not a message archive -- this process runs for weeks."""
+    src = source()
+
+    assert "MESSAGE_STORE_MAX" in src
+    assert re.search(r"while\s*\(\s*sentMessages\.size\s*>", src), (
+        "the store must evict, or a long-running relay grows without limit"
+    )
+
+
+# ------------------------------------------------------ logout / re-pair
+
+
+def test_logout_deletes_the_saved_session():
+    """sock.logout() ends the session at WhatsApp's end and leaves the
+    credentials on disk. Skipping the delete is the classic Baileys reset
+    bug: useMultiFileAuthState reads the dead session straight back, WhatsApp
+    answers 401, and the relay reconnect-loops for ever without ever showing
+    a QR -- which looks exactly like a hung relay to whoever pressed the
+    button."""
+    src = source()
+
+    assert "async function clearSession()" in src
+    assert re.search(r"fs\.promises\.rm\(\s*AUTH_DIR", src), (
+        "the session folder must actually be deleted"
+    )
+    logout = src.split('app.post("/logout"', 1)[1]
+    assert "clearSession()" in logout, "the logout route must clear the session"
+
+
+def test_a_failed_delete_is_reported_rather_than_claimed_as_success():
+    """If the credentials survive, the relay reconnects to the same account.
+    Answering ok:true there gives the user a button that silently does
+    nothing."""
+    logout = source().split('app.post("/logout"', 1)[1]
+
+    assert "ok: false" in logout, "a failed reset must not report ok:true"
+    assert "500" in logout
+
+
+def test_a_reset_holds_off_the_reconnect_that_would_race_it():
+    """The close handler reconnects on disconnect. During a reset that would
+    rebuild the credential folder being deleted, and the relay would come
+    back paired to the account the user just asked to be rid of."""
+    src = source()
+
+    assert "let resetting = false" in src
+    assert re.search(r"if\s*\(\s*resetting\s*\)\s*return;", src), (
+        "the close handler must stand aside while a reset owns the teardown"
+    )
+
+
+def test_a_logged_out_session_is_wiped_before_reconnecting():
+    """A revoked session must be removed, not replayed.
+
+    WhatsApp answers the dead credentials with 401 before the QR flow can
+    begin, so while the stale auth folder stays on disk the relay loops
+    forever logging that it is "waiting for new QR scan" while never
+    offering one -- the dashboard shows nothing, and re-pairing is
+    impossible without a hand-wiped session directory.
+
+    The guarantee is unchanged; only the mechanism moved. The wipe used to be
+    an inline `fs.rmSync` here and is now `clearSession()`, shared with the
+    /logout route -- awaited rather than blocking the event loop, and clearing
+    the ack and retry tables alongside the credentials.
+    """
+    close = source().split('if (connection === "close")', 1)[1].split("});", 1)[0]
+
+    assert "clearSession()" in close, (
+        "the logged-out path must wipe the stale auth state before "
+        "reconnecting, or the 401 loop never offers a QR"
+    )
+
+
+# ------------------------------- the reset that logged out and then died
+
+
+def test_a_superseded_socket_can_no_longer_act():
+    """The crash behind "logged out, then no QR, then relay not working".
+
+    Sockets do not close on command. `logout()` returns before the WebSocket
+    has finished closing, so the old socket's connection.update lands *after*
+    the replacement is already connecting. It reached the live handler, was
+    read as a fresh "logged out", and deleted the credential folder the new
+    socket had just written -- whose next saveCreds then threw ENOENT out of
+    an event handler and ended the process.
+
+    Every handler now checks the generation it was built under.
+    """
+    src = source()
+
+    assert "let generation = 0" in src
+    assert "const gen = ++generation" in src, (
+        "each connect must claim a generation"
+    )
+    handlers = re.findall(r"sock\.ev\.on\(\s*\"([a-z.]+)\"", src)
+    assert set(handlers) >= {"creds.update", "connection.update", "messages.update"}
+    # Every one of them, not just the close handler: a stale creds.update
+    # writing into a deleted folder is its own crash.
+    for name in handlers:
+        block = src.split(f'sock.ev.on("{name}"', 1)[1][:400]
+        assert "gen !== generation" in block, (
+            f"the {name} handler acts on a socket that may already be replaced"
+        )
+
+
+def test_the_reset_orphans_the_old_socket_before_touching_the_disk():
+    """Bumping the generation is what makes the old socket's late close event
+    harmless. Doing it after the delete leaves the window open."""
+    route = source().split('app.post("/logout"', 1)[1]
+    bump = route.index("generation += 1")
+    assert bump < route.index("clearSession()"), (
+        "the old socket must be orphaned before the session is cleared"
+    )
+    assert bump < route.index("await dying.logout()"), (
+        "logout() emits the close event, so the bump must come first"
+    )
+
+
+def test_saving_credentials_can_never_kill_the_relay():
+    """saveCreds throws ENOENT when the folder went away underneath it, and
+    an unhandled throw inside an event handler ends the process -- the relay
+    just vanishes, which is exactly what "relay not working" was."""
+    block = source().split('sock.ev.on("creds.update"', 1)[1][:700]
+
+    assert "try {" in block and "catch" in block, (
+        "saveCreds must not be able to throw out of the handler"
+    )
+
+
+def test_the_relay_survives_an_unhandled_error():
+    """A relay that degrades beats one that disappears. The window is started
+    with `cmd /c`, so a crash closes it and takes the stack trace away; all
+    the dashboard could say afterwards was "relay not running"."""
+    src = source()
+
+    assert 'process.on("uncaughtException"' in src
+    assert 'process.on("unhandledRejection"' in src
+    # And the handler itself must not exit -- staying up is the entire point.
+    # Scoped to its own body: the listen error handler further down exits
+    # deliberately, because a relay that cannot own the port must not linger.
+    body = src.split('process.on("uncaughtException"', 1)[1].split("});", 1)[0]
+    assert "process.exit" not in body
+
+
+def test_the_reset_waits_for_the_new_socket_before_reporting_success():
+    """Answering as soon as the old session is gone is how a reset that then
+    failed to reconnect looked like success followed by a dead relay."""
+    route = source().split('app.post("/logout"', 1)[1]
+
+    assert "await connect();" in route, (
+        "the reply must mean a socket exists, not merely that the old one went"
+    )
+    assert route.index("await connect();") < route.index("ok: true")
+
+
+def test_a_reconnect_that_fails_is_reported():
+    route = source().split('app.post("/logout"', 1)[1]
+    assert "could not start a new session" in route
+
+
+def test_deleting_the_session_retries_for_windows():
+    """This runs on Windows, where a file another handle still holds gives
+    EBUSY rather than deleting -- usually released a moment later."""
+    block = source().split("async function clearSession()", 1)[1][:700]
+
+    # The option, not the word. The comment above it explains why Windows
+    # needs this and says "maxRetries" too, so a bare substring check passed
+    # with the option deleted.
+    assert re.search(r"maxRetries:\s*[1-9]", block), (
+        "a reset must not fail over a Windows file lock that clears itself"
+    )
+    assert re.search(r"retryDelay:\s*[1-9]", block)
+
+
+def test_the_relay_reports_why_it_is_unhappy():
+    """"Relay not running" describes a crash, a wrong port and a relay never
+    started identically. /status carries the reason so the page can show it."""
+    src = source()
+
+    assert "let lastError" in src
+    status = src.split('app.get("/status"', 1)[1].split("});", 1)[0]
+    assert "last_error" in status
+
+
+# --------------------------------- the relay that stopped reconnecting
+
+
+def test_the_http_server_starts_before_the_connection_is_attempted():
+    """One failed first attempt used to leave no HTTP server at all.
+
+    connect() awaits a network call, so it can reject on a patchy minute.
+    Waiting for it before app.listen meant the dashboard could not even ask
+    what was wrong, and reported the relay as not running -- a different
+    problem with a different fix.
+    """
+    src = source()
+
+    listen = src.index("app.listen(PORT")
+    assert "connect().then(" not in code(), (
+        "the port must not wait on a WhatsApp connection that may never come"
+    )
+    # And the connect happens inside the listen callback, after the port is up.
+    tail = src[listen:]
+    assert "connectSafely()" in tail
+
+
+def test_every_reconnect_path_can_survive_a_failed_attempt():
+    """`setTimeout(connect, 3000)` keeps no reference to the promise, so a
+    rejection went nowhere. With the process-level handlers swallowing it,
+    that turned into a relay that stays up and never reconnects -- answering
+    every send with "not connected" for as long as it is left running."""
+    src = source()
+
+    assert "function connectSafely()" in src
+    assert re.search(r"connect\(\)\.catch\(", src), (
+        "connectSafely must catch, or a failed attempt is the last attempt"
+    )
+    # Nothing may call connect() bare from a timer any more.
+    assert "setTimeout(connect," not in code(), (
+        "a timer calling connect() directly drops its rejection"
+    )
+
+
+def test_a_failed_attempt_schedules_the_next_one():
+    block = source().split("function connectSafely()", 1)[1][:500]
+    assert "scheduleReconnect(" in block, (
+        "a failed connect must schedule another, or the relay is done"
+    )
+
+
+def test_reconnects_back_off_but_are_capped():
+    """A relay retrying every three seconds for an hour is its own problem,
+    and one retrying every hour is no use when the wifi returns."""
+    src = source()
+
+    assert "RECONNECT_MIN_MS" in src and "RECONNECT_MAX_MS" in src
+    assert re.search(r"Math\.min\(\s*reconnectDelay \* 2,\s*RECONNECT_MAX_MS\s*\)", src)
+
+
+def test_a_successful_connection_resets_the_backoff():
+    """Otherwise one bad afternoon leaves every later blip waiting the
+    maximum, long after the connection came back."""
+    block = source().split('if (connection === "open")', 1)[1][:400]
+    assert "reconnectDelay = RECONNECT_MIN_MS" in block
+
+
+def test_only_one_reconnect_is_ever_pending():
+    """A close event and a failed attempt can both ask for one. Two timers
+    means two sockets fighting over the same account."""
+    block = source().split("function scheduleReconnect(", 1)[1][:400]
+    assert "if (reconnectTimer" in block
+
+
+def test_the_status_says_reconnecting_rather_than_dead():
+    """"Not connected" describes a passing blip and a dead relay the same
+    way, and only one of them needs the user to do anything."""
+    status = source().split('app.get("/status"', 1)[1].split("});", 1)[0]
+    assert "reconnecting" in status
+    assert "retry_in_seconds" in status
+
+
+# ------------------------- one relay, and only one, per WhatsApp session
+
+
+def test_a_second_relay_stops_instead_of_lingering():
+    """WhatsApp allows one connection per linked device, so a second relay on
+    the same .whatsapp-session/ does not sit harmlessly beside the first --
+    they take the connection from each other, and the symptom is a relay that
+    connects, works for a moment, and drops, over and over.
+
+    This is the one place where disappearing is right, and it needed saying
+    because the uncaughtException handler would otherwise keep the loser
+    alive: an EADDRINUSE thrown from listen is exactly the kind of error that
+    handler was written to swallow.
+    """
+    src = code()
+
+    assert 'server.on("error"' in src, (
+        "a failed listen goes to uncaughtException and the process lives on"
+    )
+    block = src.split('server.on("error"', 1)[1][:1200]
+    assert "EADDRINUSE" in block
+    assert "process.exit(1)" in block
+    # And it has to say which of the two relays this is, or the log reads as
+    # a crash rather than as the second copy standing down.
+    assert "already running" in block, (
+        "the message must name the cause, since the fix is to close the "
+        "other relay rather than to restart this one"
+    )
+
+
+def test_the_port_is_claimed_before_whatsapp_is_touched():
+    """The bind is the lock. Connecting first means the loser of the race has
+    already taken the device slot from the winner before it finds out."""
+    src = code()
+
+    # The startup block only, not the first `connectSafely()` in the file --
+    # scheduleReconnect contains one too, and it is declared earlier.
+    startup = src[src.index("app.listen(PORT"):]
+    listen_body = startup[:startup.index("});")]
+    assert "connectSafely();" in listen_body, (
+        "the relay must own the port before it opens a WhatsApp session"
+    )
+
+
+def test_connection_transitions_are_timestamped():
+    """A relay that connects and drops repeatedly is only diagnosable from
+    the pattern -- how long it held, and how often."""
+    src = code()
+
+    assert "function stamp(" in src
+    assert "new Date().toISOString()" in src
+    close = src.split('if (connection === "close")', 1)[1][:900]
+    assert "held" in close, "a drop must report how long the connection lasted"
+
+
+def test_a_connection_attempt_in_flight_is_distinguishable_from_a_dead_relay():
+    """Between the retry timer firing and the socket opening, connected,
+    reconnecting and resetting were all false with no error -- which the page
+    could only render as "Relay not running". A normal reconnect looked like
+    a dead relay."""
+    src = code()
+
+    assert "let connecting = false" in src
+    status = src.split('app.get("/status"', 1)[1].split("});", 1)[0]
+    assert "connecting" in status

@@ -512,15 +512,24 @@ neighbour, not a marketing department.
 Four short paragraphs, a blank line between each, and nothing else.
 
 1. HOOK -- one or two sentences that prove you looked at THEIR business \
-before you wrote. Name the specific thing: what customers keep praising, the \
-complaint that repeats in the reviews, the thing they do that nobody else \
-nearby does. This is the only sentence that decides whether the rest is read, \
-so it must be impossible to send to any other business. "I hope this finds \
-you well" and "I came across your business" are deleted unread.
+before you wrote, and that land on the gap. Name the specific thing: what \
+customers keep praising, the complaint that repeats in the reviews, the thing \
+they do that nobody else nearby does -- then the consequence, which is that \
+the people who already found them rate them highly and the people who have \
+not cannot find them at all. The specific detail is evidence, not a \
+compliment; it is there to make the next sentence about customers they are \
+missing rather than about you. This is the only sentence that decides whether \
+the rest is read, so it must be impossible to send to any other business. \
+"I hope this finds you well" and "I came across your business" are deleted \
+unread.
 
 2. SOLUTION -- what you did about it, in plain words. Not what you could do, \
 not what you offer in general: the specific thing, tied to what the hook just \
-named. One or two sentences.
+named. One or two sentences. The subject is their customers, not your work: \
+more of the people the hook just described, found by the ones who cannot find \
+them yet. The site is how you are showing that rather than describing it, so \
+say what it does for them -- never that you "built a website", which is a \
+sentence about you.
 
 3. OFFER -- the concrete thing they get, and what it costs them to look. When \
 a preview site exists, this is where the link goes, on its own line with a \
@@ -530,11 +539,20 @@ small: look at it, tell me what is wrong with it. Never a meeting.
 4. MODEL -- how this works in one sentence, so nobody has to guess what the \
 catch is. Say plainly what happens next if they like it and what happens if \
 they do not. Ending without this reads as a trick, and a small business owner \
-who suspects a trick does not reply.
+who suspects a trick does not reply. Then one clause -- no list -- saying \
+getting found is the wider job and the site is one part of it. That is what \
+the appended list of services follows on from, so without it the list arrives \
+out of nowhere; with it, the message ends on their growth rather than on a \
+yes-or-no about one website. A list of services is appended after your \
+message, worded by the sender, so writing one here duplicates it and risks \
+naming something nobody sells.
 
 Rules:
 - Open the WhatsApp message with "Hi, [your name] here," -- introduce yourself \
 by the name given in the Sender block, then straight into the hook.
+- Never list, name or number the sender's other services. They are appended \
+verbatim after your message. Naming them yourself gets one reworded, one \
+dropped, or a fourth invented that nobody sells.
 - One ask, and make it small -- a reply, not a meeting.
 - No hype, no superlatives, no "revolutionise", no exclamation marks.
 - Never claim you are an existing customer, never invent a mutual connection, \
@@ -656,7 +674,97 @@ class TargetProfile:
     # lovable, which ships under the owner's own domain once approved.
     footer_line: str = ""
     output_format_lines: tuple[str, ...] = ()
+    # The showcase craft block: typography as a scale, layout that breaks the
+    # centred column, colour ratio, and motion stated in numbers. Rendered
+    # only when design_level is "showcase". Craft rules, so template text --
+    # every business gets the same answer and none of it earns a schema field.
+    craft_lines: tuple[str, ...] = ()
+    # One line about not shipping the component library's default look. What
+    # that means differs enough per builder to live here.
+    component_line: str = ""
 
+
+# The showcase craft block. Shared between targets: type, layout, colour and
+# timing are design, not framework, and the two builders differ only in the
+# vocabulary for stating a duration. Written as fixed template text because
+# every business gets the same answer -- see the note above the DESIGN SYSTEM
+# block for why that matters.
+_CRAFT_TYPE = (
+    "TYPE AS A SYSTEM (the largest single difference between a designed page"
+    " and a generated one)",
+    "- Pick one scale and stay on it -- about 1.25 between steps on mobile,"
+    " 1.33 from the large breakpoint up. Every size on the page is a step on"
+    " that scale. A one-off font-size is the system leaking.",
+    "- Leading tightens as size grows: body around 1.6, sub-heads about 1.3,"
+    " the hero headline 1.0 to 1.1. Display type set at body leading is the"
+    " most common reason a large headline looks amateur.",
+    "- Cap the measure at 65-75 characters. A paragraph running the full width"
+    " of a desktop container is hard to read whatever the typeface.",
+    "- Tighten tracking on display sizes (around -0.02em), leave body alone,"
+    " and open it slightly on any all-caps label.",
+    "- Anything that sits in a column or changes in place -- prices, hours, a"
+    " running total -- uses tabular figures, so the digits stop jittering.",
+    "- Two families at most. Weight and size carry the hierarchy; a third"
+    " typeface is decoration.",
+)
+
+_CRAFT_LAYOUT = (
+    "LAYOUT (break the centred column -- a stack of identical centred boxes is"
+    " exactly what a generated page looks like)",
+    "- Not every section shares one container width. Let at least one run"
+    " full-bleed edge to edge, and at least one sit narrower than the rest."
+    " That change in width is most of what gives a page rhythm.",
+    "- Vary vertical density on purpose. A dense proof strip against a"
+    " generous hero reads as designed; the same padding on every section"
+    " reads as a template.",
+    "- Let one thing break the grid -- an image crossing a section boundary, a"
+    " heading starting left of its column. One deliberate asymmetry per page"
+    " is plenty, and it is the part people remember.",
+    "- Line up what sits side by side. Two adjacent cards whose text does not"
+    " share a baseline is the detail that reads as sloppy without anyone"
+    " being able to say why.",
+)
+
+_CRAFT_COLOUR = (
+    "COLOUR DISCIPLINE",
+    "- Roughly 60 / 30 / 10: ground, secondary surface, accent. The accent is"
+    " the smallest quantity on the page, and it is what the eye follows.",
+    "- The accent belongs to the primary action. Spend it on headings, borders,"
+    " icons and badges as well and the primary action stops standing out --"
+    " which loses the one job the page has.",
+    "- Separate surfaces with a tint or a hairline border before reaching for a"
+    " shadow. A shadow on everything is the quickest way to look generic.",
+    "- Check contrast at the sizes actually used: 4.5:1 for body, 3:1 for large"
+    " text, and 3:1 for the focus ring against the surface it sits on rather"
+    " than against the page.",
+)
+
+
+def _craft_motion(timing: str, easing: str) -> tuple[str, ...]:
+    return (
+        "MOTION, IN NUMBERS (a motion language given as an adjective becomes a"
+        " different guess in every component)",
+        "- Micro-interactions 120-200ms. Entrances and reveals 400-700ms."
+        " Past about 800ms a thing reads as broken rather than slow.",
+        f"- {easing}",
+        "- Stagger siblings 60-80ms: enough to read as a sequence, not enough"
+        " to leave the last card arriving late.",
+        "- Move a short distance, 8-24px. A card sliding half the viewport is"
+        " distracting, not expensive-looking.",
+        "- One thing moves at a time in any one area of the screen. Two"
+        " animations competing for the same attention cancel out.",
+        f"- {timing}",
+    )
+
+
+# How much art direction the prompt carries.
+#
+# "standard" is what shipped before this switch existed. "showcase" adds the
+# craft blocks -- type as a scale, layout that breaks the centred column,
+# colour ratio, motion stated in numbers. Both produce the same *spec*: this
+# only changes the prompt handed to the site builder, so no research model
+# ever sees the extra text and a weaker one is not penalised for it.
+DESIGN_LEVELS = ("standard", "showcase")
 
 TARGETS: dict[str, TargetProfile] = {
     "lovable": TargetProfile(
@@ -684,6 +792,23 @@ TARGETS: dict[str, TargetProfile] = {
             " the markup -- bg-surface, text-muted, rounded-card. Arbitrary"
             " values like p-[13px] or text-[#3a2b1f] scattered through the JSX"
             " are the design system leaking."
+        ),
+        craft_lines=_CRAFT_TYPE + ("",) + _CRAFT_LAYOUT + ("",) + _CRAFT_COLOUR
+        + ("",) + _craft_motion(
+            timing="Keep durations and easings in the Tailwind theme too, and"
+            " reuse them. A transition timed by hand in each component is the"
+            " same leak as a hand-picked colour.",
+            easing="Do not ship the default ease-in-out. Entrances ease out"
+            " (quick, then settling); exits ease in. In Framer Motion that is"
+            " a spring with a little overshoot for a snappy motion_language,"
+            " or a tween on a custom cubic-bezier for a slow one -- which is"
+            " what \"weighty\" or \"snappy\" actually means in practice.",
+        ),
+        component_line=(
+            "- shadcn's defaults are recognisable on sight. Override the base"
+            " before building on it -- radius, border, ring, shadow and font"
+            " in the theme -- so a Dialog and a Button read as this business"
+            " rather than as the default theme every shadcn site ships with."
         ),
         enquiry_lines=(
             "- Send every booking or enquiry to a spreadsheet via the",
@@ -745,6 +870,24 @@ TARGETS: dict[str, TargetProfile] = {
             " --radius, --step-0 up the scale -- and use var() everywhere"
             " after it. A hex code or a raw px value further down the"
             " stylesheet is a token you forgot to name."
+        ),
+        craft_lines=_CRAFT_TYPE + ("",) + _CRAFT_LAYOUT + ("",) + _CRAFT_COLOUR
+        + ("",) + _craft_motion(
+            timing="Name the durations and easings as custom properties in the"
+            " same :root block as the colours -- --dur-fast, --dur-reveal,"
+            " --ease-out -- and use them everywhere. A duration typed by hand"
+            " into one transition is the same leak as a raw hex code.",
+            easing="Do not ship the browser default. Entrances ease out"
+            " (quick, then settling); exits ease in. cubic-bezier(.16,1,.3,1)"
+            " is a good out-curve and cubic-bezier(.7,0,.84,0) a good in-curve"
+            " -- ease-in-out on everything is what makes motion feel generic.",
+        ),
+        component_line=(
+            "- There is no component library here, so the risk is the opposite"
+            " one: shipping the browser's default look. Style every control"
+            " you use, including <dialog> and its ::backdrop, native selects"
+            " and date inputs, and the focus ring -- an unstyled form control"
+            " next to a designed page is what gives it away."
         ),
         enquiry_lines=(
             "- No backend exists for this site. Every enquiry must go through a",
@@ -817,6 +960,7 @@ def render_lovable_prompt(
     maps_url: str = "",
     target: str = "lovable",
     images: str = "",
+    design_level: str = "standard",
 ) -> str:
     """Turn the structured spec into the text you paste into Lovable.
 
@@ -840,7 +984,13 @@ def render_lovable_prompt(
         raise ValueError(
             f"Unknown build target {target!r}; expected one of {sorted(TARGETS)}"
         )
+    if design_level not in DESIGN_LEVELS:
+        raise ValueError(
+            f"Unknown design level {design_level!r}; expected one of "
+            f"{sorted(DESIGN_LEVELS)}"
+        )
     profile = TARGETS[target]
+    showcase = design_level == "showcase"
 
     where = f" in {location}" if location else ""
     pages = "\n".join(f"- {p}" for p in spec.pages) or "- Home (single page)"
@@ -986,6 +1136,12 @@ def render_lovable_prompt(
         "- One card, one badge, one button, reused. Twelve slightly different"
         " cards is what a generated page looks like; one card used twelve"
         " times is what a designed one looks like.",
+    ]
+    if showcase and profile.component_line:
+        out.append(profile.component_line)
+    if showcase and profile.craft_lines:
+        out += ["", *profile.craft_lines]
+    out += [
         "",
         "INTERACTION STATES (the cheapest quality there is -- elements with one"
         " state each are most of why a page feels dead)",
@@ -1115,7 +1271,10 @@ def render_lovable_prompt(
             *(f"- {action}" for action in spec.mobile_bar),
             "",
             "This is where most phone conversions happen. It must never cover "
-            "the last line of content -- pad the page bottom by its height.",
+            "the last line of content -- pad the page bottom by its height. "
+            "Add env(safe-area-inset-bottom) to the bar's own bottom padding: "
+            "without it the bar sits under the home indicator on every recent "
+            "iPhone, which is exactly where the thumb already is.",
         ]
 
     if contact:

@@ -55,6 +55,18 @@ understanding how it works.
 
 ---
 
+## Giving it to someone else
+
+Each person runs their own copy: their own Google project, their own Sheet,
+their own keys, their own WhatsApp. Nothing is shared and nothing is
+central -- one relay holds exactly one WhatsApp session, so a second person
+scanning would replace the first.
+
+Send them **[SETUP.md](SETUP.md)**, which is written for someone who has
+never opened a terminal. Never send them your `.env`, `credentials/` or
+`.whatsapp-session/` -- those are your keys, your Google account and your
+WhatsApp.
+
 ## Quick start
 
 Needs **Python 3.10 or newer**. macOS ships 3.9 — if that's what you have,
@@ -96,7 +108,8 @@ Either way, your prompt should gain a `(.venv)` prefix. Then, in order:
 ```bash
 outreach preflight            # checks key, billing, OAuth, Sheet access
 outreach init-sheet           # creates the spreadsheet, prints SHEET_ID
-# paste SHEET_ID into .env
+# paste SHEET_ID into .env    # (or press "Create my Google Sheet" in the
+                              #  dashboard, which does both for you)
 
 outreach run discovery --dry-run   # see what you'd get, write nothing
 outreach run discovery             # write to the Sheet

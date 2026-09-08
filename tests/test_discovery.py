@@ -190,6 +190,29 @@ def test_refresh_does_not_regress_an_advanced_lead():
     assert sheets.existing["a"]["Discovered At"] == "2026-01-01 00:00:00Z"
 
 
+def test_refresh_preserves_the_whatsapp_verdict():
+    """A refresh rewrites the whole automated row, so anything it did not
+    carry across was blanked. That used to throw away the reachability
+    answer someone had already paid a lookup for: research re-ran the check,
+    or the draft held the lead for a check that would never come."""
+    sheets = FakeSheets(
+        existing={
+            "a": {
+                "Lead ID": "a",
+                "Stage": "Researched",
+                "Business Name": "Salon A",
+                "WhatsApp Reachable": "yes",
+                "WhatsApp Checked At": "2026-08-01 00:00:00Z",
+            }
+        }
+    )
+    discovery.run(config(), FakePlaces([place("a", "Salon A Renamed")]), sheets,
+                  refresh=True)
+
+    assert sheets.existing["a"]["WhatsApp Reachable"] == "yes"
+    assert sheets.existing["a"]["WhatsApp Checked At"] == "2026-08-01 00:00:00Z"
+
+
 def test_max_results_caps_the_run():
     cfg = config()
     many = [place(f"p{i}") for i in range(200)]

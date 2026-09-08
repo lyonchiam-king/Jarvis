@@ -116,24 +116,58 @@ set "RELAY_DIR=whatsapp-relay"
 REM Check for Node.js -- needed for the relay, not for the dashboard itself.
 where node >nul 2>&1
 if "%ERRORLEVEL%"=="0" (
+    REM Install the relay's dependencies on first run rather than telling
+    REM the user to type a command. "Run npm install" is a wall for anyone
+    REM who has not used a terminal, and it meant WhatsApp silently did not
+    REM work on a fresh machine.
+    if not exist "%RELAY_DIR%\node_modules" (
+        echo   WhatsApp relay: first run, installing it. This takes a minute...
+        pushd "%RELAY_DIR%"
+        call npm install --no-audit --no-fund >..\relay-install-log.txt 2>&1
+        popd
+    )
     if exist "%RELAY_DIR%\node_modules" (
+        del relay-install-log.txt >nul 2>&1
+        REM Stop any relay left over from a previous run before starting a
+        REM new one. The cleanup at the end of this file only runs when the
+        REM dashboard exits normally, so closing the window with the X left
+        REM the relay behind -- and every later run added another. Two relays
+        REM sharing one WhatsApp session take the connection from each other,
+        REM which looks like a relay that keeps dropping. /t kills the node
+        REM process as well as the cmd window wrapping it.
+        taskkill /fi "WINDOWTITLE eq WhatsApp Relay" /t /f >nul 2>&1
         echo   WhatsApp relay: starting on port %RELAY_PORT%...
-        start "WhatsApp Relay" /MIN cmd /c "node %RELAY_DIR%/server.js"
+        REM Output goes to relay-log.txt as well as the window. The window is
+        REM started with /c, so it closes the moment node exits and takes the
+        REM reason with it -- a relay that crashed and one that was never
+        REM started looked identical, and all the dashboard could say was
+        REM "relay not running". The log survives either way.
+        start "WhatsApp Relay" /MIN cmd /c "node %RELAY_DIR%/server.js > relay-log.txt 2>&1"
     ) else (
-        echo   WhatsApp relay: node_modules not found. Run:
-        echo     cd %RELAY_DIR% ^&^& npm install
+        echo   WhatsApp relay: could not install it. Details in:
+        echo     %cd%\relay-install-log.txt
+        echo   The dashboard still works - only WhatsApp sending is off.
     )
 ) else (
     echo   WhatsApp relay: Node.js not found -- install it from nodejs.org
     echo   to send WhatsApp messages from the dashboard.
 )
 
+REM ------------------------------------------------------- phone access
+REM --phone means "serve to the wifi as well, if that is safe". It is not a
+REM promise: the dashboard itself checks whether DASHBOARD_PASSWORD is set
+REM and stays on this machine when it is not, printing why.
+REM
+REM That decision used to be made here, with a findstr regex against .env --
+REM untestable from a machine without Windows, and when it was wrong it did
+REM nothing at all: no flag, no phone access, no clue. Batch asks for the
+REM feature; Python decides whether it is allowed.
 echo.
-"%APP%" dashboard
+"%APP%" dashboard --phone
 set "EXITCODE=%ERRORLEVEL%"
 
 REM Clean up the relay when the dashboard stops.
-taskkill /fi "WINDOWTITLE eq WhatsApp Relay" /f >nul 2>&1
+taskkill /fi "WINDOWTITLE eq WhatsApp Relay" /t /f >nul 2>&1
 
 echo.
 if not "%EXITCODE%"=="0" (

@@ -264,21 +264,139 @@ def test_full_run_covers_the_pipeline_in_order():
 # ---------------------------------------------------------- safety checks
 
 
-def test_dashboard_binds_to_localhost_only():
-    """It must never be reachable from the network -- it can spend money."""
+def _serve_with(monkeypatch, config, **kwargs):
+    """Call serve() with the server stubbed, and report the host it asked for.
+
+    Exercises the real function rather than parsing the source for a literal:
+    the guarantee is about what it does, and the host stopped being a
+    constant the moment a phone had to reach it.
+    """
+    from outreach import dashboard as dash
+
+    seen = {}
+
+    class FakeApp:
+        def run(self, host=None, port=None, debug=None):
+            seen["host"] = host
+            seen["port"] = port
+
+    monkeypatch.setattr(dash, "load_config", lambda *a, **k: config)
+    monkeypatch.setattr(dash, "create_app", lambda cfg: FakeApp())
+    dash.serve(open_browser=False, **kwargs)
+    return seen
+
+
+def test_the_dashboard_serves_only_this_machine_by_default(monkeypatch):
+    """It must not be reachable from the network unless asked -- it can spend
+    money and message real businesses."""
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+
+    assert _serve_with(monkeypatch, config)["host"] == "127.0.0.1"
+
+
+def test_serving_to_the_network_without_a_password_is_refused(monkeypatch):
+    """The one hard rule. On a cafe or hotel network everyone in the building
+    is on that network, and the dashboard has no other protection -- so this
+    is refused rather than warned about."""
+    from outreach.dashboard import UnsafeBinding
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, dashboard_password=""))
+
+    with pytest.raises(UnsafeBinding) as exc:
+        _serve_with(monkeypatch, config, host="0.0.0.0")
+
+    message = str(exc.value)
+    assert "DASHBOARD_PASSWORD" in message, "the message must name the fix"
+    assert ".env" in message
+
+
+def test_serving_to_the_network_is_allowed_once_a_password_is_set(monkeypatch):
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(
+        config, secrets=replace(config.secrets, dashboard_password="hunter2")
+    )
+
+    assert _serve_with(monkeypatch, config, host="0.0.0.0")["host"] == "0.0.0.0"
+
+
+def test_the_wide_address_is_named_once_and_guarded_where_it_is_used():
+    """0.0.0.0 must not be reachable by accident. It is one named constant,
+    used in one expression, and that expression requires a password."""
     source = (SRC / "dashboard.py").read_text()
-    tree = ast.parse(source)
-    hosts = [
-        kw.value.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "run"
-        for kw in node.keywords
-        if kw.arg == "host" and isinstance(kw.value, ast.Constant)
-    ]
-    assert hosts == ["127.0.0.1"], f"expected localhost only, found {hosts}"
-    assert "0.0.0.0" not in source
+
+    assert source.count('"0.0.0.0"') == 1, "the wide address is defined once"
+    assert "ALL_INTERFACES = " in source
+    # The only place it is chosen, and it cannot be chosen without a password.
+    assert "ALL_INTERFACES if (phone and has_password) else LOOPBACK" in source
+    # The CLI passes intent, never an address, so it cannot widen it alone.
+    assert "0.0.0.0" not in (SRC / "cli.py").read_text()
+
+
+def test_asking_for_phone_access_without_a_password_stays_local(monkeypatch):
+    """The failure that made this "not working": the launcher decided, got it
+    wrong, and said nothing. Asking now always produces an answer -- either
+    the network binding or a local one that explains itself."""
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, dashboard_password=""))
+
+    seen = _serve_with(monkeypatch, config, phone=True)
+
+    assert seen["host"] == "127.0.0.1", "no password means no network binding"
+
+
+def test_asking_for_phone_access_with_a_password_serves_the_network(monkeypatch):
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(
+        config, secrets=replace(config.secrets, dashboard_password="hunter2")
+    )
+
+    assert _serve_with(monkeypatch, config, phone=True)["host"] == "0.0.0.0"
+
+
+def test_the_reason_phone_access_is_off_is_printed(monkeypatch, capsys):
+    """Silence is what made the last attempt undebuggable."""
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, dashboard_password=""))
+
+    _serve_with(monkeypatch, config, phone=True)
+
+    out = capsys.readouterr().out
+    assert "Phone access is OFF" in out
+    assert "DASHBOARD_PASSWORD" in out, "the message must name the fix"
+
+
+def test_the_address_to_type_on_the_phone_is_printed(monkeypatch, capsys):
+    """So nobody has to run ipconfig and pick the right line out of it."""
+    from outreach import dashboard as dash
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(
+        config, secrets=replace(config.secrets, dashboard_password="hunter2")
+    )
+    monkeypatch.setattr(dash, "lan_address", lambda: "192.168.1.42")
+
+    _serve_with(monkeypatch, config, phone=True)
+
+    out = capsys.readouterr().out
+    assert "http://192.168.1.42:8765" in out
+    # The firewall prompt is the most common reason a correct setup fails.
+    assert "firewall" in out.lower()
+
+
+def test_a_machine_that_cannot_name_its_address_says_so(monkeypatch, capsys):
+    from outreach import dashboard as dash
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(
+        config, secrets=replace(config.secrets, dashboard_password="hunter2")
+    )
+    monkeypatch.setattr(dash, "lan_address", lambda: "")
+
+    _serve_with(monkeypatch, config, phone=True)
+
+    out = capsys.readouterr().out
+    assert "ipconfig" in out
 
 
 def test_dashboard_never_shells_out_to_a_string_command():
@@ -374,6 +492,56 @@ def test_record_build_rejects_a_non_http_url(client):
     )
     assert r.status_code == 400
     assert "http" in r.get_json()["error"]
+
+
+def _client_with_leads(rows, monkeypatch):
+    """A test client whose Sheet holds exactly these Leads rows, so a
+    record-build can be observed end to end without a real Sheet."""
+    writes = []
+
+    class FakeSheets:
+        url = "https://sheet"
+
+        def read_rows(self, tab):
+            return {rid: (i + 2, row) for i, (rid, row) in enumerate(rows)} \
+                if tab is schema.LEADS else {}
+
+        def update_column(self, tab, column, values, **k):
+            writes.append((tab, column, dict(values)))
+            return len(values)
+
+    monkeypatch.setattr(dash, "_sheets_client", lambda config: FakeSheets())
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, sheet_id="s"))
+    return create_app(config).test_client(), writes
+
+
+def test_record_build_refuses_a_disqualified_lead(monkeypatch):
+    """Recording the build anyway would drop them straight back into the
+    outreach queue with a live site behind the message -- the one outcome
+    "do not contact this business" exists to prevent."""
+    c, writes = _client_with_leads([("a", {"Lead ID": "a", "Stage": "Disqualified"})],
+                                   monkeypatch)
+
+    body = c.post(
+        "/api/record-build",
+        json={"lead_id": "a", "preview_url": "https://p/a"},
+    ).get_json()
+
+    assert "disqualified" in body["error"]
+    assert writes == [], "nothing written for a lead who asked to be left alone"
+
+
+def test_record_build_never_moves_a_lead_backwards(monkeypatch):
+    """The button lands after the message has gone out by hand sometimes; a
+    lead already at Email Drafted must not be dragged back to Site Built."""
+    c, writes = _client_with_leads([("a", {"Lead ID": "a", "Stage": "Email Drafted"})],
+                                   monkeypatch)
+
+    body = c.post("/api/record-build", json={"lead_id": "a"}).get_json()
+    assert body == {"ok": True}
+    stage_writes = [w for w in writes if w[1] == "Stage"]
+    assert stage_writes == [(schema.LEADS, "Stage", {"a": "Email Drafted"})]
 
 
 def test_build_queue_is_empty_without_a_sheet(client):
@@ -813,8 +981,13 @@ def test_a_configured_install_reports_numbers_not_a_setup_prompt(monkeypatch):
     from dataclasses import replace
 
     from outreach import dashboard as dash
+    from outreach import env_edit
 
     monkeypatch.setattr(dash, "_load_summary", lambda config: dash.Summary(total=7))
+    # The endpoint also checks the campaign's model key with is_set, which
+    # reads the real .env on this machine -- patch it so the test does not
+    # depend on what happens to be in that file.
+    monkeypatch.setattr(env_edit, "is_set", lambda path, name: True)
     config = load_config("config/campaigns/penang-my.yaml", env_file=None)
     config = replace(
         config,
@@ -1030,7 +1203,10 @@ def test_the_preview_shows_who_the_next_run_would_take():
             queued_lead("fresh", "Discovered", social=True),
         ]
     )
-    preview = queue_preview(leads, set(), set())
+    # old and new_fb have Research rows (the normal case); nobody has been
+    # briefed yet. A past-stage lead with NO output row is healed into the
+    # queue rather than skipped -- that contract lives in test_selection.py.
+    preview = queue_preview(leads, {"old", "new_fb"}, set())
 
     assert [q["name"] for q in preview["site-brief"]] == ["Biz new_fb", "Biz old"]
     assert preview["site-brief"][0]["social"] is True
@@ -1593,6 +1769,130 @@ def test_the_page_javascript_actually_parses():
         )
 
 
+def test_the_page_never_calls_an_undefined_function():
+    """node --check above catches syntax, not this. A misspelled function name
+    parses perfectly and dies only when its panel calls it -- which on this
+    page means that section sits on "Loading..." with no error the server log
+    would show. This walks the rendered script and holds every bare call
+    against the names actually defined on the page.
+
+    Deliberately approximate: strings (and the ${...} inside them) are stripped
+    first so a name in a template literal cannot lie, and anything defined is
+    collected generously. The risk this runs is a false alarm on a name it
+    could not see defined -- a fixable false positive, never a silent pass.
+    """
+    import re
+    from flask import Flask, render_template_string
+
+    from outreach.config import load_config
+    from outreach.dashboard import PAGE
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    app = Flask(__name__)
+    with app.app_context():
+        page = render_template_string(
+            PAGE,
+            campaign=config.campaign,
+            build=config.build,
+            whatsapp_enabled=config.outreach.whatsapp_enabled,
+        )
+
+    builtins = {
+        "$", "document", "window", "location", "navigator", "history",
+        "fetch", "alert", "confirm", "encodeURIComponent", "decodeURIComponent",
+        "setTimeout", "setInterval", "clearTimeout", "clearInterval",
+        "requestAnimationFrame", "parseInt", "parseFloat", "isNaN", "Number",
+        "String", "Boolean", "Object", "Array", "JSON", "Math", "Date", "Set",
+        "Map", "URL", "URLSearchParams", "URLPattern", "AbortController",
+        "FormData", "Blob", "FileReader", "Error", "TypeError", "Promise",
+        "localStorage", "sessionStorage", "structuredClone", "crypto",
+        "escape", "unescape", "Event", "CustomEvent", "HTMLElement",
+        "getComputedStyle", "matchMedia", "queueMicrotask",
+    }
+    keywords = {
+        "if", "for", "while", "switch", "catch", "return", "await", "typeof",
+        "function", "do", "else", "yield", "new", "delete", "void", "case",
+        "async",
+    }
+
+    defined = set()
+    calls = set()
+    for js in re.findall(r"<script>(.*?)</script>", page, re.S):
+        # Strip strings, comments and declarations-as-calls so only real call
+        # sites remain. Anything lost here only shrinks the check, never
+        # breaks it -- but note that stripping `${...}` also drops code inside
+        # template literals, so a helper *defined* only inside a backtick
+        # would be under-counted. The page defines none that way.
+        js = re.sub(r"`(?:\\.|[^`])*`", " ", js)
+        js = re.sub(r'"(?:\\.|[^"\\\n])*"', " ", js)
+        js = re.sub(r"'(?:\\.|[^'\\\n])*'", " ", js)
+        js = re.sub(r"//[^\n]*", " ", js)
+        js = re.sub(r"/\*.*?\*/", " ", js, flags=re.S)
+
+        defined |= set(re.findall(r"\bclass\s+([A-Za-z_$][\w$]*)\b", js))
+        defined |= set(re.findall(r"\b(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\b", js))
+        defined |= set(re.findall(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\b", js))
+        # Lowercase identifiers followed by (...) and a brace are almost
+        # always a declaration site (method shorthand, if/for/catch); count
+        # them as defined rather than chased -- over-approximating definitions
+        # is safe, under-approximating calls is not.
+        defined |= {
+            m.group(1)
+            for m in re.finditer(r"([A-Za-z_$][\w$]*)\s*\([^()]{0,200}\)\s*\{", js)
+        }
+        calls |= {
+            m.group(1)
+            for m in re.finditer(r"(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(", js)
+        }
+
+    unknown = sorted(calls - defined - builtins - keywords)
+    assert not unknown, (
+        "the page calls names nothing defines; in one script block that is "
+        f"a dead panel: {unknown}"
+    )
+
+
+def test_every_stage_button_is_gated_until_setup_finishes():
+    """A new user's first click on "Run everything" must be stopped while
+    there is no Sheet to write to, so the page names the stage buttons in
+    SETUP_LOCKED and disables them until first-run setup is done. The list is
+    hand-written, though -- a button renamed on the page without updating the
+    list silently escapes the gate. This holds both directions: every locked
+    name is a real button, and the read-only buttons stay clickable."""
+    import re
+    from flask import Flask, render_template_string
+
+    from outreach.config import load_config
+    from outreach.dashboard import PAGE
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    app = Flask(__name__)
+    with app.app_context():
+        page = render_template_string(
+            PAGE,
+            campaign=config.campaign,
+            build=config.build,
+            whatsapp_enabled=config.outreach.whatsapp_enabled,
+        )
+
+    match = re.search(r"SETUP_LOCKED = new Set\(\[([^\]]+)\]\)", page, re.S)
+    assert match, "SETUP_LOCKED is gone from the page"
+    locked = set(re.findall(r"['\"]([^'\"]+)['\"]", match.group(1)))
+
+    buttons = set(re.findall(r'data-run=["\']([^"\']+)["\']', page))
+    assert locked <= buttons, (
+        f"locked names that match no button, so the gate is dead weight: "
+        f"{sorted(locked - buttons)}"
+    )
+
+    # Reading costs nothing and needs no setup: these must never be gated.
+    unlocked = {"preview-leads", "preview-messages", "preflight", "test-model"}
+    assert unlocked <= buttons
+    assert not (locked & unlocked), (
+        f"read-only buttons gated behind setup: {sorted(locked & unlocked)}"
+    )
+
+
 class TestSharedSheetsCache:
     """The dashboard reads the same five tabs from four panels on one tick.
 
@@ -1727,6 +2027,30 @@ class TestSharedSheetsCache:
         assert runner.running is None, "run did not finish"
         assert cleared, "a finished run must drop the cached reads"
 
+    def test_a_run_starts_with_no_readable_stdin(self, monkeypatch):
+        """A subprocess that inherits this console can be asked a question
+        the page never shows: the build's y/n prompt hung a whole run for
+        ever. With stdin at the null device the CLI's confirm helper sees no
+        terminal and skips instead of waiting for an answer nobody can give."""
+        captured = {}
+
+        def fake_popen(*args, **kwargs):
+            captured.update(kwargs)
+            return _FakePopen(*args, **kwargs)
+
+        monkeypatch.setattr(dash, "_invalidate_sheets_cache", lambda: None)
+        monkeypatch.setattr(dash.subprocess, "Popen", fake_popen)
+
+        runner = dash.Runner()
+        runner.start("draft", ["outreach-draft"])
+        for _ in range(200):
+            if runner.running is None:
+                break
+            time.sleep(0.01)
+
+        assert runner.running is None, "run did not finish"
+        assert captured["stdin"] is dash.subprocess.DEVNULL
+
 
 class _FakePopen:
     """A subprocess that prints one line and exits cleanly."""
@@ -1847,3 +2171,1124 @@ def test_the_leads_to_research_count_excludes_refused_leads(monkeypatch):
 
     # The reachable one and the unchecked one; never the refused one.
     assert summary.to_research == 2
+
+
+# ------------------------------------------- first run: their own Sheet
+
+
+def _first_run_config():
+    """A config as a brand-new user has it: signed in to nothing, no Sheet.
+
+    Category and location are pinned, not inherited from the live campaign
+    file, because the Sheet's title is built from them.
+    """
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    return replace(
+        config,
+        campaign=replace(config.campaign, category="hair salon", location="Penang"),
+        secrets=replace(config.secrets, sheet_id=""),
+    )
+
+
+class _FakeNewSheets:
+    """Stands in for SheetsClient on a Sheet that does not exist yet."""
+
+    made: list = []
+
+    def __init__(self, credentials, spreadsheet_id=""):
+        self.credentials = credentials
+        self.spreadsheet_id = spreadsheet_id
+        self.tabs = None
+
+    def create_spreadsheet(self, title):
+        self.spreadsheet_id = "new-sheet-id"
+        _FakeNewSheets.made.append(title)
+        return self.spreadsheet_id
+
+    def ensure_tabs(self, tabs):
+        self.tabs = tuple(tabs)
+        return []
+
+    @property
+    def url(self):
+        return f"https://docs.google.com/spreadsheets/d/{self.spreadsheet_id}/edit"
+
+
+@pytest.fixture
+def new_user(monkeypatch, tmp_path):
+    """The dashboard as a new user meets it, with Google and .env faked out.
+
+    The .env write is redirected into tmp_path deliberately: a test that
+    wrote SHEET_ID into the real file would break every command on the
+    machine running the suite, which is the bug conftest.py exists to catch.
+    """
+    from outreach import auth, env_edit, sheets
+
+    _FakeNewSheets.made = []
+    written = {}
+    env = tmp_path / ".env"
+
+    monkeypatch.setattr(
+        auth, "get_credentials", lambda *a, **kw: "creds-for-this-person"
+    )
+    monkeypatch.setattr(sheets, "SheetsClient", _FakeNewSheets)
+    monkeypatch.setattr(
+        env_edit, "set_key",
+        lambda path, name, value: written.__setitem__(name, (path, value)),
+    )
+    monkeypatch.delenv("SHEET_ID", raising=False)
+    monkeypatch.setattr(dash, "load_config", lambda *a, **kw: _first_run_config())
+    yield {"written": written, "env": env}
+
+
+def test_a_new_user_gets_their_own_sheet_made_for_them(new_user):
+    """Signing in is the only step; the spreadsheet and its tabs follow.
+
+    Before this, the first thing a new user had to do was create a
+    spreadsheet by hand and copy an id out of its URL.
+    """
+    client = create_app(_first_run_config()).test_client()
+
+    body = client.post("/api/create-sheet").get_json()
+
+    assert body["ok"] is True
+    assert body["url"].endswith("/new-sheet-id/edit")
+    # In their own account: the credentials the endpoint used are the ones
+    # the sign-in returned, not a shared key from anywhere.
+    assert _FakeNewSheets.made == ["Outreach -- hair salon in Penang"]
+
+
+def test_the_new_sheet_gets_every_tab_the_pipeline_writes_to(new_user):
+    """An empty spreadsheet is not a usable one -- discovery writes to Leads,
+    research to Research, and a missing tab fails mid-run."""
+    holder = {}
+    real_init = _FakeNewSheets.__init__
+
+    def capture(self, credentials, spreadsheet_id=""):
+        real_init(self, credentials, spreadsheet_id)
+        holder["client"] = self
+
+    _FakeNewSheets.__init__ = capture
+    try:
+        client = create_app(_first_run_config()).test_client()
+        client.post("/api/create-sheet")
+    finally:
+        _FakeNewSheets.__init__ = real_init
+
+    assert holder["client"].tabs == schema.ALL_TABS
+
+
+def test_the_new_sheet_id_is_saved_so_tomorrow_finds_it(new_user):
+    """Held only in memory, the Sheet would be lost the moment the dashboard
+    closed -- and the CLI would never see it at all."""
+    client = create_app(_first_run_config()).test_client()
+
+    client.post("/api/create-sheet")
+
+    assert new_user["written"]["SHEET_ID"][1] == "new-sheet-id"
+
+
+def test_a_second_press_never_makes_a_second_sheet(new_user):
+    """A new Sheet would be empty, and every lead already gathered would
+    look lost. Refuse, and say how to do it deliberately."""
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, sheet_id="already"))
+    client = create_app(config).test_client()
+
+    response = client.post("/api/create-sheet")
+
+    assert response.status_code == 400
+    assert "already" in response.get_json()["error"].lower()
+    assert _FakeNewSheets.made == []
+
+
+def test_an_abandoned_google_sign_in_is_reported_not_waited_on(new_user,
+                                                              monkeypatch):
+    """Consent opens a browser and blocks. Someone who closes that tab would
+    otherwise park this request thread on a callback that never arrives."""
+    from outreach import auth
+
+    def refuse(*a, **kw):
+        assert kw.get("consent_timeout"), "consent must be bounded here"
+        raise auth.AuthError("The Google sign-in was never finished")
+
+    monkeypatch.setattr(auth, "get_credentials", refuse)
+    client = create_app(_first_run_config()).test_client()
+
+    response = client.post("/api/create-sheet")
+
+    assert response.status_code == 400
+    assert "never finished" in response.get_json()["error"]
+    assert _FakeNewSheets.made == []
+
+
+def test_a_sheet_that_could_not_be_saved_still_tells_them_where_it_is(
+    new_user, monkeypatch
+):
+    """The spreadsheet exists by then. A bare failure message would leave an
+    orphan in their Drive and no way back to it."""
+    from outreach import env_edit
+
+    def fail(path, name, value):
+        raise env_edit.EnvEditError("Could not write .env: read-only")
+
+    monkeypatch.setattr(env_edit, "set_key", fail)
+    client = create_app(_first_run_config()).test_client()
+
+    error = client.post("/api/create-sheet").get_json()["error"]
+
+    assert "new-sheet-id" in error, "the id and URL must survive the failure"
+
+
+def test_the_first_run_card_offers_to_make_the_sheet(client):
+    """A stage Lyon cannot reach from the dashboard does not exist, and the
+    same is true of a step a new user cannot reach from the first screen."""
+    page = client.get("/").get_data(as_text=True)
+
+    assert "createSheet()" in page
+    assert "/api/create-sheet" in page
+
+
+def test_a_failed_reload_still_stops_a_second_sheet(new_user, monkeypatch):
+    """The reload after creating is allowed to fail -- the Sheet exists and
+    .env is written by then, which is what matters. But the guard must not
+    then wave a second press through and make a second, empty Sheet."""
+    monkeypatch.setattr(
+        dash, "load_config",
+        lambda *a, **kw: (_ for _ in ()).throw(OSError("campaign file vanished")),
+    )
+    app = create_app(_first_run_config()).test_client()
+
+    assert app.post("/api/create-sheet").get_json()["ok"] is True
+    second = app.post("/api/create-sheet")
+
+    assert second.status_code == 400
+    assert _FakeNewSheets.made == ["Outreach -- hair salon in Penang"]
+
+
+def test_two_presses_at_once_only_ever_make_one_sheet(new_user, monkeypatch):
+    """Flask serves these on separate threads, and the guard that refuses a
+    second Sheet is checked *before* a consent flow that blocks for minutes.
+    Two presses inside that window would both walk past it."""
+    from outreach import auth
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_consent(*a, **kw):
+        started.set()
+        release.wait(5)
+        return "creds"
+
+    monkeypatch.setattr(auth, "get_credentials", slow_consent)
+    app = create_app(_first_run_config())
+
+    first = []
+    thread = threading.Thread(
+        target=lambda: first.append(app.test_client().post("/api/create-sheet"))
+    )
+    thread.start()
+    assert started.wait(5), "the first press should have reached consent"
+
+    second = app.test_client().post("/api/create-sheet")
+    release.set()
+    thread.join(5)
+
+    assert second.status_code == 409
+    assert first[0].get_json()["ok"] is True
+    assert _FakeNewSheets.made == ["Outreach -- hair salon in Penang"]
+
+
+# ------------------------------- WhatsApp: log out and pair another phone
+
+
+def _wa_config(enabled=True):
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    return replace(
+        config,
+        outreach=replace(config.outreach, whatsapp_enabled=enabled),
+        secrets=replace(config.secrets, sheet_id="s"),
+    )
+
+
+def test_resetting_whatsapp_asks_the_relay_to_log_out(monkeypatch):
+    """The relay has had a /logout endpoint for months and nothing ever
+    called it -- no client method, no dashboard button. A relay endpoint the
+    dashboard cannot reach may as well not exist."""
+    from outreach.providers import whatsapp as wa
+
+    called = []
+
+    class FakeClient:
+        def __init__(self, port=4099):
+            called.append(port)
+
+        def logout(self):
+            return "Logged out. A new QR code will appear shortly."
+
+    monkeypatch.setattr(wa, "WhatsAppClient", FakeClient)
+    client = create_app(_wa_config()).test_client()
+
+    body = client.post("/api/whatsapp/reset").get_json()
+
+    assert body["ok"] is True
+    assert "QR" in body["note"]
+    assert called == [4099]
+
+
+def test_a_relay_that_cannot_reset_says_so_instead_of_reporting_success(
+    monkeypatch
+):
+    """If the saved session survives, the relay reconnects to the same
+    account. Reporting ok there gives the user a button that appears to work
+    and changes nothing."""
+    from outreach.providers import whatsapp as wa
+
+    class FakeClient:
+        def __init__(self, port=4099):
+            pass
+
+        def logout(self):
+            raise wa.WhatsAppError("Could not delete the saved WhatsApp session")
+
+    monkeypatch.setattr(wa, "WhatsAppClient", FakeClient)
+    client = create_app(_wa_config()).test_client()
+
+    body = client.post("/api/whatsapp/reset").get_json()
+
+    assert "ok" not in body
+    assert "Could not delete" in body["error"]
+
+
+def test_a_relay_that_is_not_running_never_crashes_the_panel(monkeypatch):
+    """Every other WhatsApp panel survives a dead relay; this one must too."""
+    from outreach.providers import whatsapp as wa
+
+    class FakeClient:
+        def __init__(self, port=4099):
+            pass
+
+        def logout(self):
+            raise OSError("connection refused")
+
+    monkeypatch.setattr(wa, "WhatsAppClient", FakeClient)
+    client = create_app(_wa_config()).test_client()
+
+    response = client.post("/api/whatsapp/reset")
+
+    assert response.status_code == 200
+    assert "OSError" in response.get_json()["error"]
+
+
+def test_reset_is_refused_when_whatsapp_is_switched_off():
+    client = create_app(_wa_config(enabled=False)).test_client()
+
+    response = client.post("/api/whatsapp/reset")
+
+    assert response.status_code == 400
+    assert "switched off" in response.get_json()["error"]
+
+
+def test_the_send_section_offers_a_way_to_pair_another_phone(client):
+    """The button has to be on the page Lyon actually uses. A reset he can
+    only reach with curl is not a reset."""
+    page = client.get("/").get_data(as_text=True)
+
+    # The status-row button specifically. "resetWhatsApp()" on its own
+    # matches the function's definition *and* the Yes-log-out button inside
+    # its own confirmation, so it passes with the real button unwired --
+    # which is exactly what it did before this assertion was tightened.
+    assert 'id="wa-reset-btn" onclick="resetWhatsApp()"' in page, (
+        "the button in the WhatsApp panel must call the reset"
+    )
+    assert "async function resetWhatsApp()" in page
+    assert "/api/whatsapp/reset" in page
+    assert "Log out / switch account" in page
+    # And a confirmation, because it sits beside the Send buttons.
+    assert "cancelWhatsAppReset" in page
+
+
+# ------------------------- sending one again without touching the Sheet
+
+
+class _GuardedSheets:
+    """A fake that refuses a manual-column write exactly as the real client does.
+
+    A FakeSheets more permissive than SheetsClient is how the manual-column
+    bug shipped past a green suite, so this calls the real guard rather than
+    recording every write happily.
+    """
+
+    url = "https://sheet"
+
+    def __init__(self, outreach=None, leads=None):
+        self._outreach = outreach or {}
+        self._leads = leads or {}
+        self.writes = []
+
+    def read_rows(self, tab):
+        if tab is schema.OUTREACH_LOG:
+            return self._outreach
+        if tab is schema.LEADS:
+            return self._leads
+        return {}
+
+    def update_column(self, tab, column, values, *, user_edit=False):
+        from outreach.sheets import guard_manual_column
+
+        guard_manual_column(tab, column, user_edit=user_edit)
+        self.writes.append((column, dict(values)))
+        for key, value in values.items():
+            if key in self._outreach:
+                self._outreach[key][1][column] = value
+        return len(values)
+
+
+def _sent_row(**over):
+    row = {
+        "Lead ID": "a",
+        "Business Name": "Kedai Kopi",
+        "Channel": "WhatsApp",
+        "Status": "Drafted",
+        "WhatsApp Message": "hello",
+        "Drafted At": "2026-09-01T00:00:00Z",
+        "WhatsApp Status": "sent",
+        "WhatsApp Sent At": "2026-09-02T00:00:00Z",
+    }
+    row.update(over)
+    return {"a": (2, row)}
+
+
+def _wa_client(monkeypatch, sheets):
+    monkeypatch.setattr(dash, "_sheets_client", lambda config: sheets)
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, sheet_id="s"))
+    return create_app(config).test_client()
+
+
+def test_sending_again_clears_what_was_holding_the_lead_back(monkeypatch):
+    """A message can be acknowledged by WhatsApp and never arrive -- the
+    "Waiting for this message" ones were exactly that. The Sheet then says
+    sent when it is not, and the only fix was to open the Sheet by hand."""
+    sheets = _GuardedSheets(outreach=_sent_row())
+    client = _wa_client(monkeypatch, sheets)
+
+    body = client.post("/api/whatsapp/undo-send", json={"lead_id": "a"}).get_json()
+
+    assert body["ok"] is True
+    written = {column: values["a"] for column, values in sheets.writes}
+    assert written["WhatsApp Status"] == ""
+    assert written["WhatsApp Sent At"] == ""
+
+
+def test_the_lead_comes_back_into_the_send_queue(monkeypatch):
+    """The real test of an undo: the queue offers it again afterwards.
+    Asserting the cells were cleared proves a write, not a working button."""
+    sheets = _GuardedSheets(
+        outreach=_sent_row(),
+        leads={"a": (2, {"Lead ID": "a", "Business Name": "Kedai Kopi",
+                         "Phone": "+60123456789", "WhatsApp Reachable": "yes"})},
+    )
+    client = _wa_client(monkeypatch, sheets)
+
+    before = client.get("/api/whatsapp/queue").get_json()
+    assert [e["reason"] for e in before["excluded"]] == ["already_sent"]
+    assert before["queue"] == []
+
+    client.post("/api/whatsapp/undo-send", json={"lead_id": "a"})
+    after = client.get("/api/whatsapp/queue").get_json()
+
+    assert [m["lead_id"] for m in after["queue"]] == ["a"]
+    assert after["excluded"] == []
+
+
+def test_the_message_itself_is_never_touched(monkeypatch):
+    """Pressing Send afterwards must send the same message, not a new one --
+    the draft and its screenshot cost money to produce."""
+    sheets = _GuardedSheets(outreach=_sent_row())
+    client = _wa_client(monkeypatch, sheets)
+
+    client.post("/api/whatsapp/undo-send", json={"lead_id": "a"})
+
+    touched = {column for column, _ in sheets.writes}
+    assert "WhatsApp Message" not in touched
+    assert "Drafted At" not in touched
+
+
+def test_a_hand_edited_status_is_reset_only_when_it_is_the_blocker(monkeypatch):
+    """Status is a manual column, so a stage may never write it. This is the
+    exception the rule names -- one named row the user just clicked."""
+    sheets = _GuardedSheets(outreach=_sent_row(Status="Sent"))
+    client = _wa_client(monkeypatch, sheets)
+
+    client.post("/api/whatsapp/undo-send", json={"lead_id": "a"})
+
+    assert ("Status", {"a": "Drafted"}) in sheets.writes
+
+
+def test_a_status_already_saying_drafted_is_left_alone(monkeypatch):
+    """Writing a manual column that is already right is still writing one."""
+    sheets = _GuardedSheets(outreach=_sent_row(Status="Drafted"))
+    client = _wa_client(monkeypatch, sheets)
+
+    client.post("/api/whatsapp/undo-send", json={"lead_id": "a"})
+
+    assert "Status" not in {column for column, _ in sheets.writes}
+
+
+def test_sending_again_needs_a_drafted_message_to_send(monkeypatch):
+    sheets = _GuardedSheets(outreach={})
+    client = _wa_client(monkeypatch, sheets)
+
+    body = client.post("/api/whatsapp/undo-send", json={"lead_id": "ghost"}).get_json()
+
+    assert "nothing to send again" in body["error"]
+    assert sheets.writes == []
+
+
+def test_the_send_panel_offers_send_again_only_where_it_would_work(client):
+    """No phone, no Leads row and drafted-as-email each need a different fix.
+    A button promising to undo them would simply not work."""
+    page = client.get("/").get_data(as_text=True)
+
+    assert 'onclick="undoSend(' in page
+    assert "/api/whatsapp/undo-send" in page
+    assert "const UNDOABLE = {already_sent: 1, status_not_drafted: 1}" in page
+
+
+# --------------------- removing a lead that is not on WhatsApp
+
+
+def test_the_not_on_whatsapp_list_can_disqualify_a_lead(client):
+    """Answered dead ends. Removing one stops it being researched or built."""
+    page = client.get("/").get_data(as_text=True)
+
+    assert 'onclick="dropUnreachable(' in page
+    assert "async function dropUnreachable(" in page
+    # The rejected list gets the button; the verified one must not.
+    assert "fold('Not on WhatsApp', d.rejected || [], true)" in page
+    assert "fold('On WhatsApp', d.verified || [])" in page
+
+
+def test_removing_a_lead_warns_when_it_still_has_an_email(client):
+    """A lead with no WhatsApp but a known email is still buildable -- it is
+    counted in the panel's own "can be followed up" number."""
+    page = client.get("/").get_data(as_text=True)
+
+    assert "Remove anyway?" in page
+    assert "could still be contacted that way" in page
+
+
+# ------------------------------------------- the art-direction switch
+
+
+def test_the_design_level_is_readable_from_the_page(client):
+    body = client.get("/api/design-level").get_json()
+
+    assert body["level"] in ("standard", "showcase")
+    assert body["levels"] == ["showcase", "standard"]
+
+
+def test_the_switch_is_on_the_page_lyon_uses(client):
+    """A setting he can only reach by editing YAML is a setting he does not
+    have -- the same rule that made the reachability stage a button."""
+    page = client.get("/").get_data(as_text=True)
+
+    assert 'id="design-showcase"' in page
+    assert "setDesignLevel(this.checked)" in page
+    assert "/api/design-level" in page
+
+
+def test_an_unknown_level_is_refused_without_touching_the_campaign(client):
+    response = client.post("/api/design-level", json={"level": "fancy"})
+
+    assert response.status_code == 400
+    assert "fancy" in response.get_json()["error"]
+
+
+def test_setting_the_level_forks_to_the_local_campaign(campaign_app):
+    """Never write to a git-tracked file at runtime -- the dashboard once
+    broke `git pull` on Lyon's machine doing exactly this."""
+    client, local = campaign_app
+    tracked = Path("campaign.yaml")
+    before = tracked.read_text()
+
+    body = client.post("/api/design-level", json={"level": "standard"}).get_json()
+
+    assert body["ok"] is True
+    assert tracked.read_text() == before, "the tracked campaign file was written to"
+    assert 'design_level: "standard"' in local.read_text()
+
+
+def test_the_new_level_takes_effect_without_a_restart(campaign_app):
+    client, _ = campaign_app
+
+    client.post("/api/design-level", json={"level": "standard"})
+
+    assert client.get("/api/design-level").get_json()["level"] == "standard"
+
+
+def test_saving_the_level_keeps_the_campaign_files_comments(campaign_app):
+    client, local = campaign_app
+    before = Path("campaign.yaml").read_text().count("#")
+
+    client.post("/api/design-level", json={"level": "standard"})
+
+    assert local.read_text().count("#") == before
+
+
+def test_an_unconfirmed_send_leaves_the_queue(monkeypatch):
+    """The bug that kept a sent message at the top of the send list.
+
+    WhatsApp confirms delivery late often enough -- a first message to a new
+    contact especially -- that the relay reports `unconfirmed` whenever no ack
+    arrives in its window. That means the message left. Treating it as
+    still-to-send offered the same real business the same message again, with
+    nothing on the page to say it had already gone.
+    """
+    sheets = _GuardedSheets(
+        outreach=_sent_row(**{"WhatsApp Status": "unconfirmed"}),
+        leads={"a": (2, {"Lead ID": "a", "Business Name": "Kedai Kopi",
+                         "Phone": "+60123456789", "WhatsApp Reachable": "yes"})},
+    )
+    client = _wa_client(monkeypatch, sheets)
+
+    body = client.get("/api/whatsapp/queue").get_json()
+
+    assert body["queue"] == [], "an unconfirmed message must not be offered again"
+    assert [e["reason"] for e in body["excluded"]] == ["already_sent"]
+
+
+def test_an_unconfirmed_send_is_not_counted_as_still_waiting(monkeypatch):
+    """The count at the top and the queue below must agree -- a count that
+    disagrees with the list makes the page look broken."""
+    rows = _sent_row(**{"WhatsApp Status": "unconfirmed"})
+    summary = dash.summarise({}, set(), set(), rows, {})
+
+    assert summary.whatsapp_waiting == 0
+
+
+def test_a_failed_send_is_still_offered(monkeypatch):
+    """The opposite case. `failed` means it did not go, so it stays."""
+    sheets = _GuardedSheets(
+        outreach=_sent_row(**{"WhatsApp Status": "failed"}),
+        leads={"a": (2, {"Lead ID": "a", "Business Name": "Kedai Kopi",
+                         "Phone": "+60123456789", "WhatsApp Reachable": "yes"})},
+    )
+    client = _wa_client(monkeypatch, sheets)
+
+    body = client.get("/api/whatsapp/queue").get_json()
+
+    assert [m["lead_id"] for m in body["queue"]] == ["a"]
+
+
+# --------------- the send panel's state machine, actually executed
+
+
+def _page_script() -> str:
+    """The rendered page's single <script>, ready to run under node."""
+    import re as _re
+
+    from flask import Flask, render_template_string
+
+    from outreach.dashboard import PAGE
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    app = Flask(__name__)
+    with app.app_context():
+        page = render_template_string(
+            PAGE,
+            campaign=config.campaign,
+            build=config.build,
+            whatsapp_enabled=config.outreach.whatsapp_enabled,
+        )
+    blocks = _re.findall(r"<script>(.*?)</script>", page, _re.S)
+    assert blocks, "the page has no script block"
+    return max(blocks, key=len)
+
+
+def _run_in_node(harness: str) -> str:
+    """Run the page's script under node with a stub DOM, then the harness.
+
+    Parsing the page proved it was syntactically valid while the send flow was
+    still broken. These two bugs were both about state being discarded between
+    renders, which only executing it can show.
+    """
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+
+    stub = """
+    const els = {};
+    function fakeEl() {
+      return {innerHTML: '', textContent: '', value: '', disabled: false,
+              classList: {add(){}, remove(){}}, style: {},
+              querySelector: () => fakeEl(), hidden: false};
+    }
+    globalThis.document = {
+      querySelector: () => fakeEl(),
+      querySelectorAll: () => [],
+      getElementById: () => fakeEl(),
+      addEventListener(){},
+    };
+    globalThis.window = globalThis;
+    globalThis.setInterval = () => 0;
+    globalThis.setTimeout = (f) => { return 0; };
+    // Rejects by default so the page's own start-up calls all take their
+    // error paths and bail out. Each harness installs the fetch it needs
+    // afterwards; satisfying every panel's response shape here would be a
+    // second copy of the server, wrong the moment either changed.
+    globalThis.fetch = async () => { throw new Error('no network in this test'); };
+    process.on('unhandledRejection', () => {});
+    """
+    script = _page_script()
+    # The page's own bootstrap calls would fire network stubs and redraw; the
+    # harness drives the functions directly instead.
+    src = stub + "\n" + script + "\n" + harness
+    proc = subprocess.run(
+        [node, "--input-type=module", "-e", src],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    return proc.stdout
+
+
+def test_a_refresh_between_the_two_presses_does_not_lose_the_confirmation():
+    """Issue reported from a real run: "I clicked sending twice but it still
+    didn't go out at all."
+
+    The first press arms a confirmation; the second sends. The queue is
+    rebuilt from the server every 30 seconds, and the flag used to live on
+    the queue object -- so a refresh landing between the presses discarded
+    it, and the second press only armed it again.
+    """
+    out = _run_in_node("""
+    waQueue = [{lead_id: 'a', name: 'Kedai', phone: '+60123', message: 'hi'}];
+    let sent = 0;
+    globalThis.fetch = async (url) => {
+      if (url === '/api/whatsapp/send') sent += 1;
+      return {json: async () => ({ok: true})};
+    };
+    globalThis.loadWhatsAppInline = async () => {};
+    globalThis.refresh = async () => {};
+
+    sendWhatsApp('a');                       // press one: arm
+    waQueue = [{lead_id: 'a', name: 'Kedai', phone: '+60123', message: 'hi'}];
+    sendWhatsApp('a');                       // press two: must send
+    console.log(JSON.stringify({sent}));
+    """)
+    assert '"sent":1' in out, (
+        "the second press did not send -- the confirmation was lost when the "
+        "queue was replaced"
+    )
+
+
+def test_the_sent_state_survives_the_redraw_that_follows_it():
+    """The other half of the same bug: "it doesn't move it back down to the
+    sent column". The success flag was set on a queue object the redraw had
+    already replaced, so the card rendered as unsent again."""
+    out = _run_in_node("""
+    waQueue = [{lead_id: 'a', name: 'K', phone: '+60123', message: 'hi'}];
+    globalThis.fetch = async () => ({json: async () => ({ok: true, note: ''})});
+    globalThis.loadWhatsAppInline = async () => {
+      // What the real one does: fresh objects from the server.
+      waQueue = [{lead_id: 'a', name: 'K', phone: '+60123', message: 'hi'}];
+    };
+    globalThis.refresh = async () => {};
+
+    sendWhatsApp('a');
+    sendWhatsApp('a');
+    await new Promise(r => process.nextTick(r));
+    await new Promise(r => process.nextTick(r));
+    console.log(JSON.stringify({sent: !!waUi['a'].sent}));
+    """)
+    assert '"sent":true' in out
+
+
+def test_an_edit_is_not_wiped_by_the_background_refresh():
+    """The timer stands aside while a card is being typed into. Losing an
+    edited message to a 30-second tick is silent and unrecoverable."""
+    out = _run_in_node("""
+    noteEdit('a', 'my edited message');
+    console.log(JSON.stringify({busy: waBusy(), draft: waUi['a'].draft}));
+    """)
+    assert '"busy":true' in out
+    assert "my edited message" in out
+
+
+def test_the_edited_text_is_what_gets_sent():
+    out = _run_in_node("""
+    waQueue = [{lead_id: 'a', name: 'K', phone: '+60123', message: 'original'}];
+    let body = null;
+    globalThis.fetch = async (url, opts) => {
+      body = JSON.parse(opts.body);
+      return {json: async () => ({ok: true})};
+    };
+    globalThis.loadWhatsAppInline = async () => {};
+    globalThis.refresh = async () => {};
+
+    noteEdit('a', 'edited by hand');
+    sendWhatsApp('a');
+    sendWhatsApp('a');
+    await new Promise(r => process.nextTick(r));
+    console.log(JSON.stringify({message: body.message}));
+    """)
+    assert "edited by hand" in out
+
+
+def test_a_lead_is_addressed_by_id_never_by_its_position():
+    """The queue is rebuilt on a timer and a card's index moves the moment
+    anything enters or leaves the list. An index captured when the button was
+    drawn could address a different business by the time it was pressed."""
+    out = _run_in_node("""
+    waQueue = [
+      {lead_id: 'first', name: 'A', phone: '+601', message: 'a'},
+      {lead_id: 'second', name: 'B', phone: '+602', message: 'b'},
+    ];
+    let addressed = null;
+    globalThis.fetch = async (url, opts) => {
+      addressed = JSON.parse(opts.body).lead_id;
+      return {json: async () => ({ok: true})};
+    };
+    globalThis.loadWhatsAppInline = async () => {};
+    globalThis.refresh = async () => {};
+
+    sendWhatsApp('second');                  // arm the second card
+    waQueue.shift();                         // the first one leaves the queue
+    sendWhatsApp('second');                  // still the same business
+    await new Promise(r => process.nextTick(r));
+    console.log(JSON.stringify({addressed}));
+    """)
+    assert '"addressed":"second"' in out
+
+
+def test_no_two_page_functions_share_a_name():
+    """A second function of the same name silently replaces the first.
+
+    This shipped: a `dropLead` added for the WhatsApp-check panel replaced
+    the one the lead preview's "not this one" button calls, with a different
+    signature -- so that button started passing an index where a lead ID was
+    expected. Nothing failed, because the page still parsed.
+    """
+    import re as _re
+
+    names = _re.findall(
+        r"^\s*(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(",
+        _page_script(),
+        _re.M,
+    )
+    seen, dupes = set(), set()
+    for name in names:
+        if name in seen:
+            dupes.add(name)
+        seen.add(name)
+
+    assert not dupes, f"declared more than once on the page: {sorted(dupes)}"
+
+
+# ------------------------------- not this one: skipping without sending
+
+
+def test_skipping_takes_a_message_off_the_list_without_sending(monkeypatch):
+    """"Not this one" -- the answer that previously meant either sending it
+    anyway or editing the Sheet by hand."""
+    sheets = _GuardedSheets(
+        outreach=_sent_row(**{"WhatsApp Status": "", "WhatsApp Sent At": ""}),
+        leads={"a": (2, {"Lead ID": "a", "Business Name": "Kedai Kopi",
+                         "Phone": "+60123456789", "WhatsApp Reachable": "yes"})},
+    )
+    client = _wa_client(monkeypatch, sheets)
+    assert [m["lead_id"] for m in client.get("/api/whatsapp/queue").get_json()["queue"]] == ["a"]
+
+    body = client.post("/api/whatsapp/skip", json={"lead_id": "a"}).get_json()
+
+    assert body["ok"] is True
+    after = client.get("/api/whatsapp/queue").get_json()
+    assert after["queue"] == []
+    assert [e["reason"] for e in after["excluded"]] == ["status_not_drafted"]
+
+
+def test_skipping_keeps_the_message_and_the_screenshot(monkeypatch):
+    """It is not a disqualification. Everything that cost money to produce
+    stays, so Send again is a single press rather than a rebuild."""
+    sheets = _GuardedSheets(
+        outreach=_sent_row(**{"WhatsApp Status": "", "WhatsApp Sent At": ""}),
+    )
+    client = _wa_client(monkeypatch, sheets)
+
+    client.post("/api/whatsapp/skip", json={"lead_id": "a"})
+
+    touched = {column for column, _ in sheets.writes}
+    assert touched == {"Status"}, f"skip wrote more than the Status cell: {touched}"
+    assert sheets._outreach["a"][1]["WhatsApp Message"] == "hello"
+
+
+def test_a_skipped_message_can_be_sent_again(monkeypatch):
+    """The undo is why skipping does not stop to confirm."""
+    sheets = _GuardedSheets(
+        outreach=_sent_row(**{"WhatsApp Status": "", "WhatsApp Sent At": ""}),
+        leads={"a": (2, {"Lead ID": "a", "Business Name": "Kedai Kopi",
+                         "Phone": "+60123456789", "WhatsApp Reachable": "yes"})},
+    )
+    client = _wa_client(monkeypatch, sheets)
+    client.post("/api/whatsapp/skip", json={"lead_id": "a"})
+
+    client.post("/api/whatsapp/undo-send", json={"lead_id": "a"})
+
+    queue = client.get("/api/whatsapp/queue").get_json()["queue"]
+    assert [m["lead_id"] for m in queue] == ["a"]
+
+
+def test_skipping_a_lead_with_no_draft_says_so(monkeypatch):
+    sheets = _GuardedSheets(outreach={})
+    client = _wa_client(monkeypatch, sheets)
+
+    body = client.post("/api/whatsapp/skip", json={"lead_id": "ghost"}).get_json()
+
+    assert "nothing to skip" in body["error"]
+    assert sheets.writes == []
+
+
+def test_the_skip_button_sits_beside_send_and_beside_retry(client):
+    """Both states need it: a message you do not want to send and a message
+    that just failed are the same decision."""
+    page = client.get("/").get_data(as_text=True)
+
+    assert "skipWhatsApp('${esc(m.lead_id)}')" in page
+    assert "/api/whatsapp/skip" in page
+    # Once in the failed branch, once in the normal one.
+    assert page.count('class="wa-skip"') == 2
+
+
+# ------------------------------------- the services list, from the page
+
+
+def test_the_services_are_readable_from_the_page(client):
+    body = client.get("/api/services").get_json()
+
+    assert isinstance(body["services"], list)
+    assert "intro" in body
+
+
+def test_the_page_offers_a_place_to_edit_them(client):
+    """The wording is the part worth tuning after reading a few replies, and
+    a setting reachable only by editing YAML is a setting Lyon does not have."""
+    page = client.get("/").get_data(as_text=True)
+
+    assert 'id="svc-intro"' in page
+    assert 'id="svc-list"' in page
+    assert "saveServices()" in page
+    assert "/api/services" in page
+
+
+def test_saving_services_forks_to_the_local_campaign(campaign_app):
+    client, local = campaign_app
+    tracked = Path("campaign.yaml")
+    before = tracked.read_text()
+
+    body = client.post("/api/services", json={
+        "intro": "Other ways I help:",
+        "services": ["Google Business Profile", "Marketing funnels"],
+    }).get_json()
+
+    assert body["ok"] is True
+    assert tracked.read_text() == before, "the tracked campaign file was written to"
+    saved = local.read_text()
+    assert "Other ways I help:" in saved
+    assert "Marketing funnels" in saved
+
+
+def test_the_new_services_take_effect_without_a_restart(campaign_app):
+    client, _ = campaign_app
+
+    client.post("/api/services", json={
+        "intro": "Other ways I help:", "services": ["One", "Two"],
+    })
+
+    assert client.get("/api/services").get_json()["services"] == ["One", "Two"]
+
+
+def test_services_can_be_cleared_from_the_page(campaign_app):
+    """Turning the feature off must be as reachable as turning it on."""
+    client, _ = campaign_app
+    client.post("/api/services", json={"intro": "x:", "services": ["One"]})
+
+    client.post("/api/services", json={"intro": "", "services": []})
+
+    assert client.get("/api/services").get_json()["services"] == []
+
+
+def test_a_list_with_no_intro_is_refused_and_nothing_is_written(campaign_app):
+    client, local = campaign_app
+    before = local.read_text() if local.exists() else None
+
+    body = client.post("/api/services", json={
+        "intro": "  ", "services": ["One"],
+    }).get_json()
+
+    assert "introduces" in body["error"]
+    after = local.read_text() if local.exists() else None
+    assert after == before
+
+
+def test_saving_services_keeps_the_campaign_files_comments(campaign_app):
+    client, local = campaign_app
+    before = Path("campaign.yaml").read_text().count("#")
+
+    client.post("/api/services", json={"intro": "x:", "services": ["One"]})
+
+    assert local.read_text().count("#") == before
+
+
+# ------------------------------------------------- signing in from a phone
+
+
+def _locked_app(password="hunter2"):
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(
+        config, secrets=replace(config.secrets, dashboard_password=password)
+    )
+    return create_app(config).test_client()
+
+
+def test_with_no_password_set_nothing_asks_you_to_sign_in(client):
+    """The desktop workflow is unchanged. A login nobody needs is a login
+    nobody will set a password for."""
+    assert client.get("/").status_code == 200
+    assert client.get("/api/summary").status_code == 200
+
+
+def test_a_password_locks_the_page_and_the_api():
+    app = _locked_app()
+
+    page = app.get("/")
+    api = app.get("/api/summary")
+
+    assert page.status_code == 302 and "/login" in page.headers["Location"]
+    # JSON for the API: a browser handed a login page as an API response
+    # renders raw HTML into the panel, and a phone shows nothing at all.
+    assert api.status_code == 401
+    assert "Signed out" in api.get_json()["error"]
+
+
+def test_the_right_password_gets_you_in_and_stays_in():
+    app = _locked_app()
+
+    response = app.post("/login", data={"password": "hunter2"})
+
+    assert response.status_code == 302
+    assert app.get("/").status_code == 200
+    assert app.get("/api/summary").status_code == 200
+
+
+def test_the_wrong_password_does_not():
+    app = _locked_app()
+
+    response = app.post("/login", data={"password": "wrong"})
+
+    assert response.status_code == 401
+    assert b"Wrong password" in response.data
+    assert app.get("/api/summary").status_code == 401
+
+
+def test_guessing_is_rate_limited():
+    """Anything else on the wifi could otherwise try passwords at machine
+    speed."""
+    app = _locked_app()
+
+    for _ in range(8):
+        app.post("/login", data={"password": "wrong"})
+    blocked = app.post("/login", data={"password": "wrong"})
+
+    assert b"Too many attempts" in blocked.data
+    # And the real password is refused too while the window is open, so the
+    # limit cannot be stepped around by getting it right on the ninth try.
+    assert b"Too many attempts" in app.post(
+        "/login", data={"password": "hunter2"}
+    ).data
+
+
+def test_the_login_page_never_says_what_the_password_is():
+    """Secrets are write-only -- never echoed to a page, a log or a report."""
+    app = _locked_app(password="a-very-distinctive-secret")
+
+    for response in (app.get("/login"), app.post("/login", data={"password": "x"})):
+        assert b"a-very-distinctive-secret" not in response.data
+
+
+# ------------------------------------------- installing it on a phone
+
+
+def test_the_page_can_be_installed_as_an_app(client):
+    """Add to Home Screen gives an icon that opens without Safari's chrome.
+    Without `standalone` it is a bookmark with extra steps."""
+    manifest = client.get("/manifest.webmanifest").get_json()
+
+    assert manifest["display"] == "standalone"
+    assert manifest["start_url"] == "/"
+    assert manifest["icons"], "an installed app with no icon shows a screenshot"
+
+
+def test_the_icon_is_a_real_png(client):
+    """Generated rather than shipped, so it cannot drift from the palette --
+    but it still has to be a file iOS will accept."""
+    import struct
+
+    response = client.get("/icon.png")
+
+    assert response.mimetype == "image/png"
+    assert response.data[:8] == b"\x89PNG\r\n\x1a\n"
+    width, height = struct.unpack(">II", response.data[16:24])
+    assert (width, height) == (512, 512), "iOS wants 512 for the home screen"
+
+
+def test_the_page_links_everything_ios_needs(client):
+    page = client.get("/").get_data(as_text=True)
+
+    assert 'rel="manifest"' in page
+    assert 'rel="apple-touch-icon"' in page
+    assert 'name="apple-mobile-web-app-capable" content="yes"' in page
+    # viewport-fit=cover, or the page stops short of the screen edges and the
+    # safe-area padding below has nothing to do.
+    assert "viewport-fit=cover" in page
+
+
+def test_inputs_are_big_enough_that_safari_does_not_zoom(client):
+    """Below 16px Safari zooms the page in on focus and never zooms back --
+    tapping the message box to fix a typo left it magnified."""
+    page = client.get("/").get_data(as_text=True)
+
+    phone = page.split("@media (max-width:640px)", 1)[1].split("}\n  }", 1)[0]
+    assert "font-size:16px" in phone
+    assert "input, textarea" in phone
+
+
+def test_the_phone_layout_keeps_content_out_of_the_island_and_the_indicator(client):
+    page = client.get("/").get_data(as_text=True)
+
+    phone = page.split("@media (max-width:640px)", 1)[1].split("}\n  }", 1)[0]
+    assert "env(safe-area-inset-top)" in phone
+    assert "env(safe-area-inset-bottom)" in phone
+
+
+def test_the_send_buttons_are_thumb_sized_on_a_phone(client):
+    """These send messages to real businesses. 44px is Apple's own minimum."""
+    page = client.get("/").get_data(as_text=True)
+
+    phone = page.split("@media (max-width:640px)", 1)[1].split("}\n  }", 1)[0]
+    assert "min-height:44px" in phone
+
+
+def test_the_login_page_is_phone_shaped_too():
+    """It is the first thing seen on the phone, and the only page you cannot
+    get past -- a login that zooms on focus is a bad first impression."""
+    app = _locked_app()
+
+    page = app.get("/login").get_data(as_text=True)
+
+    assert "viewport-fit=cover" in page
+    assert "font-size:16px" in page
+    assert "env(safe-area-inset-bottom)" in page

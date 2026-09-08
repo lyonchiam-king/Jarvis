@@ -386,6 +386,81 @@ def test_build_advances_the_stage_to_site_built():
     assert stage_write == [(schema.LEADS, "Stage", {"a": "Site Built"})]
 
 
+def test_a_disqualified_lead_is_not_built_even_with_an_approved_brief():
+    """The brief was approved before the owner asked to be left alone. Building
+    anyway spends credits and hands a site to someone who asked not to be
+    contacted, so the paid path has the same gate the generation path has."""
+    class Transport:
+        def create_project(self, *, name, prompt):
+            raise AssertionError("site-build must never build a disqualified lead")
+
+    sheets = FakeSheets(
+        index([lead("a", stage="Disqualified")]),
+        {},
+        briefs=index([brief_row("a", approval="Approved")]),
+    )
+    report = site_brief.build_approved(
+        config(), sheets,
+        LovableAdapter(enabled=True, confirm=lambda _m: True, transport=Transport()),
+    )
+
+    assert report.disqualified == 1
+    assert report.built == 0
+    assert sheets.column_writes == []
+
+
+def test_a_lead_that_moved_on_while_queued_is_not_dragged_back():
+    """The queue is built from a snapshot of the Sheet; a mid-run
+    disqualification (or any other progress) must not be resurrected by
+    writing "Site Built" over a stage that is already further along."""
+    class Transport:
+        def create_project(self, *, name, prompt):
+            return {"id": "proj_1", "preview_url": "https://p/1"}
+
+    sheets = FakeSheets(
+        index([lead("a", stage="Email Drafted")]),
+        {},
+        briefs=index([brief_row("a", approval="Approved")]),
+    )
+    adapter = LovableAdapter(enabled=True, confirm=lambda _m: True, transport=Transport())
+    site_brief.build_approved(config(), sheets, adapter)
+
+    stage_write = [w for w in sheets.column_writes if w[0] is schema.LEADS]
+    assert stage_write == [(schema.LEADS, "Stage", {"a": "Email Drafted"})]
+
+
+# ------------------------------------------------- the y/n prompt in a pipe
+
+
+def test_confirm_with_no_terminal_refuses_rather_than_hanging(monkeypatch):
+    """A dashboard-spawned run used to sit at an invisible y/n prompt for
+    ever: stdin was empty, so click waited on an answer nobody could give.
+    With no terminal attached the answer is now an error, not silence."""
+    import io
+
+    from outreach import cli
+
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO())
+    assert cli.sys.stdin.isatty() is False
+    with pytest.raises(LovableSkipped, match="no terminal"):
+        cli._confirm_interactive("build it?")
+
+
+def test_confirm_with_a_terminal_still_asks(monkeypatch):
+    import io
+
+    from outreach import cli
+
+    stdin = io.StringIO()
+    stdin.isatty = lambda: True
+    monkeypatch.setattr(cli.sys, "stdin", stdin)
+    asked = []
+    monkeypatch.setattr(cli.click, "confirm", lambda prompt: asked.append(prompt) or False)
+
+    assert cli._confirm_interactive("build it?") is False
+    assert asked == ["build it?"]
+
+
 # ------------------------------------------- social handle reaches the prompt
 
 
@@ -2041,3 +2116,101 @@ def test_badges_are_not_treated_as_things_to_photograph():
     subjects = [b.subject for b in image_briefs(spec, "B", "restaurant", count=0)]
 
     assert subjects == ["Claypot chicken rice"]
+
+
+# ------------------------------- the art-direction setting reaching the prompt
+
+
+def test_the_stage_honours_the_campaigns_design_level():
+    """The setting only means anything if the stage passes it on. A config
+    saying showcase and a stage rendering standard would look identical from
+    every other test -- the prompt is still valid, just not the one asked for.
+    """
+    cfg = config()
+    showcase = replace(cfg, build=replace(cfg.build, design_level="showcase"))
+    sheets = FakeSheets(index([lead("a")]), index([research_row("a")]))
+
+    site_brief.run(showcase, sheets, FakeWriter(), LovableAdapter())
+
+    prompt = sheets.upserts[0][1][0]["Lovable Prompt"]
+    assert "TYPE AS A SYSTEM" in prompt
+    assert "MOTION, IN NUMBERS" in prompt
+
+
+def test_turning_it_off_reaches_the_prompt_too():
+    cfg = config()
+    standard = replace(cfg, build=replace(cfg.build, design_level="standard"))
+    sheets = FakeSheets(index([lead("a")]), index([research_row("a")]))
+
+    site_brief.run(standard, sheets, FakeWriter(), LovableAdapter())
+
+    prompt = sheets.upserts[0][1][0]["Lovable Prompt"]
+    assert "TYPE AS A SYSTEM" not in prompt
+    # Still a complete brief, not a truncated one.
+    assert "THE ONE JOB" in prompt
+    assert "BUILD RULES" in prompt
+
+
+def test_rewrite_carries_the_design_level_too():
+    """--rewrite is how an existing backlog picks up a prompt-template change,
+    so it is the exact path that must honour a newly-changed setting. A run
+    that quietly rewrote at the old level would look like it worked."""
+    cfg = config()
+    showcase = replace(cfg, build=replace(cfg.build, design_level="showcase"))
+    sheets = FakeSheets(
+        index([lead("a", stage="Site Briefed")]),
+        index([research_row("a")]),
+        briefs=index([existing_brief("a")]),
+    )
+
+    site_brief.run(showcase, sheets, FakeWriter(), LovableAdapter(), rewrite=True)
+
+    stored = sheets.read_rows(schema.SITE_BRIEFS)["a"][1]
+    assert "TYPE AS A SYSTEM" in stored["Lovable Prompt"]
+
+
+def test_regenerating_one_brief_carries_the_design_level():
+    """The dashboard's Regenerate button. Rewriting one brief at the wrong
+    level makes it differ from its neighbours for no visible reason."""
+    cfg = config()
+    showcase = replace(cfg, build=replace(cfg.build, design_level="showcase"))
+    sheets = FakeSheets(
+        index([lead("a", stage="Site Briefed")]),
+        index([research_row("a")]),
+        briefs=index([existing_brief("a")]),
+    )
+
+    prompt = site_brief.regenerate_one(showcase, sheets, FakeWriter(), "a")
+
+    assert "TYPE AS A SYSTEM" in prompt
+
+
+def test_the_generated_page_prompt_carries_the_design_level(tmp_path):
+    """The Gemini path builds the page itself, so this is the one where the
+    art direction reaches a real file rather than a prompt to paste."""
+    from dataclasses import replace as dc_replace
+
+    cfg = config()
+    cfg = dc_replace(cfg, build=dc_replace(
+        cfg.build, output_dir=str(tmp_path), design_level="showcase",
+        images_per_page=0))
+    leads = {"a": (2, {
+        "Lead ID": "a", "Business Name": "Chulia Hair House",
+        "Stage": "Site Briefed", "Category": "hair salon",
+        "Phone": "04-262 1188", "Address": "58 Lebuh Chulia",
+        "Website URL": "", "Maps URL": "",
+    })}
+    sheets = FakeSheets(
+        leads,
+        {"a": (2, {"Lead ID": "a", "Social Profiles": ""})},
+        {"a": (2, {"Lead ID": "a", "Business Name": "Chulia Hair House",
+                   "Approval Status": "Approved", "Lovable Project ID": ""})},
+    )
+    gen = FakeGenerator(["<!doctype html><html><body>" + "x" * 5000 + "</body></html>"])
+
+    site_brief.generate_sites(cfg, sheets, FakeWriter(), gen)
+
+    assert gen.prompts, "the generator was never called"
+    assert "TYPE AS A SYSTEM" in gen.prompts[0]
+    # The html target's own component warning, not the shadcn one.
+    assert "::backdrop" in gen.prompts[0]
