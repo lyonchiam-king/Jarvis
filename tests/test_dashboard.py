@@ -374,7 +374,7 @@ def test_the_address_to_type_on_the_phone_is_printed(monkeypatch, capsys):
     config = replace(
         config, secrets=replace(config.secrets, dashboard_password="hunter2")
     )
-    monkeypatch.setattr(dash, "lan_address", lambda: "192.168.1.42")
+    monkeypatch.setattr(dash, "lan_addresses", lambda: ["192.168.1.42"])
 
     _serve_with(monkeypatch, config, phone=True)
 
@@ -391,7 +391,7 @@ def test_a_machine_that_cannot_name_its_address_says_so(monkeypatch, capsys):
     config = replace(
         config, secrets=replace(config.secrets, dashboard_password="hunter2")
     )
-    monkeypatch.setattr(dash, "lan_address", lambda: "")
+    monkeypatch.setattr(dash, "lan_addresses", lambda: [])
 
     _serve_with(monkeypatch, config, phone=True)
 

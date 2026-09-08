@@ -136,7 +136,7 @@ def test_the_phone_instructions_name_the_new_page(capsys, monkeypatch):
     """
     import outreach.dashboard as dash
 
-    monkeypatch.setattr(dash, "lan_address", lambda: "192.168.1.50")
+    monkeypatch.setattr(dash, "lan_addresses", lambda: ["192.168.1.50"])
 
     class Stop(Exception):
         pass
@@ -443,7 +443,7 @@ def test_the_link_to_the_new_page_is_a_button_not_a_footnote(client):
 # ------------------------------------------------------- phone access check
 
 
-def run_phone_check(monkeypatch, *, password=True, lan="192.168.1.50",
+def run_phone_check(monkeypatch, *, password=True, lan=("192.168.1.50",),
                     open_ports=(), platform="win32", firewall_rule=True):
     """Drive `outreach phone-check` with the machine's answers faked.
 
@@ -460,7 +460,7 @@ def run_phone_check(monkeypatch, *, password=True, lan="192.168.1.50",
     import outreach.env_edit as env_edit_mod
 
     monkeypatch.setattr(env_edit_mod, "is_set", lambda path, key: password)
-    monkeypatch.setattr(dash_mod, "lan_address", lambda: lan)
+    monkeypatch.setattr(dash_mod, "lan_addresses", lambda: list(lan))
     monkeypatch.setattr(cli_mod.sys, "platform", platform)
 
     def fake_connect(address, timeout=None):
@@ -485,6 +485,68 @@ def run_phone_check(monkeypatch, *, password=True, lan="192.168.1.50",
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: Completed())
 
     return CliRunner().invoke(cli_mod.main, ["phone-check"]).output
+
+
+def test_phone_check_offers_every_address_a_phone_might_reach(monkeypatch):
+    """One guess was the fault behind "nothing loads".
+
+    The address came from asking the routing table what reaches the
+    internet, which on a machine carrying a VPN, WSL, Docker or Hyper-V is a
+    virtual adapter no phone can talk to -- and the failure is a page that
+    never loads, identical to a blocked firewall. Every address is offered
+    now, real network cards first.
+    """
+    out = run_phone_check(
+        monkeypatch,
+        lan=("192.168.1.50", "172.28.5.1"),
+        open_ports=("127.0.0.1", "172.28.5.1", "192.168.1.50"),
+    )
+    assert "http://192.168.1.50:8765/app" in out
+    assert "http://172.28.5.1:8765/app" in out
+    assert "virtual adapter" in out
+    assert "try these on your" in out.lower()
+
+
+def test_lan_addresses_puts_real_network_cards_before_virtual_ones(monkeypatch):
+    """The ordering itself, tested on the real function.
+
+    Faking `lan_addresses` to check its own ordering would only test the
+    fake. This drives the two sources it reads instead.
+    """
+    import socket
+
+    import outreach.dashboard as dash
+
+    # What a Windows machine with WSL or Docker Desktop looks like: the
+    # route to the internet leaves through a virtual adapter, so the old
+    # single guess returned an address no phone can ever reach.
+    monkeypatch.setattr(dash, "_routed_address", lambda: "172.28.5.1")
+    monkeypatch.setattr(
+        socket, "getaddrinfo",
+        lambda *a, **k: [
+            (None, None, None, "", ("192.168.1.50", 0)),
+            (None, None, None, "", ("127.0.0.1", 0)),
+            (None, None, None, "", ("169.254.7.7", 0)),
+        ],
+    )
+
+    found = dash.lan_addresses()
+
+    assert found == ["192.168.1.50", "172.28.5.1"], found
+    # Loopback is not somewhere a phone can go, and 169.254 means DHCP
+    # never answered -- offering either wastes an attempt.
+    assert "127.0.0.1" not in found
+    assert "169.254.7.7" not in found
+
+
+def test_lan_address_still_answers_with_the_single_best_guess(monkeypatch):
+    import outreach.dashboard as dash
+
+    monkeypatch.setattr(dash, "lan_addresses", lambda: ["192.168.1.50", "172.28.5.1"])
+    assert dash.lan_address() == "192.168.1.50"
+
+    monkeypatch.setattr(dash, "lan_addresses", lambda: [])
+    assert dash.lan_address() == ""
 
 
 def test_phone_check_names_a_missing_password_and_the_line_that_fixes_it(monkeypatch):
@@ -515,7 +577,8 @@ def test_phone_check_separates_running_from_reachable(monkeypatch):
     """
     out = run_phone_check(monkeypatch, open_ports=("127.0.0.1",))
     assert "only for this machine" in out
-    assert "192.168.1.50" in out
+    # Names the address it could not reach, so the report is actionable.
+    assert "not on 192.168.1.50" in out
 
 
 def test_phone_check_gives_the_firewall_command_when_the_rule_is_missing(monkeypatch):

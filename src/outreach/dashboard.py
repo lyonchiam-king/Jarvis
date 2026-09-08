@@ -2407,25 +2407,89 @@ class UnsafeBinding(Exception):
     """Refusing to put an unauthenticated dashboard on a network."""
 
 
-def lan_address() -> str:
-    """This machine's address on its own network, or "" if it cannot tell.
+def _routed_address() -> str:
+    """The address the routing table would use to reach the internet.
 
-    Printed so nobody has to run ipconfig and read the right line out of it.
-    Opening a UDP socket sends no traffic and needs nothing to be reachable;
-    it only asks the routing table which local address would be used, which
-    is the one a phone on the same wifi must type.
+    A good guess and nothing more. It is the wrong answer whenever something
+    sits in front of the real network card -- a VPN returns its tunnel
+    address, and WSL, Docker Desktop and Hyper-V each add an adapter that can
+    win this race. The phone cannot reach any of those, and the failure looks
+    exactly like a firewall: a page that never loads.
     """
     import socket
 
     try:
         probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
+            # Sends nothing. It only asks which local address would be used.
             probe.connect(("8.8.8.8", 80))
             return probe.getsockname()[0]
         finally:
             probe.close()
     except OSError:
         return ""
+
+
+def _private(address: str) -> bool:
+    """Is this an address a phone on the same home network could reach?"""
+    import ipaddress
+
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return bool(
+        parsed.version == 4
+        and parsed.is_private
+        and not parsed.is_loopback
+        and not parsed.is_link_local  # 169.254.x = DHCP did not answer
+    )
+
+
+def likely_virtual(address: str) -> bool:
+    """Ranges that are usually a virtual adapter rather than the real network.
+
+    Not a verdict -- plenty of real networks use 172.16/12, and naming one
+    wrongly is cheap because every candidate is offered anyway. It only
+    decides what order they are printed in, so the address most likely to
+    work is read first.
+    """
+    return address.startswith("172.") or address.startswith("192.168.56.")
+
+
+def lan_addresses() -> list[str]:
+    """Every address on this machine a phone might be able to reach.
+
+    One guess was not enough. The routed address is the wrong one on any
+    machine carrying a VPN or a virtual adapter, and the person reading it
+    has no way to tell -- so all of them are offered, most likely first, and
+    trying two is faster than explaining `ipconfig` over a message.
+    """
+    import socket
+
+    found: list[str] = []
+
+    def add(address: str) -> None:
+        if _private(address) and address not in found:
+            found.append(address)
+
+    add(_routed_address())
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            add(info[4][0])
+    except OSError:
+        pass
+
+    # Real network cards before virtual ones, and otherwise the order they
+    # were discovered -- the routed guess stays first among equals because it
+    # is right on an ordinary machine.
+    return sorted(found, key=likely_virtual)
+
+
+def lan_address() -> str:
+    """The single best guess, or "" if there is none."""
+    addresses = lan_addresses()
+    return addresses[0] if addresses else ""
 
 
 def serve(
@@ -2481,11 +2545,19 @@ def serve(
             print("  Add this line to your .env file and start again:")
             print("      DASHBOARD_PASSWORD=something-only-you-know")
     else:
-        where = lan_address()
-        host_part = where or "<this-pc-ip>"
+        candidates = lan_addresses()
+        host_part = candidates[0] if candidates else "<this-pc-ip>"
         print("\n  On your phone, on the same wifi, open:")
         print(f"      http://{host_part}:{port}/app")
-        if not where:
+        # A machine with a VPN or a virtual adapter has several addresses and
+        # only one of them is the network the phone is on. Naming just the
+        # first sends people to an address that can never answer, which looks
+        # identical to a firewall problem.
+        for extra in candidates[1:]:
+            print(f"      or  http://{extra}:{port}/app")
+        if len(candidates) > 1:
+            print("      (more than one network card -- try them in order)")
+        if not candidates:
             print("      (run  ipconfig  and use the IPv4 Address)")
         print("  Type http:// at the front -- without it phones try https,")
         print("  and show a security warning for a page that is fine.")

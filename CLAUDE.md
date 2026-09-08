@@ -55,7 +55,7 @@ src/outreach/
   web/             the built React page -- generated, committed, never edited
 config/campaigns/  penang-my.yaml is the live campaign
 frontend/          React source for /app; `npm run build` writes src/outreach/web
-tests/             1228 tests, pytest, no CI -- the suite is the only gate
+tests/             1231 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -533,6 +533,18 @@ why. `--phone` is now a request rather than an address, and `serve` picks the
 binding from a password it has already read. The launcher has no logic left.
 Anything that must be right on Windows and cannot be run here belongs on the
 Python side of that line.
+
+**One address is a guess, not an answer.** `lan_address` asked the routing
+table which local address reaches the internet -- correct on an ordinary
+machine, and wrong on every machine carrying a VPN, WSL, Docker Desktop or
+Hyper-V, where that route leaves through a virtual adapter no phone can talk
+to. The failure is a page that never loads, indistinguishable from a blocked
+firewall, and the person reading the address has no way to tell it is the
+wrong one. `lan_addresses` returns every private IPv4 the machine has, real
+network cards before likely-virtual ranges, and both the startup banner and
+`phone-check` offer all of them in order. Trying two addresses is faster than
+explaining `ipconfig` over a message. Loopback and 169.254 are dropped: one
+is not somewhere a phone can go and the other means DHCP never answered.
 
 **Four failures that look identical from a phone need four sentences.**
 No password, a dashboard not running, one running without phone access, and

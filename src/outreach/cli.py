@@ -941,7 +941,7 @@ def phone_check(ctx: click.Context, port: int) -> None:
 
     from pathlib import Path
 
-    from .dashboard import lan_address
+    from .dashboard import lan_addresses, likely_virtual
     from .env_edit import is_set
 
     def say(ok: bool | None, line: str) -> None:
@@ -960,13 +960,17 @@ def phone_check(ctx: click.Context, port: int) -> None:
         click.echo("\n          DASHBOARD_PASSWORD=something-only-you-know\n")
         return
 
-    # 2. The address a phone must type.
-    where = lan_address()
-    say(bool(where), f"This PC is {where} on its network" if where
-        else "Could not work out this PC's network address")
-    if not where:
+    # 2. The addresses a phone might reach. Plural on purpose: a machine
+    #    carrying a VPN, WSL, Docker or Hyper-V has several, only one of
+    #    which is the real network card, and picking the wrong one fails
+    #    exactly like a firewall -- a page that never loads.
+    candidates = lan_addresses()
+    say(bool(candidates), f"This PC has {len(candidates)} network address(es)"
+        if candidates else "Could not find any network address for this PC")
+    if not candidates:
         click.echo("\n      Run  ipconfig  and use the IPv4 Address.\n")
         return
+    where = candidates[0]
 
     # 3. Is anything actually listening? Distinguishes "dashboard not running"
     #    from "running but unreachable", which look the same from a phone.
@@ -984,11 +988,15 @@ def phone_check(ctx: click.Context, port: int) -> None:
         click.echo("      then run this check again.\n")
         return
 
-    # 4. Reachable on the network address, not just loopback. This is the one
-    #    the phone uses, and a dashboard started without --phone answers the
-    #    first and not this one.
-    on_lan = reachable(where)
-    say(on_lan, f"It is listening on {where}, not only on this PC")
+    # 4. Reachable on a network address, not just loopback. This is what the
+    #    phone uses, and a dashboard started without --phone answers the
+    #    first and not this one. Every candidate is tried, because the point
+    #    is to find which address actually works rather than to confirm a
+    #    guess.
+    working = [address for address in candidates if reachable(address)]
+    on_lan = bool(working)
+    say(on_lan, f"It is listening on {', '.join(working)}" if on_lan
+        else f"It answers on this PC only, not on {', '.join(candidates)}")
     if not on_lan:
         click.echo("\n      The dashboard is running but only for this machine.")
         click.echo("      Close it and start it with Dashboard.bat, which asks for")
@@ -1026,8 +1034,19 @@ def phone_check(ctx: click.Context, port: int) -> None:
         say(None, "Not Windows, so no firewall rule to check")
 
     click.echo("\n  Everything this machine can check is fine.")
-    click.echo("  On your phone, on the same wifi, open:\n")
-    click.echo(f"      http://{where}:{port}/app\n")
+    if len(working) == 1:
+        click.echo("  On your phone, on the same wifi, open:\n")
+        click.echo(f"      http://{working[0]}:{port}/app\n")
+    else:
+        # Nothing here can tell which adapter the phone shares a network
+        # with, and guessing wrong wastes an evening. Offer them in order
+        # and say to work down the list.
+        click.echo("  This PC has more than one address. Try these on your")
+        click.echo("  phone in order -- the first is most likely:\n")
+        for address in working:
+            note = "   (probably a virtual adapter)" if likely_virtual(address) else ""
+            click.echo(f"      http://{address}:{port}/app{note}")
+        click.echo("")
     # Typed without a scheme, Safari and Chrome now try https first. This
     # dashboard speaks plain http and has no certificate, so the phone shows
     # a security warning -- which reads as "blocked" rather than "wrong
