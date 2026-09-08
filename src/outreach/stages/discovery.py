@@ -77,8 +77,25 @@ class DiscoveryReport:
         return lines
 
 
-def website_qualifies(status: WebsiteStatus, treat_social_as_no_website: bool) -> bool:
-    """Whether this lead counts as 'no website' for the campaign."""
+def website_qualifies(
+    status: WebsiteStatus,
+    treat_social_as_no_website: bool,
+    angle: str = "no-website",
+) -> bool:
+    """Whether this lead is one the campaign wants.
+
+    The no-website angle keeps only businesses with nothing to lose: the demo
+    site is the entire pitch, and someone who already has a site is being
+    asked to replace one rather than to get one.
+
+    The conversion angle argues about enquiries rather than about having a
+    website at all, which is an argument that works whatever they have -- so
+    it keeps everyone. Nothing is double-messaged as a result: discovery
+    skips every place_id already on the Leads tab, so a business contacted
+    under one angle is never picked up again by the other.
+    """
+    if angle == "conversion":
+        return True
     if status is WebsiteStatus.NONE:
         return True
     if status is WebsiteStatus.SOCIAL_ONLY:
@@ -220,7 +237,11 @@ def run(
                             continue
 
                     website_status = classify_website(place.website_uri, d.social_domains)
-                    if not website_qualifies(website_status, d.treat_social_as_no_website):
+                    if not website_qualifies(
+                        website_status,
+                        d.treat_social_as_no_website,
+                        config.outreach.angle,
+                    ):
                         report.rejected_has_website += 1
                         continue
 

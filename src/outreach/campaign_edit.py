@@ -308,6 +308,49 @@ def rewrite_research(
     return result
 
 
+def rewrite_angle(text: str, angle: str, offers_follow_up: bool) -> str:
+    """Set ``outreach.angle`` and ``outreach.offers_follow_up``, comments intact.
+
+    Both together, because they are one decision: the follow-up promise only
+    makes sense inside the conversion argument, and saving one without the
+    other leaves the campaign claiming something the angle never mentions.
+    """
+    from .config import ANGLES
+
+    cleaned = angle.strip().lower()
+    if cleaned not in ANGLES:
+        raise CampaignEditError(
+            f"angle must be one of {sorted(ANGLES)}, got {angle!r}"
+        )
+
+    lines = text.splitlines()
+    bounds = _section_bounds(lines, "outreach")
+    if bounds is None:
+        raise CampaignEditError(
+            "This campaign file has no top-level `outreach:` section."
+        )
+    start, end = bounds
+    if not _replace_scalar(lines, start, end, "angle", cleaned):
+        lines.insert(start, f"  angle: {_scalar(cleaned)}")
+
+    # Re-read the bounds: inserting a line moved the end of the section, and
+    # writing the second key against the old one would put it in whatever
+    # section follows.
+    start, end = _section_bounds(lines, "outreach")
+    # quote=False matters: quoted, this lands as the *string* "false", which
+    # YAML reads as a string and bool() reads as True -- so turning the
+    # promise off would leave it on.
+    flag = "true" if offers_follow_up else "false"
+    if not _replace_scalar(lines, start, end, "offers_follow_up", flag, quote=False):
+        lines.insert(start, f"  offers_follow_up: {flag}")
+
+    result = "\n".join(lines)
+    if text.endswith("\n"):
+        result += "\n"
+    _validate(result)
+    return result
+
+
 def rewrite_design_level(text: str, level: str) -> str:
     """Set ``build.design_level``, comments intact.
 

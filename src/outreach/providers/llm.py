@@ -503,7 +503,7 @@ OUTREACH_COPY_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-OUTREACH_COPY_SYSTEM = """\
+_COPY_PREAMBLE = """\
 You write first-contact messages from a founder to a small business owner who \
 has never heard of him. Professional but warm -- the register of a competent \
 neighbour, not a marketing department.
@@ -511,6 +511,12 @@ neighbour, not a marketing department.
 **Structure every message as hook, solution, offer, model, in that order.** \
 Four short paragraphs, a blank line between each, and nothing else.
 
+"""
+
+# The original argument. The business has no website, so the demo site is the
+# whole pitch: they cannot picture one, and being shown theirs closes that gap
+# in a way no sentence does.
+_BEATS_NO_WEBSITE = """\
 1. HOOK -- one or two sentences that prove you looked at THEIR business \
 before you wrote, and that land on the gap. Name the specific thing: what \
 customers keep praising, the complaint that repeats in the reviews, the thing \
@@ -546,7 +552,65 @@ out of nowhere; with it, the message ends on their growth rather than on a \
 yes-or-no about one website. A list of services is appended after your \
 message, worded by the sender, so writing one here duplicates it and risks \
 naming something nobody sells.
+"""
 
+# For a business that already has a site. "Do you need a website" puts you in
+# a queue behind every web designer and invites a no from anyone with a page
+# they paid for. "Visitors arrive and do not enquire" is a different question,
+# about money rather than about design, and it is one the owner has usually
+# already half-asked themselves.
+_BEATS_CONVERSION = """\
+1. HOOK -- one or two sentences that prove you looked at THEIR business \
+before you wrote, and that land on the gap between being found and being \
+contacted. Name the specific thing -- what customers keep praising, what they \
+do that nobody else nearby does -- then the consequence: the people who \
+already reached them rate them highly, and the people who land on their page \
+and leave without getting in touch are the whole opportunity. Never criticise \
+their website. Someone paid for it, quite possibly them, and an insult is a \
+reason to stop reading. The subject is the visitor who did not call, not the \
+site that failed them.
+
+2. SOLUTION -- what you did about it, in plain words. One page, built for one \
+action -- calling, messaging, or booking -- so that a visitor who is already \
+interested has one obvious thing to do. Tie it to what the hook named. The \
+subject is their enquiries, not your work: never "I built you a landing \
+page", which is a sentence about you. Do not describe their existing site as \
+replaced; this sits alongside it, for the people it is losing.
+
+3. OFFER -- the concrete thing they get, and what it costs them to look. When \
+a preview page exists, this is where the link goes, on its own line with a \
+blank line either side, written as "Page: [the link]". The offer is always \
+small: look at it, tell me what is wrong with it. Never a meeting.
+
+4. MODEL -- how this works in one sentence, so nobody has to guess what the \
+catch is. Say plainly what happens next if they like it and what happens if \
+they do not. Ending without this reads as a trick, and a small business owner \
+who suspects a trick does not reply. Then one clause -- no list -- saying \
+turning interest into enquiries is the wider job and the page is one part of \
+it. That is what the appended list of services follows on from, so without it \
+the list arrives out of nowhere. A list of services is appended after your \
+message, worded by the sender, so writing one here duplicates it and risks \
+naming something nobody sells.
+"""
+
+# Only added when the campaign says this is genuinely on offer. A message
+# promising follow-up nobody has built is a promise about future work rather
+# than a description of the thing already made -- the same failure as an
+# invented service, and worse, because it is the reason they replied.
+_FOLLOW_UP_LINE = """\
+- The sender also sets up follow-up after an enquiry -- an automatic message \
+so nobody who gets in touch is forgotten. You may mention this once, in the \
+model paragraph, in a single clause. Never as the main offer, never with a \
+number attached to it.
+"""
+
+_NO_FOLLOW_UP_LINE = """\
+- Never promise follow-up, automation, reminders, a CRM, or anything that \
+happens after an enquiry arrives. This campaign does not offer it, and a \
+message that promises it is selling something nobody is ready to deliver.
+"""
+
+_COPY_RULES = """\
 Rules:
 - Open the WhatsApp message with "Hi, [your name] here," -- introduce yourself \
 by the name given in the Sender block, then straight into the hook.
@@ -565,6 +629,24 @@ rather than what it costs.
 person would actually send on their phone. It keeps all four beats, but each \
 one is a line rather than a paragraph.
 """
+
+
+def outreach_copy_system(angle: str = "no-website", *, offers_follow_up: bool = False) -> str:
+    """The system prompt for one campaign's argument.
+
+    Assembled rather than stored twice: the preamble and the rules are the
+    same whichever argument is being made, and two full copies would drift
+    the moment one was edited.
+    """
+    beats = _BEATS_CONVERSION if angle == "conversion" else _BEATS_NO_WEBSITE
+    follow_up = _FOLLOW_UP_LINE if offers_follow_up else _NO_FOLLOW_UP_LINE
+    return f"{_COPY_PREAMBLE}{beats}\n{_COPY_RULES}{follow_up}"
+
+
+# The original argument, kept as a name because modelcheck and older callers
+# ask for "the" system prompt without knowing about angles.
+OUTREACH_COPY_SYSTEM = outreach_copy_system()
+
 
 
 # Models that reject `output_config.effort` with a 400. Effort arrived with the
@@ -1596,9 +1678,26 @@ class _Writer:
                 out.append(area.strip())
         return tuple(out)
 
-    def write_outreach_copy(self, prompt: str) -> OutreachCopy:
-        """Stage 5 -- the email and the WhatsApp opener."""
-        payload = self._call(OUTREACH_COPY_SYSTEM, prompt, OUTREACH_COPY_SCHEMA)
+    def write_outreach_copy(
+        self,
+        prompt: str,
+        *,
+        angle: str = "no-website",
+        offers_follow_up: bool = False,
+    ) -> OutreachCopy:
+        """Stage 5 -- the email and the WhatsApp opener.
+
+        The angle decides which argument the message makes, so it has to
+        arrive here rather than being read from a global: run and regenerate
+        must produce the same message for the same campaign, and a default
+        that silently applied to one of them is how three call sites once
+        went on rendering the wrong prompt with every test still green.
+        """
+        payload = self._call(
+            outreach_copy_system(angle, offers_follow_up=offers_follow_up),
+            prompt,
+            OUTREACH_COPY_SCHEMA,
+        )
         return OutreachCopy(
             subject=str(payload.get("subject", "")).strip(),
             email_body=str(payload.get("email_body", "")).strip(),

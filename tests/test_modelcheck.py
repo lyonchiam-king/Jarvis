@@ -49,7 +49,9 @@ class FakeWriter:
             suggested_website_angle="Booking would stop the phone tag.",
         )
 
-    def write_outreach_copy(self, prompt: str) -> OutreachCopy:
+    def write_outreach_copy(
+        self, prompt: str, *, angle: str = "no-website", offers_follow_up: bool = False
+    ) -> OutreachCopy:
         self.calls += 1
         return OutreachCopy(
             subject="A quick note about your barber shop",

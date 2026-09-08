@@ -253,10 +253,17 @@ class FakeWriter:
     def __init__(self):
         self.call_count = 0
         self.prompts = []
+        # Recorded, not swallowed. A fake that accepted **kwargs would let a
+        # call site stop passing the angle and no test would notice -- which
+        # is precisely how three render_lovable_prompt sites went unwired.
+        self.angles = []
+        self.follow_ups = []
 
-    def write_outreach_copy(self, prompt):
+    def write_outreach_copy(self, prompt, *, angle="no-website", offers_follow_up=False):
         self.call_count += 1
         self.prompts.append(prompt)
+        self.angles.append(angle)
+        self.follow_ups.append(offers_follow_up)
         return OutreachCopy(
             subject="A thought about your bookings",
             email_body="Noticed a few reviews asking how to book.",

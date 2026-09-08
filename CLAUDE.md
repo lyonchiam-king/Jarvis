@@ -55,7 +55,7 @@ src/outreach/
   web/             the built React page -- generated, committed, never edited
 config/campaigns/  penang-my.yaml is the live campaign
 frontend/          React source for /app; `npm run build` writes src/outreach/web
-tests/             1254 tests, pytest, no CI -- the suite is the only gate
+tests/             1274 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -511,6 +511,36 @@ concatenate: someone who trimmed their areas to two meant two.
 inherited research value passes whatever the merge does -- it cannot tell
 inheritance from fallback. Pin merge assertions to `outreach`, where the
 template genuinely differs from the dataclass.
+
+**Which argument the campaign makes is one setting, not three.**
+`outreach.angle` is `no-website` (the original) or `conversion`, and it
+changes who discovery keeps, what gets built, and what the message claims.
+Splitting those into separate switches would let them disagree -- an angle
+arguing about enquiries while discovery still throws away everyone with a
+website would find nobody to say it to. "Do you need a website" competes with
+every web designer and invites a no from anyone who already paid for a page;
+"people find you and leave without getting in touch" is a question about
+money that the owner has usually half-asked themselves. The conversion angle
+keeps every business, website or not, and nothing is double-messaged because
+discovery already skips every place_id on the Leads tab.
+
+**The conversion message may never criticise their website.** Someone paid
+for it, quite possibly them, and an insult is a reason to stop reading. The
+subject is the visitor who did not call, not the site that failed them, and
+the page is offered alongside what they have rather than as a replacement.
+
+**`offers_follow_up` is off by default, and only the conversion angle may set
+it.** Promising follow-up nobody has built is worse than an invented service,
+because it is the reason they replied. The no-website message has nowhere to
+put the claim, so saving it there would store something that never appears
+and later look like a setting that did nothing -- the dashboard refuses that
+combination rather than writing it.
+
+**A quoted boolean is a string, and a non-empty string is True.**
+`_replace_scalar` quotes by default, so writing `offers_follow_up: "false"`
+left the promise switched on -- turning a claim off did nothing at all. Pass
+`quote=False` for anything YAML must read as a boolean or a number. My own
+round-trip caught it; no test existed yet.
 
 **The specific detail is evidence, not a compliment.** A hook told only to
 prove it looked wrote a nice observation about the business and never reached

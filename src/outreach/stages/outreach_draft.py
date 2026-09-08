@@ -321,6 +321,9 @@ def run(
                     company=config.outreach.company,
                     preview_url=preview_url,
                 )
+            ,
+                angle=config.outreach.angle,
+                offers_follow_up=config.outreach.offers_follow_up,
             )
             report.copy_written += 1
 
@@ -500,6 +503,9 @@ def regenerate_one(
             company=config.outreach.company,
             preview_url=preview_url,
         )
+    ,
+        angle=config.outreach.angle,
+        offers_follow_up=config.outreach.offers_follow_up,
     )
 
     body = gmail_provider.compose_body(

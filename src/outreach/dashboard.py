@@ -1548,6 +1548,64 @@ def create_app(config: Config) -> Flask:
 
         return jsonify({"ok": True, "level": level})
 
+    @app.route("/api/angle", methods=["GET", "POST"])
+    def api_angle():
+        """Read or set which argument this campaign makes.
+
+        Not a wording preference: it changes who discovery keeps and what the
+        message claims, so it is one setting rather than three that can
+        disagree with each other.
+        """
+        from .campaign_edit import CampaignEditError, rewrite_angle
+        from .config import ANGLES
+
+        if request.method == "GET":
+            c = current()
+            return jsonify({
+                "angle": c.outreach.angle,
+                "angles": sorted(ANGLES),
+                "offers_follow_up": c.outreach.offers_follow_up,
+            })
+
+        payload = request.json or {}
+        angle = (payload.get("angle") or "").strip().lower()
+        if angle not in ANGLES:
+            return jsonify({
+                "error": f"Unknown angle {angle!r}. Expected one of {sorted(ANGLES)}."
+            }), 400
+        follow_up = bool(payload.get("offers_follow_up"))
+
+        # A promise of follow-up belongs to the conversion argument, whose
+        # model paragraph is where it is mentioned. The no-website message
+        # has nowhere to put it, so saving it there would store a claim that
+        # never appears -- and would surface later as a setting that did
+        # nothing.
+        if follow_up and angle != "conversion":
+            return jsonify({
+                "error": "Follow-up is only offered by the conversion angle. "
+                         "Switch the angle first, or leave it off."
+            }), 200
+
+        try:
+            path = _writable_campaign()
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        try:
+            original = path.read_text()
+            path.write_text(rewrite_angle(original, angle, follow_up))
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        except OSError as exc:
+            return jsonify({"error": f"Could not save {path}: {exc}"}), 200
+
+        try:
+            state["config"] = load_config(path)
+        except ConfigError as exc:
+            path.write_text(original)
+            return jsonify({"error": f"Reverted -- {exc}"}), 200
+
+        return jsonify({"ok": True, "angle": angle, "offers_follow_up": follow_up})
+
     @app.route("/api/services", methods=["GET", "POST"])
     def api_services():
         """Read or set the other services listed at the end of every message.

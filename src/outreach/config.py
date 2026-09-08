@@ -160,6 +160,16 @@ class OutreachSettings:
     # The one line that introduces the list. Without it the bullets arrive
     # with no explanation, which reads as a price list rather than an offer.
     services_intro: str = ""
+    # "no-website" | "conversion" -- see ANGLES. Defaults to the original, so
+    # a campaign file that has never heard of this setting behaves exactly as
+    # it did.
+    angle: str = "no-website"
+    # Whether the message may promise follow-up -- automated messages after
+    # someone enquires -- alongside the page itself. Off by default: an
+    # invented service is something nobody sells, and this is the one claim
+    # in the conversion angle that is a promise about future work rather than
+    # a description of the thing already built.
+    offers_follow_up: bool = False
     # Appended verbatim so the recipient always has a way out.
     opt_out_note: str = (
         "If you'd rather not hear from me again, just reply "
@@ -217,6 +227,20 @@ IMAGE_PROVIDERS: frozenset[str] = frozenset({"gemini", "vertex"})
 # only the prompt handed to the site builder, so no research model sees the
 # extra text and a weaker one is not penalised for it.
 DESIGN_LEVELS: frozenset[str] = frozenset({"standard", "showcase"})
+
+# Which argument the campaign makes. Not a wording preference -- it changes
+# who discovery keeps, what gets built, and what the message claims, so it is
+# one setting rather than three that can disagree.
+#
+#   no-website  -- the original. Businesses with nothing but a Google listing
+#                  or a Facebook page. The demo site is the whole pitch: they
+#                  cannot picture a website, so they are shown one.
+#   conversion  -- for a business that already has a site. The argument is not
+#                  "you need a website", which puts you in a queue behind
+#                  every web designer, but "visitors arrive and do not
+#                  enquire". The artefact is a focused landing page with one
+#                  action on it.
+ANGLES: frozenset[str] = frozenset({"no-website", "conversion"})
 
 
 @dataclass(frozen=True)
@@ -578,6 +602,17 @@ def load_config(
     # A string here is almost always someone writing one service on one line
     # rather than a list. Taking it as a one-item list is friendlier than
     # iterating its characters, which is what a bare tuple() would do.
+    # Validated at load time like every other setting, so a typo is an error
+    # naming the fix rather than a campaign that quietly runs the wrong
+    # argument at real businesses.
+    angle = str(o.get("angle", "no-website")).strip().lower()
+    if angle not in ANGLES:
+        raise ConfigError(
+            f"outreach.angle must be one of {sorted(ANGLES)}, got {angle!r}. "
+            "Use 'no-website' to pitch businesses that have no site, or "
+            "'conversion' to pitch a landing page to businesses that do."
+        )
+
     raw_services = o.get("services") or []
     if isinstance(raw_services, str):
         raw_services = [raw_services]
@@ -606,6 +641,8 @@ def load_config(
         postal_address=str(o.get("postal_address", "")),
         services=services,
         services_intro=str(o.get("services_intro", "")).strip(),
+        angle=angle,
+        offers_follow_up=bool(o.get("offers_follow_up", False)),
         require_site=bool(o.get("require_site", False)),
         opt_out_note=str(
             o.get("opt_out_note")
