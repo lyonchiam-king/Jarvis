@@ -55,7 +55,7 @@ src/outreach/
   web/             the built React page -- generated, committed, never edited
 config/campaigns/  penang-my.yaml is the live campaign
 frontend/          React source for /app; `npm run build` writes src/outreach/web
-tests/             1231 tests, pytest, no CI -- the suite is the only gate
+tests/             1245 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -546,6 +546,36 @@ network cards before likely-virtual ranges, and both the startup banner and
 explaining `ipconfig` over a message. Loopback and 169.254 are dropped: one
 is not somewhere a phone can go and the other means DHCP never answered.
 
+**A tunnel removes four network problems and adds one security problem.**
+`--tunnel` runs cloudflared as a quick tunnel and publishes a public https
+address, so a phone needs no LAN address, no firewall rule, no shared wifi
+and no `http://` -- and works on mobile data. What it costs has to be said
+plainly: the dashboard stops being reachable from the house and becomes
+reachable from the internet, with the password as the only thing in front of
+it. `serve` refuses to open one without a password **and** refuses a password
+shorter than `MIN_TUNNEL_PASSWORD`; a short one is a judgement call on your
+own wifi and indefensible on an address that gets scanned within minutes of
+appearing. The address is random and changes on every start, which is the
+trade for needing no account, no domain and no login.
+
+**Behind a tunnel every request comes from Cloudflare.** So keying the login
+rate limit on `remote_addr` would give every visitor the same bucket, and one
+bot would spend the whole allowance and lock the owner out of their own
+dashboard. `client_ip()` reads `CF-Connecting-IP` -- but **only** when this
+process opened the tunnel itself. Served on a LAN that header is attacker-
+controlled, and trusting it would hand out a fresh allowance per made-up
+value, which is worse than not checking at all. `SESSION_COOKIE_SECURE` is set
+the same way and for the same reason it is not set otherwise: a Secure cookie
+is never sent over plain http and would silently break the local page.
+
+**`client_ip` was defined and never called.** The edit that was supposed to
+wire it into the login path did not apply, the whole suite stayed green, and
+the rate limiter went on keying every attempt on Cloudflare's address. Only
+the test that drove two different visitors through a tunnelled app caught it
+-- the same unwired-call-site shape as the three `render_lovable_prompt` sites
+and the reachability stage with no button. Assert the behaviour, never the
+presence of the code.
+
 **Four failures that look identical from a phone need four sentences.**
 No password, a dashboard not running, one running without phone access, and
 a firewall blocking the port all present as the same thing: a Safari tab that
@@ -728,7 +758,8 @@ ends -- so it goes on deliberately, not as a side effect of a `git pull`.
 Say so rather than implying otherwise:
 
 - The Windows launchers (`Dashboard.bat`, `run.bat`, `Schedule-Daily.ps1`,
-  `Phone-Check.bat`) have never been executed on Windows here, and neither
+  `Phone-Check.bat`, `Dashboard-Anywhere.bat`) have never been executed on
+  Windows here, and neither
   has the `netsh` firewall query behind `phone-check` -- its branches are
   driven by tests with the platform faked, which proves the wiring and not
   the command.
@@ -737,5 +768,10 @@ Say so rather than implying otherwise:
   errors, failed requests and the phone-width layout. It has never run in
   real Safari, no check drives a click through to a result, and every count
   read zero because this container has no Sheet credentials.
+- No real tunnel has ever been opened from here: cloudflared is not installed
+  and GitHub releases is unreachable through this container's proxy, so the
+  binary cannot even be fetched. Everything on the Python side -- reading the
+  published address, the refusals, the rate-limit keying, the shutdown -- is
+  driven against a stand-in for cloudflared.
 - The Ollama / OpenRouter transports have never reached a real endpoint --
   outbound egress is blocked. `modelcheck` is how Lyon verifies them himself.

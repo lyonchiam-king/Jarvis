@@ -690,17 +690,54 @@ def create_app(config: Config) -> Flask:
     app = Flask(__name__)
     runner = Runner()
 
+    # Whether this process published itself to the internet. It changes two
+    # things that must not be guessed: which address a login attempt is
+    # counted against, and whether the session cookie may only travel over
+    # https. `serve` sets it before the first request.
+    state: dict = {"config": config, "tunnelled": False}
+    # Exposed so `serve` can record that it published this process. Reaching
+    # into the closure from outside is worse than one named handle.
+    app.config["state"] = state
+
     # Signed-cookie sessions, with a per-process key. Restarting the
     # dashboard signs every device out, which is the right trade for a tool
     # that is started and stopped by hand: no secret to store, and a laptop
     # that was closed does not leave a phone logged in for ever.
     app.secret_key = _secrets.token_urlsafe(32)
 
+    # The session cookie is the whole authentication once you are signed in.
+    # HttpOnly keeps script away from it and Lax stops another site sending
+    # an authenticated request on your behalf; both are right on a LAN too.
+    # `Secure` is set only under a tunnel, because a cookie marked Secure is
+    # never sent over plain http and would silently break the local page.
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+    )
+
     # Failed attempts, so a password cannot be guessed at machine speed by
     # anything else on the network. Keyed by source address, bounded.
     login_failures: dict[str, list[float]] = {}
     LOGIN_WINDOW = 300.0
     LOGIN_MAX = 8
+
+    def client_ip() -> str:
+        """Who is really asking, for rate-limiting purposes.
+
+        Behind a tunnel `remote_addr` is Cloudflare's edge and identical for
+        every visitor, so keying on it would let one attacker exhaust the
+        login budget for everybody -- the owner included. `CF-Connecting-IP`
+        carries the real address.
+
+        It is trusted **only** when this process opened a tunnel itself.
+        Served on a LAN, anyone could send that header and get a fresh
+        allowance per made-up value, which is worse than not checking.
+        """
+        if state["tunnelled"]:
+            forwarded = request.headers.get("CF-Connecting-IP", "").strip()
+            if forwarded:
+                return forwarded
+        return request.remote_addr or "unknown"
 
     def _too_many_attempts(who: str) -> bool:
         now = time.time()
@@ -744,7 +781,7 @@ def create_app(config: Config) -> Flask:
 
         error = ""
         if request.method == "POST":
-            who = request.remote_addr or "unknown"
+            who = client_ip()
             if _too_many_attempts(who):
                 error = "Too many attempts. Wait a few minutes."
             else:
@@ -778,8 +815,6 @@ def create_app(config: Config) -> Flask:
     # The campaign target is editable from the page, so config is state rather
     # than a constant. Every handler reads through `current()` so a save takes
     # effect immediately instead of at the next restart.
-    state = {"config": config}
-
     def current() -> Config:
         return state["config"]
 
@@ -2398,6 +2433,11 @@ def create_app(config: Config) -> Flask:
 # The only address that needs no password: nothing but this machine can
 # reach it. Every other value puts the dashboard on a network.
 LOOPBACK = "127.0.0.1"
+
+# A public address needs a password worth having. Twelve characters is not a
+# strong claim on its own -- it is the point below which a published
+# dashboard is obviously indefensible, which is the only line code can draw.
+MIN_TUNNEL_PASSWORD = 12
 # Every interface this machine has, which is what a phone on the same wifi
 # needs in order to reach it.
 ALL_INTERFACES = "0.0.0.0"
@@ -2499,6 +2539,7 @@ def serve(
     open_browser: bool = True,
     host: str | None = None,
     phone: bool = False,
+    tunnel: bool = False,
 ):
     """Run the dashboard.
 
@@ -2531,12 +2572,65 @@ def serve(
             "in your .env file, then start it again."
         )
 
+    # A tunnel is a different order of exposure from a home network, and the
+    # password stops being the last line of defence and becomes the only one.
+    # A short password on a wifi nobody else is on is a judgement call; the
+    # same password published to the internet, where scanners find new
+    # hostnames within minutes, is not.
+    if tunnel:
+        if not has_password:
+            raise UnsafeBinding(
+                "Refusing to publish this dashboard to the internet with no "
+                "password set.\n\n"
+                "Set one first:\n"
+                "    DASHBOARD_PASSWORD=something-only-you-know\n"
+                "in your .env file, then start it again."
+            )
+        if len(config.secrets.dashboard_password) < MIN_TUNNEL_PASSWORD:
+            raise UnsafeBinding(
+                f"Refusing to publish this dashboard to the internet with a "
+                f"password shorter than {MIN_TUNNEL_PASSWORD} characters.\n\n"
+                "On your own wifi a short one is a judgement call. On a public "
+                "address it is the only thing between a stranger and a tool "
+                "that spends money and messages real businesses -- and new "
+                "addresses get scanned within minutes of appearing.\n\n"
+                "Make DASHBOARD_PASSWORD longer in your .env file, then start "
+                "it again."
+            )
+
     app = create_app(config)
     url = f"http://{LOOPBACK}:{port}"
+
+    opened = None
+    if tunnel:
+        from .providers.tunnel import Tunnel, TunnelError
+
+        # Opened before the browser and before app.run, so a failure is an
+        # error on the way in rather than a dashboard that started, said
+        # nothing about the tunnel, and left someone waiting on a phone.
+        opened = Tunnel(port)
+        print("\n  Opening a public address (this takes a few seconds)...")
+        try:
+            public = opened.start()
+        except TunnelError as exc:
+            raise UnsafeBinding(f"{exc}") from exc
+
+        # Two things depend on knowing this, and neither may be guessed:
+        # which address a login attempt counts against, and whether the
+        # session cookie may only travel over https.
+        app.config["state"]["tunnelled"] = True
+        app.config.update(SESSION_COOKIE_SECURE=True)
+
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
     print(f"\n  Dashboard running at {url}")
+    if opened is not None:
+        print("\n  On any phone, anywhere -- no wifi, no firewall, no IP address:")
+        print(f"      {public}/app")
+        print("\n  This address is PUBLIC. Your password is the only thing")
+        print("  in front of it. It changes every time you start the")
+        print("  dashboard, so remake the home-screen icon when it does.")
     if host == LOOPBACK:
         if phone and not has_password:
             # Asked for, and not given. Saying nothing here is how the last
@@ -2567,7 +2661,13 @@ def serve(
         print("\n  If Windows asks about the firewall, tick Private networks")
         print("  and allow it -- the phone cannot connect otherwise.")
     print("\n  Close this window when you're done.\n")
-    app.run(host=host, port=port, debug=False)
+    try:
+        app.run(host=host, port=port, debug=False)
+    finally:
+        # A tunnel still running after the dashboard stopped would leave the
+        # machine published with nobody aware of it.
+        if opened is not None:
+            opened.stop()
 
 
 GUIDE_PAGE = """<!doctype html>

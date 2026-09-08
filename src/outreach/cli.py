@@ -638,14 +638,21 @@ def test_model(ctx: click.Context) -> None:
     help="Also serve to your own network, so a phone on the same wifi can "
     "open it. Requires DASHBOARD_PASSWORD in .env.",
 )
+@click.option(
+    "--tunnel",
+    is_flag=True,
+    help="Publish a public https address through Cloudflare, so a phone can "
+    "open it from anywhere. Needs cloudflared and a long DASHBOARD_PASSWORD.",
+)
 @click.pass_context
 def dashboard_cmd(
-    ctx: click.Context, port: int, no_browser: bool, phone: bool
+    ctx: click.Context, port: int, no_browser: bool, phone: bool, tunnel: bool
 ) -> None:
     """Open the dashboard in your browser.
 
-    Runs on this machine only unless --phone is given, and that needs a
-    password: the page can spend money and message businesses.
+    Runs on this machine only unless --phone or --tunnel is given, and both
+    need a password: the page can spend money and message businesses.
+    --tunnel publishes it to the internet, so it insists on a long one.
     """
     from .dashboard import UnsafeBinding, serve
 
@@ -658,6 +665,7 @@ def dashboard_cmd(
             port=port,
             open_browser=not no_browser,
             phone=phone,
+            tunnel=tunnel,
         )
     except UnsafeBinding as exc:
         raise SystemExit(f"\n{exc}\n")
