@@ -55,7 +55,7 @@ src/outreach/
   web/             the built React page -- generated, committed, never edited
 config/campaigns/  penang-my.yaml is the live campaign
 frontend/          React source for /app; `npm run build` writes src/outreach/web
-tests/             1222 tests, pytest, no CI -- the suite is the only gate
+tests/             1221 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
