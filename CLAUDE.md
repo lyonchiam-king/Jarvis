@@ -55,7 +55,7 @@ src/outreach/
   web/             the built React page -- generated, committed, never edited
 config/campaigns/  penang-my.yaml is the live campaign
 frontend/          React source for /app; `npm run build` writes src/outreach/web
-tests/             1249 tests, pytest, no CI -- the suite is the only gate
+tests/             1254 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -557,6 +557,18 @@ network cards before likely-virtual ranges, and both the startup banner and
 `phone-check` offer all of them in order. Trying two addresses is faster than
 explaining `ipconfig` over a message. Loopback and 169.254 are dropped: one
 is not somewhere a phone can go and the other means DHCP never answered.
+
+**Installing a program is a step, and steps are where people stop.** The
+tunnel needed cloudflared, which meant choosing among six published files,
+knowing your own architecture, and putting it where the tool looks --
+exactly the kind of instruction that cannot be given over a message.
+`Dashboard-Anywhere.bat` fetches Cloudflare's own build itself, once, and
+says what it is downloading and from where. No checksum is pinned: the
+release moves, and a hash written here would refuse a perfectly good
+download by the next version. The download lands under a `.part` name and is
+moved into place, so an interruption cannot leave a half-file that looks
+installed; anything under a megabyte is refused as an error page rather than
+saved as a program that fails oddly for ever after.
 
 **A tunnel removes four network problems and adds one security problem.**
 `--tunnel` runs cloudflared as a quick tunnel and publishes a public https

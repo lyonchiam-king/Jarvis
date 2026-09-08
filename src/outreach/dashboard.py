@@ -2609,8 +2609,17 @@ def serve(
         # error on the way in rather than a dashboard that started, said
         # nothing about the tunnel, and left someone waiting on a phone.
         opened = Tunnel(port)
-        print("\n  Opening a public address (this takes a few seconds)...")
         try:
+            if opened.binary is None:
+                # Installing a program is the step that stalls someone who
+                # is not a programmer, and it is the only one left in "put
+                # the dashboard on my phone". Say what is being fetched and
+                # from where, then do it.
+                print("\n  cloudflared is not here yet. Downloading Cloudflare's")
+                print("  own build (about 40MB, once only)...")
+                where = opened.ensure_binary()
+                print(f"  Saved to {where}")
+            print("\n  Opening a public address (this takes a few seconds)...")
             public = opened.start()
         except TunnelError as exc:
             raise UnsafeBinding(f"{exc}") from exc

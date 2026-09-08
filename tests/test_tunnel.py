@@ -160,7 +160,8 @@ def test_a_long_password_is_allowed_through_to_the_tunnel(monkeypatch):
 
     class FakeTunnel:
         def __init__(self, port, **kw):
-            pass
+            # Already installed, so serve() takes no download path.
+            self.binary = Path("cloudflared")
 
         def start(self):
             return "https://fake.trycloudflare.com"
@@ -274,3 +275,100 @@ def test_the_launcher_expands_no_variable_inside_a_block():
         stripped = line.strip()
         if stripped.startswith("if ") and stripped.endswith("("):
             assert "%" not in stripped, line
+
+
+# ------------------------------------------------------- fetching the binary
+
+
+def test_the_right_build_is_chosen_for_the_machine(monkeypatch):
+    """Six files are published and picking among them is not a step to
+    talk a non-programmer through."""
+    import platform
+
+    from outreach.providers import tunnel as mod
+
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+    monkeypatch.setattr(platform, "machine", lambda: "AMD64")
+    assert mod.download_name() == "cloudflared-windows-amd64.exe"
+
+    monkeypatch.setattr(platform, "machine", lambda: "ARM64")
+    assert mod.download_name() == "cloudflared-windows-arm64.exe"
+
+
+def test_an_unpublished_platform_says_so_rather_than_downloading_nothing(monkeypatch, tmp_path):
+    import platform
+
+    from outreach.providers import tunnel as mod
+
+    monkeypatch.setattr(platform, "system", lambda: "Plan9")
+    monkeypatch.setattr(platform, "machine", lambda: "vax")
+    with pytest.raises(TunnelError) as raised:
+        mod.fetch_cloudflared(tmp_path)
+    assert "No published cloudflared" in str(raised.value)
+
+
+def test_a_downloaded_file_too_small_to_be_a_program_is_refused(monkeypatch, tmp_path):
+    """A few hundred bytes is a captive portal or an error page.
+
+    Saving it would produce a "program" that fails on every later run with
+    something unrelated to the real problem.
+    """
+    import platform
+
+    from outreach.providers import tunnel as mod
+
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+
+    class TinyResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size):
+            yield b"<html>Sign in to the wifi</html>"
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", lambda *a, **k: TinyResponse())
+
+    with pytest.raises(TunnelError) as raised:
+        mod.fetch_cloudflared(tmp_path)
+    assert "not the program" in str(raised.value)
+    # And nothing half-written is left behind to look installed.
+    assert not list(tmp_path.iterdir())
+
+
+def test_a_failed_download_leaves_nothing_behind(monkeypatch, tmp_path):
+    import platform
+
+    import requests
+
+    from outreach.providers import tunnel as mod
+
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+
+    def boom(*a, **k):
+        raise requests.RequestException("no route to host")
+
+    monkeypatch.setattr(requests, "get", boom)
+
+    with pytest.raises(TunnelError) as raised:
+        mod.fetch_cloudflared(tmp_path)
+    assert "developers.cloudflare.com" in str(raised.value), "must still say where to get it"
+    assert not list(tmp_path.iterdir())
+
+
+def test_a_binary_already_present_is_never_downloaded(tmp_path):
+    """Double-clicking the launcher twice must not fetch it twice."""
+    (tmp_path / "cloudflared").write_text("x")
+    tunnel = Tunnel(8765, root=tmp_path)
+
+    # download=False proves it never reaches the network path at all.
+    assert tunnel.ensure_binary(download=False) == tmp_path / "cloudflared"
