@@ -802,7 +802,7 @@ def create_app(config: Config) -> Flask:
         """
         return jsonify(_manifest("SME Outreach", "Outreach", "/"))
 
-    def _manifest(name: str, short: str, start: str) -> dict:
+    def _manifest(name: str, short: str, start: str, scope: str | None = None) -> dict:
         """One manifest shape, two pages.
 
         The start_url is what the icon opens, so each page needs its own --
@@ -814,7 +814,7 @@ def create_app(config: Config) -> Flask:
             "name": name,
             "short_name": short,
             "start_url": start,
-            "scope": start,
+            "scope": scope or start,
             "display": "standalone",
             "background_color": "#f6f5f2",
             "theme_color": "#f6f5f2",
@@ -913,7 +913,7 @@ def create_app(config: Config) -> Flask:
 
     @app.route("/app/manifest.webmanifest")
     def spa_manifest():
-        return jsonify(_manifest("SME Outreach", "Outreach", "/app/"))
+        return jsonify(_manifest("SME Outreach", "Outreach", "/app/", scope="/app"))
 
     @app.route("/app/<path:asset>")
     def spa_asset(asset: str):
@@ -2482,11 +2482,14 @@ def serve(
             print("      DASHBOARD_PASSWORD=something-only-you-know")
     else:
         where = lan_address()
+        host_part = where or "<this-pc-ip>"
         print("\n  On your phone, on the same wifi, open:")
-        print(f"      http://{where or '<this-pc-ip>'}:{port}")
+        print(f"      http://{host_part}:{port}/app")
         if not where:
             print("      (run  ipconfig  and use the IPv4 Address)")
-        print("  It asks for your dashboard password.")
+        print("  It asks for your dashboard password, then shows the new")
+        print("  dashboard. Share -> Add to Home Screen makes it an app.")
+        print(f"\n  The older page is at  http://{host_part}:{port}/")
         print("\n  If Windows asks about the firewall, tick Private networks")
         print("  and allow it -- the phone cannot connect otherwise.")
     print("\n  Close this window when you're done.\n")

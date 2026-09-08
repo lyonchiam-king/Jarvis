@@ -123,6 +123,40 @@ def test_each_page_has_its_own_home_screen_manifest(client):
     assert old["start_url"] == "/"
     assert new["start_url"] == "/app/"
     assert new["display"] == "standalone"
+    # /app is the address people type, and a scope of "/app/" would leave it
+    # outside the installed app -- so the icon would open a browser tab.
+    assert new["scope"] == "/app"
+
+
+def test_the_phone_instructions_name_the_new_page(capsys, monkeypatch):
+    """The address printed here is the one that gets typed into a phone.
+
+    It named the old dashboard, so the page meant to be used on a phone had
+    to be found by hand afterwards.
+    """
+    import outreach.dashboard as dash
+
+    monkeypatch.setattr(dash, "lan_address", lambda: "192.168.1.50")
+
+    class Stop(Exception):
+        pass
+
+    class FakeApp:
+        def run(self, **kwargs):
+            raise Stop
+
+    monkeypatch.setattr(dash, "create_app", lambda config: FakeApp())
+    monkeypatch.setattr(
+        dash, "load_config",
+        lambda *a, **k: configured(dashboard_password="x", sheet_id=""),
+    )
+
+    with pytest.raises(Stop):
+        dash.serve(port=8765, open_browser=False, phone=True)
+
+    printed = capsys.readouterr().out
+    assert "http://192.168.1.50:8765/app" in printed
+    assert "Add to Home Screen" in printed
 
 
 # --------------------------------------------------- endpoints for the page
