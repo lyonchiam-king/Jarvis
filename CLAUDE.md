@@ -55,7 +55,7 @@ src/outreach/
   web/             the built React page -- generated, committed, never edited
 config/campaigns/  penang-my.yaml is the live campaign
 frontend/          React source for /app; `npm run build` writes src/outreach/web
-tests/             1214 tests, pytest, no CI -- the suite is the only gate
+tests/             1215 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -582,6 +582,43 @@ something the field is left empty. The generated page shipped a hardcoded
 that a failed send would be "copied to clipboard" -- three sentences that read
 as facts and were not. A dashboard that spends money and messages real
 businesses is the worst place for a convincing guess.
+
+**A generated page states things it cannot support.** The React front end
+arrived with a made-up phone number shown as the linked WhatsApp account,
+per-lead prices nobody measured ("about 0.2¢ each"), a model name
+(`gemini-3.8-flash`) written into two placeholders and two defaults, a
+version string matching nothing, a hardcoded `127.0.0.1:8787` for a port the
+campaign file owns, a promise that failed sends are "copied to clipboard",
+and a **Download Local Relay app** link pointing at an unrelated repository
+-- there is no download; `Dashboard.bat` starts it. Each reads as fact.
+`scripts/verify/no-invented-facts.mjs` bans the shapes: model names, prices,
+phone numbers, version strings, download links, the word *encrypt*, and a
+literal loopback address. It carries a control that fires every pattern
+against text built to trip it, because a negative check with a broken regex
+reports a clean page for ever.
+
+**Rendering is the only proof a page works.** `tsc` proves types, Vite proves
+it bundles, pytest proves the routes answer -- and all three pass over a
+throw in the first render, where the server logs two clean 200s and the
+person sees white. `scripts/verify/render-check.mjs` drives real Chromium
+over the DevTools protocol: what React committed, every console error and
+failed request, whether anything sits past the right edge at phone width,
+and a screenshot. It found the false claims still shipping in the bundle
+after they were fixed in one file and missed in another.
+
+**Set the viewport over the protocol, not with `--window-size`.** The flag is
+ignored in the new headless mode -- it reported 500px whatever was asked for,
+so every phone measurement was taken at the wrong width and the layout looked
+fine. `Emulation.setDeviceMetricsOverride` is exact, and the check now asserts
+the width it got before trusting anything measured at it.
+
+**Measure overflow from where things land, not from a container's
+`overflow`.** `<main>` carries `overflow-y-auto`, which computes `overflow-x`
+to `auto` as well, so a `scrollWidth > clientWidth` test skipped the very
+element doing the clipping. What a person sees is a button past the right
+edge, so that is what is measured -- rightward only, since the closed
+navigation drawer is parked off the left edge on purpose and a symmetric
+test reports six false failures.
 
 **`/app` is additive, and `/` does not move.** The React page is new, has never
 run on Lyon's machine, and replacing the working dashboard with it would make

@@ -134,7 +134,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
           <div>
             <h1 className="font-semibold text-base leading-tight tracking-tight">Outreach Studio</h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400">SME Pipeline v1.2</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">SME outreach pipeline</p>
           </div>
         </div>
         <button
@@ -247,10 +247,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="flex items-center gap-2">
           <Bot className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
           <span className="font-medium text-slate-700 dark:text-slate-300">
-            {modelSettings?.provider ? modelSettings.provider.toUpperCase() : 'GEMINI'}
+            {modelSettings?.provider ? modelSettings.provider.toUpperCase() : 'NO PROVIDER'}
           </span>
           <span className="text-[10px] bg-slate-200 dark:bg-slate-800 px-1.5 py-0.5 rounded">
-            {modelSettings?.model || '3.8-flash'}
+            {modelSettings?.model || 'not set'}
           </span>
         </div>
         <p className="text-[11px] text-slate-400 dark:text-slate-500 leading-tight">

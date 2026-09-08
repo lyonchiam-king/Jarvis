@@ -38,10 +38,10 @@ export const OnboardingBanner: React.FC<OnboardingBannerProps> = ({
 
   // Step 2 state
   const [provider, setProvider] = useState<string>(
-    modelSettings?.provider || 'gemini'
+    modelSettings?.provider || ''
   );
   const [modelName, setModelName] = useState<string>(
-    modelSettings?.model || 'gemini-3.8-flash'
+    modelSettings?.model || ''
   );
   const [placesKeyInput, setPlacesKeyInput] = useState('');
   const [modelKeyInput, setModelKeyInput] = useState('');
@@ -265,7 +265,7 @@ export const OnboardingBanner: React.FC<OnboardingBannerProps> = ({
               <Key className="w-4 h-4 text-teal-400" /> API Credentials
             </h3>
             <p className="text-xs text-slate-300 mt-1.5 leading-relaxed">
-              Stored encrypted server-side &amp; never sent back to browser.
+              Written to .env on this computer. Never sent back to this page.
             </p>
 
             <div className="mt-3 space-y-2 text-xs">
@@ -291,7 +291,7 @@ export const OnboardingBanner: React.FC<OnboardingBannerProps> = ({
                     value={modelName}
                     onChange={(e) => setModelName(e.target.value)}
                     className="bg-slate-900 border border-slate-700 text-white rounded px-2 py-1 text-xs"
-                    placeholder="gemini-3.8-flash"
+                    placeholder="the exact model name your key can use"
                   />
                 </div>
               </div>
@@ -429,11 +429,13 @@ export const OnboardingBanner: React.FC<OnboardingBannerProps> = ({
               <Smartphone className="w-4 h-4 text-teal-400" /> WhatsApp Local Relay
             </h3>
             <p className="text-xs text-slate-300 mt-1.5 leading-relaxed">
-              WhatsApp sessions run on your own machine at{' '}
-              <code className="bg-slate-900 px-1 py-0.5 rounded text-teal-300">
-                127.0.0.1:8787
-              </code>
-              . No session tokens leave your device.
+              WhatsApp runs on this computer{whatsappStatus?.relayUrl ? ' at ' : ''}
+              {whatsappStatus?.relayUrl && (
+                <code className="bg-slate-900 px-1 py-0.5 rounded text-teal-300">
+                  {whatsappStatus.relayUrl}
+                </code>
+              )}
+              . The session never leaves the machine.
             </p>
 
             {relayOk ? (
@@ -449,7 +451,8 @@ export const OnboardingBanner: React.FC<OnboardingBannerProps> = ({
                   <div className="flex items-center gap-1 text-amber-400 font-medium mb-0.5">
                     <Info className="w-3 h-3" /> Relay Not Detected
                   </div>
-                  Download the local helper app, or click below to link QR code.
+                  The relay starts with the dashboard. If it is not running, close
+                  everything and run Dashboard.bat again, then show the QR code below.
                 </div>
 
                 {qrCodeSvg ? (
@@ -478,12 +481,12 @@ export const OnboardingBanner: React.FC<OnboardingBannerProps> = ({
 
           <div className="mt-4 pt-3 border-t border-slate-700/60 flex items-center justify-between text-xs">
             <a
-              href="https://github.com/lyonchiam-king/Front-End-Design-Checklist"
+              href="/guide"
               target="_blank"
               rel="noreferrer"
               className="text-teal-400 hover:underline text-[11px] inline-flex items-center gap-1"
             >
-              Download Local Relay app <ExternalLink className="w-3 h-3" />
+              Read the handbook <ExternalLink className="w-3 h-3" />
             </a>
             <button
               onClick={onRefresh}

@@ -798,6 +798,17 @@ def create_app(config: Config) -> Flask:
             ],
         }
 
+    @app.route("/favicon.ico")
+    def favicon():
+        """Browsers ask for this unprompted, on every page, always.
+
+        Without it every visit logged a 404 -- which is noise in itself, and
+        worse, noise of exactly the shape a real broken asset would make. The
+        page icon already exists; this points at it rather than adding a
+        second one.
+        """
+        return redirect("/icon.png")
+
     @app.route("/icon.png")
     def icon():
         """The Home Screen icon, drawn here rather than shipped as a file.

@@ -21,8 +21,8 @@ export const SettingsView: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   // Inputs
-  const [provider, setProvider] = useState('gemini');
-  const [model, setModel] = useState('gemini-3.8-flash');
+  const [provider, setProvider] = useState('');
+  const [model, setModel] = useState('');
   const [placesKeyInput, setPlacesKeyInput] = useState('');
   const [modelKeyInput, setModelKeyInput] = useState('');
 
@@ -39,8 +39,8 @@ export const SettingsView: React.FC = () => {
     const [mRes, wRes] = await Promise.all([api.getModel(), api.getWhatsAppStatus()]);
     if (mRes.data) {
       setModelSettings(mRes.data);
-      setProvider(mRes.data.provider || 'gemini');
-      setModel(mRes.data.model || 'gemini-3.8-flash');
+      setProvider(mRes.data.provider);
+      setModel(mRes.data.model);
     }
     if (wRes.data) {
       setWhatsappStatus(wRes.data);
@@ -131,10 +131,10 @@ export const SettingsView: React.FC = () => {
           <ShieldCheck className="w-4 h-4" /> Where your keys are kept
         </div>
         <p className="text-slate-300 text-[11px] leading-relaxed">
-          Keys are written to the <code>.env</code> file on this computer and are
-          <strong> never sent back to this page</strong> -- it only ever learns whether a
-          key is set. They are not encrypted at rest, so treat this machine as the
-          thing that protects them.
+          Keys are written as plain text to the <code>.env</code> file on this
+          computer, and are <strong>never sent back to this page</strong> -- it only ever
+          learns whether a key is set. Nothing scrambles them at rest, so this machine
+          is the only thing protecting them.
         </p>
       </div>
 
@@ -170,7 +170,7 @@ export const SettingsView: React.FC = () => {
               type="text"
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder="gemini-3.8-flash"
+              placeholder="the exact model name your key can use"
               className="w-full p-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 font-mono"
             />
           </div>

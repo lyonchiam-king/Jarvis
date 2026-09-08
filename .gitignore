@@ -42,3 +42,11 @@ relay-log.txt
 # frontend/, and only ever needed on a machine that rebuilds the page --
 # never on Lyon's, which serves the committed build in src/outreach/web/.
 frontend/node_modules/
+
+# The unlazy working ledger and its local state. The checker writes evidence
+# into GATES.md as it runs, so a tracked copy would dirty the tree on every
+# verification -- including the gate that checks the tree is clean.
+GATES.md
+.unlazy/
+.unlazy-hook-state.json
+.claude/settings.local.json

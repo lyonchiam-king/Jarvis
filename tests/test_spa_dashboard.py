@@ -107,6 +107,16 @@ def test_the_asset_route_cannot_escape_the_build_directory(client):
             assert response.status_code in (301, 308, 400, 404)
 
 
+def test_a_favicon_is_served_so_the_console_stays_quiet(client):
+    """Browsers ask for /favicon.ico unprompted, on every page.
+
+    Left unanswered it logged a 404 on every visit -- noise of exactly the
+    shape a genuinely broken asset makes, which is how a real one hides.
+    """
+    response = client.get("/favicon.ico")
+    assert response.status_code in (200, 301, 302, 308)
+
+
 def test_each_page_has_its_own_home_screen_manifest(client):
     old = client.get("/manifest.webmanifest").get_json()
     new = client.get("/app/manifest.webmanifest").get_json()
