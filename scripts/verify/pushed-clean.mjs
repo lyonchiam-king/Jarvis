@@ -9,7 +9,6 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 const REPO = path.resolve(import.meta.dirname, '..', '..');
-const BRANCH = 'claude/sme-outreach-pipeline-crn9f1';
 const git = (...args) => spawnSync('git', args, { cwd: REPO, encoding: 'utf8' });
 
 const problems = [];
@@ -20,16 +19,23 @@ if (dirty.stdout.trim()) {
 }
 
 const branch = git('rev-parse', '--abbrev-ref', 'HEAD').stdout.trim();
-if (branch !== BRANCH) problems.push(`on ${branch}, not ${BRANCH}`);
-
-git('fetch', 'origin', BRANCH);
-const local = git('rev-parse', 'HEAD').stdout.trim();
-const remote = git('rev-parse', `origin/${BRANCH}`).stdout.trim();
-if (!remote) problems.push(`origin/${BRANCH} does not exist`);
-else if (local !== remote) {
-  const ahead = git('rev-list', '--count', `origin/${BRANCH}..HEAD`).stdout.trim();
-  problems.push(`${ahead} commit(s) not pushed (local ${local.slice(0, 8)}, remote ${remote.slice(0, 8)})`);
+const upstream = git('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}').stdout.trim();
+if (!upstream) {
+  problems.push(`${branch} tracks nothing -- push it with: git push -u origin ${branch}`);
+} else {
+  git('fetch', 'origin', branch);
+  const local = git('rev-parse', 'HEAD').stdout.trim();
+  const remote = git('rev-parse', upstream).stdout.trim();
+  if (local !== remote) {
+    const ahead = git('rev-list', '--count', `${upstream}..HEAD`).stdout.trim();
+    const behind = git('rev-list', '--count', `HEAD..${upstream}`).stdout.trim();
+    problems.push(
+      `${branch} and ${upstream} differ: ${ahead} commit(s) not pushed, ` +
+      `${behind} not pulled (local ${local.slice(0, 8)}, remote ${remote.slice(0, 8)})`
+    );
+  }
 }
+const local = git('rev-parse', 'HEAD').stdout.trim();
 
 if (problems.length) {
   for (const problem of problems) console.error(`FAIL: ${problem}`);
