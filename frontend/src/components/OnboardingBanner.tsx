@@ -280,10 +280,11 @@ export const OnboardingBanner: React.FC<OnboardingBannerProps> = ({
                     onChange={(e) => setProvider(e.target.value)}
                     className="bg-slate-900 border border-slate-700 text-white rounded px-2 py-1 text-xs"
                   >
-                    <option value="gemini">Google Gemini</option>
-                    <option value="anthropic">Anthropic Claude</option>
-                    <option value="ollama">Ollama (Local)</option>
-                    <option value="openrouter">OpenRouter</option>
+                    {(modelSettings?.providers || []).map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
                   </select>
                   <input
                     id="model-name-input"
@@ -291,7 +292,7 @@ export const OnboardingBanner: React.FC<OnboardingBannerProps> = ({
                     value={modelName}
                     onChange={(e) => setModelName(e.target.value)}
                     className="bg-slate-900 border border-slate-700 text-white rounded px-2 py-1 text-xs"
-                    placeholder="the exact model name your key can use"
+                    placeholder="exact model name"
                   />
                 </div>
               </div>
@@ -342,7 +343,7 @@ export const OnboardingBanner: React.FC<OnboardingBannerProps> = ({
 
               <div>
                 <div className="flex items-center justify-between text-[11px] text-slate-300 mb-1">
-                  <span>Model API Key ({provider})</span>
+                  <span>Model API Key{provider ? ` (${provider})` : ''}</span>
                   <a
                     href="https://aistudio.google.com/app/apikey"
                     target="_blank"

@@ -170,7 +170,7 @@ export const SettingsView: React.FC = () => {
               type="text"
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder="the exact model name your key can use"
+              placeholder="exact model name"
               className="w-full p-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 font-mono"
             />
           </div>
@@ -235,7 +235,7 @@ export const SettingsView: React.FC = () => {
         <div className="space-y-2 text-xs pt-3 border-t border-slate-100 dark:border-slate-800">
           <div className="flex items-center justify-between">
             <span className="font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-              Model API Key ({provider})
+              Model API Key{provider ? ` (${provider})` : ''}
               {modelSettings?.key_set ? (
                 <span className="text-[10px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold px-2 py-0.5 rounded">
                   Set ✓
