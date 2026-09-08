@@ -20,6 +20,7 @@ import secrets as _secrets
 from collections import deque
 import os
 from dataclasses import dataclass, field
+from urllib.parse import quote
 from pathlib import Path
 
 from flask import (
@@ -674,6 +675,7 @@ LOGIN_PAGE = """<!doctype html>
   .err { color:var(--accent); font-size:14px; margin:12px 0 0; }
 </style>
 <form method="post">
+  <input type="hidden" name="next" value="{{ next }}">
   <h1>SME Outreach</h1>
   <p>This dashboard can spend money and message businesses, so it asks first.</p>
   <input type="password" name="password" placeholder="Dashboard password"
@@ -708,6 +710,21 @@ def create_app(config: Config) -> Flask:
             login_failures.clear()
         return len(recent) >= LOGIN_MAX
 
+    def safe_next(raw: str | None) -> str:
+        """Where to go after signing in -- but only somewhere on this site.
+
+        The value arrives in a query string, so anyone who can get a link in
+        front of you chooses it. Anything but a plain path on this host is
+        discarded rather than corrected: `//example.com` and `/\\example.com`
+        are both read by browsers as *another site*, which would turn the
+        login page into a redirector that arrives from a trusted address.
+        """
+        if not raw or not raw.startswith("/"):
+            return "/"
+        if raw.startswith("//") or raw.startswith("/\\"):
+            return "/"
+        return raw
+
     @app.route("/login", methods=["GET", "POST"])
     def login():
         wanted = current().secrets.dashboard_password
@@ -715,6 +732,15 @@ def create_app(config: Config) -> Flask:
             # Nothing to sign in to. Say so rather than showing a box that
             # accepts anything.
             return redirect("/")
+
+        # Where the person was heading before being stopped. Losing it sent
+        # everyone to the old dashboard however they arrived -- so asking for
+        # /app and signing in landed you on / , which looks exactly like the
+        # new page never shipped.
+        target = safe_next(
+            request.form.get("next") if request.method == "POST"
+            else request.args.get("next")
+        )
 
         error = ""
         if request.method == "POST":
@@ -728,10 +754,10 @@ def create_app(config: Config) -> Flask:
                 if hmac.compare_digest(given, wanted):
                     session["in"] = True
                     session.permanent = True
-                    return redirect("/")
+                    return redirect(target)
                 login_failures.setdefault(who, []).append(time.time())
                 error = "Wrong password."
-        return render_template_string(LOGIN_PAGE, error=error), (
+        return render_template_string(LOGIN_PAGE, error=error, next=target), (
             200 if request.method == "GET" else 401
         )
 
@@ -747,7 +773,7 @@ def create_app(config: Config) -> Flask:
         # A browser handed JSON shows raw text and a phone shows nothing.
         if request.path.startswith("/api/"):
             return jsonify({"error": "Signed out. Reload the page."}), 401
-        return redirect("/login")
+        return redirect(f"/login?next={quote(request.full_path.rstrip('?'), safe='/?=&')}")
 
     # The campaign target is editable from the page, so config is state rather
     # than a constant. Every handler reads through `current()` so a save takes
@@ -2754,7 +2780,9 @@ PAGE = """<!doctype html>
   <div class="row" style="justify-content:space-between;align-items:baseline">
     <div class="sub" id="totals">Loading&hellip;</div>
     <div class="row" style="gap:14px">
-      <a class="sub" href="/app"><b>Try the new look &rsaquo;</b></a>
+      <a href="/app" style="display:inline-block;padding:7px 14px;border-radius:8px;
+         background:var(--accent,#b4472e);color:#fff;font-weight:600;
+         font-size:14px;text-decoration:none">New dashboard &rsaquo;</a>
       <a class="sub" href="/guide" target="_blank" rel="noopener"><b>Handbook &rsaquo;</b></a>
     </div>
   </div>

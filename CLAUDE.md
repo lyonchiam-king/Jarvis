@@ -55,7 +55,7 @@ src/outreach/
   web/             the built React page -- generated, committed, never edited
 config/campaigns/  penang-my.yaml is the live campaign
 frontend/          React source for /app; `npm run build` writes src/outreach/web
-tests/             1215 tests, pytest, no CI -- the suite is the only gate
+tests/             1220 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -619,6 +619,23 @@ element doing the clipping. What a person sees is a button past the right
 edge, so that is what is measured -- rightward only, since the closed
 navigation drawer is parked off the left edge on purpose and a symmetric
 test reports six false failures.
+
+**A login that forgets where you were going hides the page behind it.**
+`_require_login` redirected to `/login` with the requested path thrown away,
+and `login` sent everyone to `/` on success -- so asking for `/app`, being
+stopped, and signing in landed you on the old dashboard. Reported three times
+as "it still looks the same", which is exactly what it looks like. The path
+rides through as `?next=`, and because that value arrives in a query string
+anyone who can put a link in front of you chooses it: `safe_next` discards
+anything but a plain path on this host, `//example.com` and `/\example.com`
+included, since browsers read both as another site and a login page that
+forwards anywhere is a redirector wearing a trusted address.
+
+**A link the owner cannot find is the link's fault.** The way into the new
+page was small grey text among other small grey links, and was missed three
+times running by the person who asked for the page. It is a button now, and
+a test holds it: three rounds of "where is it" is a design defect, not a user
+error.
 
 **`/app` is additive, and `/` does not move.** The React page is new, has never
 run on Lyon's machine, and replacing the working dashboard with it would make

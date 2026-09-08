@@ -341,3 +341,65 @@ def test_the_page_never_builds_a_dialling_code_itself():
         text = source.read_text()
         assert "'+60'" not in text and '"+60"' not in text, source
         assert "+ '60'" not in text, source
+
+
+# ------------------------------------------------------- getting to the page
+
+
+def guarded():
+    """A dashboard with a password set, so the login guard is live."""
+    return create_app(configured(dashboard_password="hunter2", sheet_id="")).test_client()
+
+
+def test_signing_in_returns_you_to_the_page_you_asked_for():
+    """Losing it meant /app was unreachable for anyone with a password.
+
+    Ask for the new page, get stopped at the login, sign in -- and land on
+    the old dashboard, which looks exactly as though the new page was never
+    shipped. Reported three times as "it still looks the same".
+    """
+    client = guarded()
+
+    bounced = client.get("/app")
+    assert bounced.status_code == 302
+    from urllib.parse import parse_qs, urlparse
+
+    carried = parse_qs(urlparse(bounced.headers["Location"]).query)["next"][0]
+    assert carried.startswith("/app")
+
+    signed_in = client.post("/login", data={"password": "hunter2", "next": "/app"})
+    assert signed_in.status_code == 302
+    assert signed_in.headers["Location"] == "/app"
+
+
+def test_signing_in_with_no_destination_still_goes_home():
+    client = guarded()
+    response = client.post("/login", data={"password": "hunter2"})
+    assert response.headers["Location"] == "/"
+
+
+def test_the_login_page_will_not_forward_you_off_this_site():
+    """The destination comes from a query string, so a stranger picks it.
+
+    A login page that redirects anywhere is a redirector wearing a trusted
+    address. Both of these are read by browsers as another host, despite
+    starting with a slash.
+    """
+    for elsewhere in ("//example.com", "/\\example.com", "https://example.com", "javascript:alert(1)"):
+        client = guarded()
+        response = client.post("/login", data={"password": "hunter2", "next": elsewhere})
+        assert response.headers["Location"] == "/", elsewhere
+
+
+def test_a_wrong_password_keeps_the_destination():
+    """Otherwise a typo quietly costs you the page you were going to."""
+    client = guarded()
+    response = client.post("/login", data={"password": "wrong", "next": "/app"})
+    assert response.status_code == 401
+    assert b'value="/app"' in response.data
+
+
+def test_the_link_to_the_new_page_is_a_button_not_a_footnote(client):
+    page = client.get("/").get_data(as_text=True)
+    link = page[page.index('href="/app"'):][:400]
+    assert "background" in link, "the link to the new dashboard is not styled as a button"
