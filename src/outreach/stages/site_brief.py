@@ -284,6 +284,7 @@ def run(
                 # business actually looks like, rather than from adjectives.
                 maps_url=lead.get("Maps URL", ""),
                 design_level=config.build.design_level,
+                angle=config.outreach.angle,
             )
 
             # No build happens here, ever. A brand-new row is seeded "Pending",
@@ -418,6 +419,7 @@ def _run_rewrite(
                 social_profiles=social_profiles,
                 maps_url=lead.get("Maps URL", ""),
                 design_level=config.build.design_level,
+                angle=config.outreach.angle,
             )
 
             # Only the two fields that are actually new. Everything else --
@@ -675,6 +677,7 @@ def generate_sites(
                 social_profiles=social_profiles,
                 maps_url=lead.get("Maps URL", ""),
                 design_level=config.build.design_level,
+                angle=config.outreach.angle,
                 target="html",
                 images=manifest_lines(images),
             )
@@ -800,6 +803,7 @@ def regenerate_one(
         social_profiles=social_profiles,
         maps_url=lead.get("Maps URL", ""),
         design_level=config.build.design_level,
+        angle=config.outreach.angle,
         target="html" if config.build.target == "firebase" else "lovable",
     )
 

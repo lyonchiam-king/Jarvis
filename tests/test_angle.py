@@ -195,3 +195,115 @@ def test_follow_up_cannot_be_promised_by_the_angle_that_never_mentions_it():
         "/api/angle", json={"angle": "no-website", "offers_follow_up": True}
     ).get_json()
     assert "conversion" in body["error"]
+
+
+# --------------------------------------------------- what actually gets built
+
+
+def a_spec():
+    from outreach.providers.llm import SiteSpec
+
+    return SiteSpec(
+        site_goal="Get more bookings",
+        pages=("Home", "About", "Services", "Gallery", "Contact"),
+        hero_headline="Headline",
+        hero_subcopy="Subcopy",
+        key_sections=("one", "two"),
+        primary_cta="WhatsApp us",
+        visual_direction="",
+        visitor="Locals",
+        proof_points=(),
+        layout_system="",
+        palette="",
+        typography="",
+        avoid=(),
+        highlights=(),
+        showcase_items=(),
+        interactive_feature="",
+        mobile_bar=(),
+        signature_moment="",
+        motion_language="",
+        micro_interactions=(),
+    )
+
+
+def rendered(angle="no-website"):
+    from outreach.providers.llm import render_lovable_prompt
+
+    return render_lovable_prompt(
+        business_name="Kedai Kopi",
+        category="cafe",
+        location="Penang",
+        spec=a_spec(),
+        angle=angle,
+    )
+
+
+def test_the_conversion_brief_builds_one_page_not_a_small_website():
+    """The message promises one page built for one action.
+
+    A model handed the same spec will happily propose five sections, and a
+    five-section site arriving under that message is the pitch contradicting
+    itself at the only moment anyone is looking.
+    """
+    out = rendered("conversion")
+    assert "One page. Nothing else." in out
+    assert "No navigation bar" in out
+    # The spec's own page list is overruled, not obeyed.
+    assert "- About" not in out
+    assert "- Gallery" not in out
+
+
+def test_the_no_website_brief_still_builds_the_whole_site():
+    out = rendered()
+    assert "- About" in out and "- Gallery" in out
+    assert "No navigation bar" not in out
+
+
+def test_the_conversion_brief_does_not_call_it_a_replacement():
+    """Someone paid for the site this sits beside, quite possibly them."""
+    out = rendered("conversion")
+    assert "already has a website" in out
+    assert "not a replacement" in out
+    assert "never had a website" not in out
+
+
+def test_the_conversion_brief_puts_the_action_above_the_fold():
+    out = rendered("conversion")
+    assert "without scrolling" in out
+    assert "One action, not three" in out
+
+
+def test_the_shared_enquiry_rule_survives_in_both():
+    """The reason differs by angle; the instruction never does."""
+    for angle in ("no-website", "conversion"):
+        assert "admin panel" in rendered(angle)
+
+
+def test_the_conversion_brief_never_argues_with_itself():
+    """An earlier attempt told the model to disregard a line it had just
+    been given. A prompt that contradicts itself is not one to trust with a
+    real business's page."""
+    assert "IGNORE" not in rendered("conversion")
+
+
+def test_adding_an_angle_left_the_original_prompt_untouched():
+    """The same promise `design_level` makes: "standard" is the prompt as it
+    was. Two snapshot tests caught this when a shared line was reworded."""
+    fixture = pathlib.Path("tests/fixtures/lovable_prompt.txt")
+    if fixture.exists():
+        assert "never had a website" in fixture.read_text()
+
+
+def test_all_four_brief_call_sites_pass_the_angle():
+    """Run, --rewrite, generate_sites and regenerate_one.
+
+    Three of these four once went unwired for `design_level` with the whole
+    suite green: the prompt was valid, just not the one the campaign asked
+    for. They are counted against each other so a new call site cannot be
+    added without one.
+    """
+    source = pathlib.Path("src/outreach/stages/site_brief.py").read_text()
+    assert source.count("render_lovable_prompt(") == 4
+    assert source.count("angle=config.outreach.angle") == 4
+    assert source.count("design_level=config.build.design_level") == 4

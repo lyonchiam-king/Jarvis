@@ -55,7 +55,7 @@ src/outreach/
   web/             the built React page -- generated, committed, never edited
 config/campaigns/  penang-my.yaml is the live campaign
 frontend/          React source for /app; `npm run build` writes src/outreach/web
-tests/             1274 tests, pytest, no CI -- the suite is the only gate
+tests/             1282 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -523,6 +523,27 @@ every web designer and invites a no from anyone who already paid for a page;
 money that the owner has usually half-asked themselves. The conversion angle
 keeps every business, website or not, and nothing is double-messaged because
 discovery already skips every place_id on the Leads tab.
+
+**The conversion brief overrules the spec's page list.** The message
+promises one page built for one action, and the page is what they click -- so
+a five-section site arriving under that message is the pitch contradicting
+itself at the only moment anyone is looking. A model handed the same
+`SITE_SPEC_SCHEMA` will propose five sections regardless, so
+`render_lovable_prompt` replaces the list rather than trusting it, and says
+what makes a landing page different **as removals**: no navigation, no About
+page, one action not three, the way to get in touch visible without
+scrolling. A model asked for "a focused page" still reaches for a nav bar.
+All four call sites pass the angle, counted against the `design_level` count
+so a fifth cannot appear without one.
+
+**Adding an angle must not change the prompt the other angle produces.** The
+same promise `design_level` makes. A shared enquiry line explains itself with
+"this owner has never had a website", which is false of a conversion lead --
+so it is corrected in `_enquiry_lines_for`, at the point of use, leaving the
+no-website prompt byte for byte as it was. Two snapshot tests caught the
+first attempt, which reworded it for everyone. The second attempt told the
+model to ignore a line it had just been given; a prompt that argues with
+itself is not one to trust with a real business's page.
 
 **The conversion message may never criticise their website.** Someone paid
 for it, quite possibly them, and an insult is a reason to stop reading. The

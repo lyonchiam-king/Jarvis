@@ -1029,6 +1029,31 @@ TARGETS: dict[str, TargetProfile] = {
 }
 
 
+def _enquiry_lines_for(profile: "TargetProfile", conversion: bool) -> tuple[str, ...]:
+    """The shared enquiry instructions, with a reason true of this campaign.
+
+    One line explains itself with "this owner has never had a website", which
+    is false of a conversion lead -- they have one, that is the entire premise
+    of the angle. The instruction it justifies is right either way: a small
+    business owner will not log into an admin panel to read messages.
+
+    Corrected here, at the point of use, rather than in the profile: the
+    no-website prompt must come out byte for byte as it did before angles
+    existed, which two snapshot tests hold. Telling the model to disregard a
+    line it has just been given was the other option, and a prompt that
+    argues with itself is not one to trust with a real business's page.
+    """
+    if not conversion:
+        return profile.enquiry_lines
+    return tuple(
+        line.replace(
+            "This owner has never had a website and will not log into an",
+            "This owner runs a shop, not a website, and will not log into an",
+        )
+        for line in profile.enquiry_lines
+    )
+
+
 def render_lovable_prompt(
     *,
     business_name: str,
@@ -1043,6 +1068,7 @@ def render_lovable_prompt(
     target: str = "lovable",
     images: str = "",
     design_level: str = "standard",
+    angle: str = "no-website",
 ) -> str:
     """Turn the structured spec into the text you paste into Lovable.
 
@@ -1073,19 +1099,45 @@ def render_lovable_prompt(
         )
     profile = TARGETS[target]
     showcase = design_level == "showcase"
+    conversion = angle == "conversion"
 
     where = f" in {location}" if location else ""
-    pages = "\n".join(f"- {p}" for p in spec.pages) or "- Home (single page)"
+    # The conversion angle promises one page built for one action, and the
+    # page is what they click -- so the spec's page list is overridden rather
+    # than trusted. A model handed the same schema will happily propose five
+    # sections, and a five-section site arriving under a message that
+    # promised one page is the pitch contradicting itself at the only moment
+    # anyone is looking.
+    pages = (
+        "- One page. Nothing else. No navigation bar, no About page, no links "
+        "away from it."
+        if conversion
+        else "\n".join(f"- {p}" for p in spec.pages) or "- Home (single page)"
+    )
     sections = "\n".join(f"{i}. {s}" for i, s in enumerate(spec.key_sections, start=1))
 
-    out = [
-        f"Build a website for {business_name}, a "
-        f"{category or 'local business'}{where}.",
-        "",
-        "This business has never had a website. This site is the first "
-        "impression anyone gets of them online, and the owner will see it "
-        "before their customers do.",
-    ]
+    if conversion:
+        out = [
+            f"Build a single landing page for {business_name}, a "
+            f"{category or 'local business'}{where}.",
+            "",
+            "This business already has a website. This page is not a "
+            "replacement for it and must never look like a redesign of it -- "
+            "it sits alongside, for the visitors their current site is losing. "
+            "Its whole purpose is that someone who is already interested has "
+            "one obvious thing to do instead of leaving. The owner will see it "
+            "before their customers do, and they paid for the site it sits "
+            "beside, so nothing here may read as a criticism of what they have.",
+        ]
+    else:
+        out = [
+            f"Build a website for {business_name}, a "
+            f"{category or 'local business'}{where}.",
+            "",
+            "This business has never had a website. This site is the first "
+            "impression anyone gets of them online, and the owner will see it "
+            "before their customers do.",
+        ]
 
     sources = []
     if maps_url:
@@ -1128,6 +1180,31 @@ def render_lovable_prompt(
         "",
         "PAGES",
         pages,
+    ]
+
+    if conversion:
+        # The difference between a landing page and a short website is what
+        # is missing from it. Said as removals, because a model asked for
+        # "a focused page" still reaches for a nav bar and an about section.
+        out += [
+            "",
+            "WHAT MAKES THIS A LANDING PAGE AND NOT A SMALL WEBSITE",
+            f'- The way to get in touch -- "{spec.primary_cta}" -- is visible '
+            "without scrolling, on a phone, and repeats at the end. Someone "
+            "who arrives ready should never have to hunt for it.",
+            "- No navigation bar and no menu. There is nowhere else to go, and "
+            "every link off this page is a visitor who did not get in touch.",
+            "- No About page, no blog, no gallery of everything they have ever "
+            "done. Proof belongs on this page, in one short strip, only where "
+            "it makes the next click more likely.",
+            "- One action, not three. No 'call us OR email OR visit OR follow "
+            "us' -- offering four choices is how a page gets none of them.",
+            "- Short enough to read on a phone in under a minute. If a section "
+            "does not make someone more likely to act, cut it rather than "
+            "shorten it.",
+        ]
+
+    out += [
         "",
         "HERO (use this copy as written)",
         f"Headline: {spec.hero_headline}",
@@ -1412,7 +1489,7 @@ def render_lovable_prompt(
         " the budget.",
         "- Real images beat illustrations, but they must be sized and lazy",
         "  loaded below the fold, with width and height set so nothing jumps.",
-        *profile.enquiry_lines,
+        *_enquiry_lines_for(profile, conversion),
     ]
 
     if profile.footer_line:
