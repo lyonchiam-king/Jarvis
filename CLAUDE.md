@@ -572,6 +572,24 @@ Two skills in `.claude/skills/` are adapted from
 `verification-before-completion` (never claim green without reading the number)
 and `systematic-debugging` (root cause before fix #4).
 
+A third, `unlazy` ([source](https://github.com/Leonxlnx/unlazy), MIT), is
+vendored whole at a pinned commit -- see `.claude/skills/unlazy/VENDORED.md`.
+It is the runnable version of the first: acceptance gates written before the
+work, each proved by a command whose output is checked, and a Stop hook that
+refuses a "done" claim the evidence does not support. Invoke it with
+`/unlazy` for work big enough to report half-finished.
+
+**Its safety boundary is review, not sandboxing.** `CHECK:` lines are shell
+code run with your permissions and environment -- the project says so itself,
+plainly. Read every command before approving one, and never approve a gate
+file that arrived from somewhere else without reading it. Lyon cannot audit a
+shell line, so gates written for this repo are mine to justify, and
+`--status` (which never executes) is the mode to reach for first.
+
+The Stop hook is **not** installed. It is opt-in, per project or global, via
+`scripts/install-hooks.mjs`, and it changes how every session on that machine
+ends -- so it goes on deliberately, not as a side effect of a `git pull`.
+
 ## Not verified from this container
 
 Say so rather than implying otherwise:
