@@ -680,8 +680,10 @@ Say so rather than implying otherwise:
 
 - The Windows launchers (`Dashboard.bat`, `run.bat`, `Schedule-Daily.ps1`) have
   never been executed on Windows here.
-- The React page at `/app` has never been rendered in a browser from this
-  container -- it typechecks, builds, and its routes and assets are served in
-  tests, but no test proves what it looks like or that a click works.
+- The React page at `/app` renders under headless Chromium here
+  (`scripts/verify/render-check.mjs`), which covers the first paint, console
+  errors, failed requests and the phone-width layout. It has never run in
+  real Safari, no check drives a click through to a result, and every count
+  read zero because this container has no Sheet credentials.
 - The Ollama / OpenRouter transports have never reached a real endpoint --
   outbound egress is blocked. `modelcheck` is how Lyon verifies them himself.
