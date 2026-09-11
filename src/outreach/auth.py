@@ -20,6 +20,8 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow, WSGITimeoutError
 
+from . import paths
+
 log = logging.getLogger("outreach")
 
 SCOPES = [
@@ -69,6 +71,15 @@ def get_credentials(
     scopes = scopes or SCOPES
     creds: Credentials | None = None
 
+    # A server has no browser and nobody watching, so consent is not a
+    # preference there -- it is impossible. The caller's `allow_consent` is
+    # overruled rather than trusted, because the default is True and every
+    # CLI command inherits it: a scheduled run inside a container would
+    # otherwise reach `run_local_server`, try to open a browser that is not
+    # there, and either fail with an error about a display or block until
+    # something kills it. Neither says what is actually wrong.
+    consent_possible = allow_consent and not paths.is_hosted()
+
     if token_file.exists():
         try:
             creds = Credentials.from_authorized_user_file(str(token_file), scopes)
@@ -90,8 +101,23 @@ def get_credentials(
             refresh_error = exc
             log.warning("Token refresh failed (%s); re-running consent.", exc)
 
-    if not allow_consent:
+    if not consent_possible:
         detail = f" ({type(refresh_error).__name__}: {refresh_error})" if refresh_error else ""
+        if paths.is_hosted():
+            # Different fix, different words. Telling someone to run a
+            # Windows batch file on a server they reach over ssh wastes the
+            # one message that had their attention, and "sign in again" is
+            # advice this machine cannot act on at all.
+            had_one = " and could not be renewed" if creds else " is missing"
+            raise AuthError(
+                f"The Google sign-in{had_one}{detail}.\n\n"
+                "This server cannot sign in: that needs a browser, and there "
+                "is none here.\n\n"
+                "On the machine you normally use, sign in once so a fresh "
+                f"token is written, then copy that file to\n"
+                f"    {token_file}\n"
+                "on this server and restart it. Nothing else needs to change."
+            )
         raise AuthError(
             "Your Google sign-in has expired and could not be renewed"
             f"{detail}.\n"

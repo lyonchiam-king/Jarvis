@@ -56,7 +56,7 @@ src/outreach/
   web/             the built React page -- generated, committed, never edited
 config/campaigns/  penang-my.yaml is the live campaign
 frontend/          React source for /app; `npm run build` writes src/outreach/web
-tests/             1303 tests, pytest, no CI -- the suite is the only gate
+tests/             1310 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -337,6 +337,24 @@ message. Signing in already proves whose Google account it is, so
 `/api/create-sheet` makes the Sheet in *their* Drive, adds every tab, and
 writes `SHEET_ID` itself. It refuses once a Sheet exists: a second, empty one
 would make every lead already gathered look lost.
+
+**A server cannot sign in, so it must not try.** Consent means
+`run_local_server`: a browser opens and the call blocks until somebody
+finishes. `allow_consent` defaults to True and every CLI command inherits it,
+so a scheduled run inside a container would walk straight into it and either
+fail with an error about a missing display or hang until something killed it
+-- neither of which names the problem. `get_credentials` overrules the caller
+when `paths.is_hosted()`, because this is impossibility rather than
+preference. An existing token refreshes over plain HTTP with no browser at
+all, which is why seeding one by hand is the entire setup.
+
+**The fix has to be one the reader can perform.** The local refusal says to
+close the dashboard and run `outreach preflight`; on a server reached over
+ssh that spends the one message that had their attention on a Windows batch
+file. The hosted refusal names the token's absolute path and says to copy one
+up. "Missing" and "could not be renewed" are kept apart too -- the second
+sends someone hunting for a revoked grant when nobody ever put a token on the
+machine.
 
 **Consent in a request thread must be bounded.** `run_local_server` opens a
 browser and blocks until somebody finishes -- forever, if they close the tab.
