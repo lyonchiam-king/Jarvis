@@ -14,6 +14,8 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
+from . import paths
+
 
 log = logging.getLogger("outreach")
 
@@ -783,9 +785,13 @@ def load_config(
         places_api_key=os.getenv("PLACES_API_KEY", ""),
         sheet_id=os.getenv("SHEET_ID", ""),
         oauth_client_file=Path(
-            os.getenv("GOOGLE_OAUTH_CLIENT_FILE", "credentials/oauth_client.json")
+            os.getenv("GOOGLE_OAUTH_CLIENT_FILE", "")
+            or paths.credentials_dir() / "oauth_client.json"
         ),
-        token_file=Path(os.getenv("GOOGLE_TOKEN_FILE", "credentials/token.json")),
+        token_file=Path(
+            os.getenv("GOOGLE_TOKEN_FILE", "")
+            or paths.credentials_dir() / "token.json"
+        ),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
         dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),
         llm_api_key=os.getenv(
@@ -800,7 +806,8 @@ def load_config(
             "FIREBASE_SERVICE_ACCOUNT_FILE", ""
         ),
         vertex_token_file=Path(
-            os.getenv("GOOGLE_VERTEX_TOKEN_FILE", "credentials/vertex_token.json")
+            os.getenv("GOOGLE_VERTEX_TOKEN_FILE", "")
+            or paths.credentials_dir() / "vertex_token.json"
         ),
         vertex_project_id=os.getenv("VERTEX_PROJECT_ID", ""),
     )

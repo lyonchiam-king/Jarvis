@@ -34,7 +34,7 @@ from flask import (
 )
 from werkzeug.exceptions import NotFound
 
-from . import schema
+from . import paths, schema
 from .config import Config, load_config
 from .stages.reachability import stored_verdict
 from .stage import Stage
@@ -1000,7 +1000,7 @@ def create_app(config: Config) -> Flask:
         current_path = current().source_path
         local = fork_to_local(current_path)
         if local != current_path:
-            set_key(Path(".env"), "CAMPAIGN_CONFIG", str(local))
+            set_key(paths.env_file(), "CAMPAIGN_CONFIG", str(local))
             os.environ["CAMPAIGN_CONFIG"] = str(local)
             log.info("Settings now live in %s, so git pull stays clean.", local)
         return local
@@ -1022,7 +1022,7 @@ def create_app(config: Config) -> Flask:
                 "providers": sorted(PROVIDER_DEFAULTS),
                 "key_env": env_name,
                 "key_needed": c.research.provider != "ollama",
-                "key_set": bool(env_name) and is_set(Path(".env"), env_name),
+                "key_set": bool(env_name) and is_set(paths.env_file(), env_name),
                 # Presence only, never the value -- same rule as every other
                 # key on this page.
                 "places_key_set": bool(c.secrets.places_api_key),
@@ -1072,14 +1072,14 @@ def create_app(config: Config) -> Flask:
             if not env_name:
                 return jsonify({"error": f"{target} takes no API key"}), 400
             try:
-                set_key(Path(".env"), env_name, api_key.strip())
+                set_key(paths.env_file(), env_name, api_key.strip())
                 os.environ[env_name] = api_key.strip()
             except EnvEditError as exc:
                 return jsonify({"error": str(exc)}), 200
 
         if places_key:
             try:
-                set_key(Path(".env"), "PLACES_API_KEY", places_key)
+                set_key(paths.env_file(), "PLACES_API_KEY", places_key)
                 os.environ["PLACES_API_KEY"] = places_key
             except EnvEditError as exc:
                 return jsonify({"error": str(exc)}), 200
@@ -1202,7 +1202,7 @@ def create_app(config: Config) -> Flask:
         # "not set up" over a key it should never have been asked for, and an
         # OpenRouter run was waved through while its own key was missing.
         env_name = PROVIDER_KEY_ENV.get(c.research.provider, "")
-        if env_name and not is_set(Path(".env"), env_name):
+        if env_name and not is_set(paths.env_file(), env_name):
             missing.append(env_name)
         if missing:
             return jsonify({"setup_needed": missing})
@@ -2087,7 +2087,7 @@ def create_app(config: Config) -> Flask:
         # both read it from there, and a Sheet nobody can find again would
         # be worse than not creating one.
         try:
-            set_key(Path(".env"), "SHEET_ID", sheet_id)
+            set_key(paths.env_file(), "SHEET_ID", sheet_id)
         except (EnvEditError, OSError) as exc:
             # The Sheet exists at this point, so the URL goes in the message.
             # Losing it here would mean an orphaned spreadsheet and a button

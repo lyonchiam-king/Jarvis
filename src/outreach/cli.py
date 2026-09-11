@@ -17,7 +17,7 @@ import sys
 
 import click
 
-from . import compliance, schema
+from . import compliance, paths, schema
 from .auth import AuthError, get_credentials
 from .config import Config, ConfigError, load_config
 from .providers.gmail import GmailClient
@@ -505,7 +505,7 @@ def vertex_check(ctx: click.Context, model: str | None, region: str | None) -> N
                     )
         raise click.ClickException(str(exc)) from exc
 
-    out = Path(".cache") / "vertex-check.png"
+    out = paths.cache_dir() / "vertex-check.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_bytes(data)
     click.echo(f"[ OK ] Image generated with {chosen} ({len(data):,} bytes, {mime})")
@@ -959,7 +959,7 @@ def phone_check(ctx: click.Context, port: int) -> None:
 
     # 1. The password, without which serve() refuses to leave this machine.
     #    Presence only: no key is ever echoed to a page, a log or a report.
-    has_password = is_set(Path(".env"), "DASHBOARD_PASSWORD")
+    has_password = is_set(paths.env_file(), "DASHBOARD_PASSWORD")
     say(has_password, "A dashboard password is set" if has_password else "No dashboard password")
     if not has_password:
         click.echo("\n      Phone access is refused without one, because anyone on the")
@@ -1097,7 +1097,7 @@ def shot_check(ctx: click.Context, source: str) -> None:
         )
 
     target = source or "https://example.com"
-    out = Path(".cache/shot.png")
+    out = paths.cache_dir() / "shot.png"
     click.echo(f"Page:    {target}")
 
     try:

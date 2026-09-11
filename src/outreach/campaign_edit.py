@@ -17,6 +17,8 @@ import json
 import re
 from pathlib import Path
 
+from . import paths
+
 import yaml
 
 
@@ -495,7 +497,16 @@ def local_path_for(path: Path) -> Path:
     """
     if path.name.endswith(LOCAL_SUFFIX):
         return path
-    return path.with_name(path.name.removesuffix(".yaml") + LOCAL_SUFFIX)
+    name = path.name.removesuffix(".yaml") + LOCAL_SUFFIX
+    if paths.is_hosted():
+        # A server's copy of the repo is read-only and replaced on every
+        # deploy, so a twin beside the template is either refused outright
+        # or thrown away at the next release -- taking every setting saved
+        # from the page with it.
+        return paths.campaign_dir() / name
+    # Beside the template, which is what the gitignore expects and what
+    # every existing install already has on disk.
+    return path.with_name(name)
 
 
 def fork_to_local(path: Path) -> Path:
@@ -513,6 +524,10 @@ def fork_to_local(path: Path) -> Path:
     if local == path or local.exists():
         return local
     try:
+        # The state directory may be an empty volume on its first boot, so
+        # the folder is made rather than assumed. Harmless locally, where the
+        # twin lands beside a template whose directory already exists.
+        local.parent.mkdir(parents=True, exist_ok=True)
         local.write_text(path.read_text())
     except OSError as exc:
         raise CampaignEditError(

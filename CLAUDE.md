@@ -52,10 +52,11 @@ src/outreach/
   sitecheck.py     refuses a generated page that would embarrass you
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
+  paths.py         the one writable directory -- everything else is read-only
   web/             the built React page -- generated, committed, never edited
 config/campaigns/  penang-my.yaml is the live campaign
 frontend/          React source for /app; `npm run build` writes src/outreach/web
-tests/             1282 tests, pytest, no CI -- the suite is the only gate
+tests/             1303 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -106,6 +107,26 @@ are not being applied. An explicit `--config` is never second-guessed.
 which broke every command long after the run finished. `tests/conftest.py`
 fingerprints `.env` and the `.local.yaml` and fails the test that changes
 one, and restores a leaked `CAMPAIGN_CONFIG` env var between tests.
+
+**A server's copy of the code is read-only and replaced every deploy.** So
+anything written into the working directory is refused outright or thrown
+away at the next release -- and the two things that would go are the Google
+token, whose loss means signing in again with a browser that a server does
+not have, and every key saved from the dashboard. `paths.py` owns the answer:
+one directory named by `OUTREACH_STATE_DIR`, holding `.env`, `credentials/`,
+`.cache/` and the campaign twin. It defaults to the current working
+directory, which reproduces today's layout byte for byte, so nobody's
+existing install moves. A blank value counts as unset -- Docker passes empty
+strings through for variables nobody filled in, and treating `""` as a path
+would put the token in the filesystem root. `state_dir()` is read on every
+call, never captured at import, because the dashboard and the tests both
+change directory. `test_no_module_still_hardcodes_a_write_into_the_working_copy`
+holds the seam, with a control proving it can fail.
+
+**The campaign twin follows the state directory only when one is set.**
+Locally it stays beside the tracked template, which is what the gitignore
+expects and what every existing install already has on disk. Moving it
+unconditionally would orphan settings people have already saved.
 
 **Never write to a git-tracked file at runtime.** The dashboard once wrote to
 `config/campaigns/penang-my.yaml` and broke `git pull` on Lyon's machine. Config
