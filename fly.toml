@@ -1,0 +1,77 @@
+# Fly.io deployment for the dashboard.
+#
+# Why this platform: the app sits idle almost all day. Discovery, research,
+# a brief and a message take minutes; the other twenty-three hours are a
+# process waiting. Fly stops the machine when nothing is asking for it and
+# starts it again on the first request, so the bill is roughly the hour it
+# works rather than a month of uptime -- and a stopped machine keeps its
+# volume, which is where the Google token lives.
+#
+# Nothing secret belongs in this file. It is committed, so every key goes in
+# with `fly secrets set` -- see DEPLOY.md.
+
+app = "jarvis-outreach"
+
+# Singapore is the closest region to Penang. Change it if you are elsewhere;
+# it affects latency and nothing else.
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Matches the Dockerfile's default and the local one, so the same
+  # instructions work in all three places.
+  PORT = "8765"
+
+  # Without this a container is UTC, which is half past three in the
+  # afternoon in Penang -- the most reliable way to schedule the morning run
+  # for the wrong moment. OUTREACH_DAILY_RUN is deliberately not set here:
+  # see the note under [http_service] before turning it on.
+  TZ = "Asia/Kuala_Lumpur"
+
+# The one writable directory. The image is replaced on every deploy, so
+# anything written into the working copy is gone at the next release -- and
+# the two things that would go are the Google token, whose loss means
+# signing in again with a browser a server does not have, and every key
+# saved from the dashboard.
+[[mounts]]
+  source = "outreach_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8765
+
+  # http:// would serve the login form, and therefore the password, in
+  # clear text over whatever network the phone is on.
+  force_https = true
+
+  # Sleep when idle, wake on the first request. The first load after a sleep
+  # takes a few seconds; every one after it is immediate.
+  #
+  # If you set OUTREACH_DAILY_RUN, set min_machines_running = 1 as well. A
+  # stopped machine runs no threads, so the morning batch would simply never
+  # happen -- and it would look like a scheduler bug rather than a machine
+  # that was asleep.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  # /healthz is the only path that answers without signing in. Every other
+  # one redirects to the login form, and a 302 reads to a health check as a
+  # dead app: it would restart a perfectly healthy machine for ever.
+  [[http_service.checks]]
+    path = "/healthz"
+    method = "GET"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+
+  # Chromium needs room. The screenshot is the one step here that is not a
+  # web request, and a browser killed by the out-of-memory reaper reports
+  # nothing useful -- the message sends without a picture and the reason is
+  # in a log nobody reads.
+  memory = "1gb"

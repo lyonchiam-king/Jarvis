@@ -686,6 +686,14 @@ LOGIN_PAGE = """<!doctype html>
 """
 
 
+# The endpoints reachable without signing in. `login` is obvious; `healthz`
+# is here because a platform's health check has no session and never will,
+# and a 302 to the login form reads to it as a dead app. Both are named
+# rather than matched by path prefix: a prefix would quietly exempt anything
+# added under it later.
+_NO_LOGIN = frozenset({"login", "healthz"})
+
+
 def create_app(config: Config) -> Flask:
     app = Flask(__name__)
     runner = Runner()
@@ -809,7 +817,7 @@ def create_app(config: Config) -> Flask:
         # and `serve` refuses to bind anywhere else without one.
         if not current().secrets.dashboard_password:
             return None
-        if session.get("in") or request.endpoint == "login":
+        if session.get("in") or request.endpoint in _NO_LOGIN:
             return None
         # An API call gets JSON it can act on; a page gets the login form.
         # A browser handed JSON shows raw text and a phone shows nothing.
@@ -863,6 +871,26 @@ def create_app(config: Config) -> Flask:
                  "purpose": "any maskable"},
             ],
         }
+
+    @app.route("/healthz")
+    def healthz():
+        """Is this process alive? Nothing more.
+
+        A platform restarts a deployment whose health check does not answer
+        200, and with a password set every other path on this app answers a
+        302 to /login -- so without an exempt route the check reads a
+        perfectly healthy app as broken and restarts it for ever, which
+        looks like a crash loop caused by something else entirely.
+
+        It reports liveness and nothing else. Not the campaign, not which
+        keys are set, not a lead count: this is the one URL on the whole app
+        that anybody can reach, and every one of those is a fact about the
+        business that an unauthenticated caller has no claim to. It also
+        touches no Sheet and no API -- a check that does real work fails
+        when Google has a bad minute, and the platform's answer to that is
+        to kill a process that was never at fault.
+        """
+        return jsonify({"ok": True})
 
     @app.route("/favicon.ico")
     def favicon():
@@ -3052,7 +3080,16 @@ PAGE = """<!doctype html>
   button.wa-send { background:var(--ok); border-color:var(--ok); color:#fff; }
   button.wa-send:hover:not(:disabled) { opacity:.9; color:#fff; }
   button.wa-send.confirm { background:var(--accent); border-color:var(--accent); }
-  .wa-actions { display:flex; gap:8px; }
+  .wa-actions { display:flex; gap:8px; flex-wrap:wrap; }
+  /* An anchor, not a button: it has to open WhatsApp, and a button that
+     navigates is a button that a long-press cannot copy or open elsewhere.
+     Styled as the primary action, because on a hosted deployment it is the
+     only one there is. */
+  a.wa-hand { display:inline-flex; align-items:center; justify-content:center;
+              background:var(--ok); border:1px solid var(--ok); color:#fff;
+              border-radius:6px; padding:7px 12px; font-size:13px;
+              text-decoration:none; cursor:pointer; }
+  a.wa-hand:hover { opacity:.9; color:#fff; }
   button.wa-rewrite { background:transparent; border-color:var(--line); color:var(--ink); }
   button.wa-rewrite:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
   .wa-spin { display:inline-block; width:14px; height:14px; border:2px solid transparent;
@@ -3092,7 +3129,8 @@ PAGE = """<!doctype html>
        are buttons that send messages to real businesses. */
     button { min-height:44px; padding:11px 16px; }
     .wa-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-    .wa-actions button, .wa-msg-card .wa-row button { width:100%; }
+    .wa-actions button, .wa-actions a.wa-hand,
+    .wa-msg-card .wa-row button { width:100%; }
     .wa-msg-card .wa-row { flex-wrap:wrap; gap:8px; }
 
     /* One column: two 160px cards side by side on a phone are unreadable,
@@ -3468,12 +3506,25 @@ function waKey(leadId) {
   return String(leadId || '').replace(/[^A-Za-z0-9_-]/g, '_');
 }
 
+// The click-to-chat link for one card, carrying whatever is in the box.
+//
+// The number comes from the server and nothing here touches it: the base of
+// wa_link is already `https://wa.me/<digits>`, worked out where the lead's
+// own country was known. Only the text is replaced, because the textarea is
+// editable and a link built once server-side would quietly send the draft
+// as it was before the edit. Everything after `?text=` is percent-encoded,
+// so the finished URL cannot carry a quote into the href it lands in.
+function waHandLink(m, text) {
+  if (!m.wa_link) return '';
+  return m.wa_link.split('?')[0] + '?text=' + encodeURIComponent(text || '');
+}
+
 // True while any card is mid-interaction. The periodic refresh stands aside
 // for it: redrawing then would discard a pending confirmation and any edit
 // made to the message text.
 function waBusy() {
   return Object.values(waUi).some(
-    u => u.confirming || u.sending || u.draft !== undefined
+    u => u.confirming || u.sending || u.handed || u.draft !== undefined
   );
 }
 
@@ -3572,12 +3623,38 @@ async function loadWhatsAppInline() {
           <button class="wa-send" onclick="retryWhatsApp('${esc(m.lead_id)}')">Retry</button>
           <button class="wa-skip" onclick="skipWhatsApp('${esc(m.lead_id)}')"
             title="Take this one off the list without sending. It keeps its message and its site, and Send again below puts it back.">Not this one</button>`;
+      } else if (u.handed) {
+        // WhatsApp opened in another app or another tab and told this page
+        // nothing at all, so the only thing that knows whether it went is
+        // the person who pressed it. Asking is not a formality: leaving the
+        // card alone would keep offering the same business tomorrow.
+        actions = `<div class="wa-actions">
+          <span class="wa-state">Did it send?</span>
+          <button class="wa-send" onclick="markSentWhatsApp('${esc(m.lead_id)}')">Yes, it sent</button>
+          <button onclick="cancelHandOff('${esc(m.lead_id)}')">Not yet</button>
+        </div>`;
       } else {
+        // Two ways to send, and which one leads depends on whether the
+        // relay is there. On a hosted deployment it never is -- a linked
+        // phone needs a machine that stays awake, and putting that in a
+        // data centre risks the number rather than protecting it -- so the
+        // relay button is not merely unhelpful there, it is a button that
+        // cannot work. It is left out entirely in that case rather than
+        // offered and failed.
+        const handLink = waHandLink(m, u.draft !== undefined ? u.draft : (m.message || ''));
+        const hand = handLink
+          ? `<a class="wa-hand" href="${handLink}" target="_blank" rel="noopener"
+               onclick="handOffWhatsApp('${esc(m.lead_id)}')"
+               title="Opens WhatsApp with this message already written. You press send there.">Send on my phone</a>`
+          : '';
+        const relay = waState && waState.connected
+          ? `<button class="wa-send" onclick="sendWhatsApp('${esc(m.lead_id)}')">Send from here</button>`
+          : '';
         actions = `<div class="wa-actions">
           <button class="wa-rewrite" onclick="rewriteWhatsApp('${esc(m.lead_id)}')">Rewrite</button>
           <button class="wa-skip" onclick="skipWhatsApp('${esc(m.lead_id)}')"
             title="Take this one off the list without sending. It keeps its message and its site, and Send again below puts it back.">Not this one</button>
-          <button class="wa-send" onclick="sendWhatsApp('${esc(m.lead_id)}')">Send</button>
+          ${hand}${relay}
         </div>`;
       }
       // The picture that will ride with the message. Shown small, and
@@ -3867,6 +3944,49 @@ function skipWhatsApp(leadId) {
 
 function cancelSend(leadId) {
   uiFor(leadId).confirming = false;
+  loadWhatsAppInline();
+}
+
+// --- sending it yourself, from the phone this page is open on
+
+function handOffWhatsApp(leadId) {
+  // The link's own navigation is left alone -- this only remembers that it
+  // was followed, so the card can ask afterwards. Returning false here, or
+  // calling preventDefault, would stop WhatsApp opening at all.
+  uiFor(leadId).handed = true;
+  // Redrawing immediately would replace the anchor mid-click on some
+  // browsers and lose the navigation with it.
+  setTimeout(() => loadWhatsAppInline(), 800);
+}
+
+function cancelHandOff(leadId) {
+  uiFor(leadId).handed = false;
+  loadWhatsAppInline();
+}
+
+async function markSentWhatsApp(leadId) {
+  const u = uiFor(leadId);
+  u.handed = false;
+  u.sending = true;
+  loadWhatsAppInline();
+  let d;
+  try {
+    d = await (await fetch('/api/whatsapp/mark-sent', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lead_id: leadId}),
+    })).json();
+  } catch (e) { d = {error: 'Could not reach the dashboard'}; }
+  u.sending = false;
+  if (d.error) {
+    u.failed = true;
+    u.error = d.error;
+  } else {
+    u.sent = true;
+    // Said out loud, because it is a claim rather than something observed:
+    // this page never saw the message leave.
+    u.note = 'Recorded from your phone. Send again puts it back if it did not arrive.';
+  }
   loadWhatsAppInline();
 }
 

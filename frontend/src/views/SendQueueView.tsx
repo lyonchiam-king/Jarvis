@@ -35,6 +35,10 @@ export const SendQueueView: React.FC<SendQueueViewProps> = ({
   // the only correction for that is to message the business twice.
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [sendError, setSendError] = useState<string | null>(null);
+  // Which cards have had their click-to-chat link followed. WhatsApp opens
+  // in another app and tells this page nothing, so the card has to ask
+  // afterwards -- leaving it alone would keep offering the same business.
+  const [handedMap, setHandedMap] = useState<Record<string, boolean>>({});
 
   // AI Rewrite drawer/inline state
   const [rewriteLeadId, setRewriteLeadId] = useState<string | null>(null);
@@ -128,6 +132,39 @@ export const SendQueueView: React.FC<SendQueueViewProps> = ({
     onRefresh();
   };
 
+  /**
+   * The click-to-chat link for one card, carrying whatever is in the box.
+   *
+   * Only the text is replaced. The part before `?` is `https://wa.me/<digits>`
+   * as Python built it, where the lead's own country was known -- the same
+   * rule the relay send follows, and for the same reason: a number the
+   * browser assembles grows a second country code and reaches a stranger.
+   */
+  const chatLink = (item: SendItem): string => {
+    if (!item.wa_link) return '';
+    const text = messagesMap[item.lead_id] ?? item.whatsapp_message;
+    return `${item.wa_link.split('?')[0]}?text=${encodeURIComponent(text || '')}`;
+  };
+
+  const handleMarkSent = async (lead_id: string) => {
+    setHandedMap((prev) => ({ ...prev, [lead_id]: false }));
+    setSendingMap((prev) => ({ ...prev, [lead_id]: true }));
+    const res = await api.markWhatsAppSent(lead_id);
+    setSendingMap((prev) => ({ ...prev, [lead_id]: false }));
+    if (res.error) {
+      setSendError(res.error);
+      return;
+    }
+    // Said plainly: this page never saw the message leave, so what it
+    // recorded is your word for it.
+    setNotes((prev) => ({
+      ...prev,
+      [lead_id]: 'Recorded from your phone. Send again puts it back if it never arrived.',
+    }));
+    await loadQueue();
+    onRefresh();
+  };
+
   const handleRewrite = async (lead_id: string) => {
     if (!rewriteInstruction) return;
     setRewriting(true);
@@ -170,15 +207,21 @@ export const SendQueueView: React.FC<SendQueueViewProps> = ({
           </p>
         </div>
 
-        <button
-          id="send-all-btn"
-          onClick={() => setShowConfirmModal(true)}
-          disabled={sendingAll || pendingQueue.length === 0}
-          className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow-xs transition disabled:opacity-50"
-        >
-          <Send className="w-4 h-4" />
-          {sendingAll ? 'Transmitting Batch...' : `Send All (${pendingQueue.length} Pending)`}
-        </button>
+        {/* Only where a relay can act on it. Sending the batch by hand is
+            not a thing that exists -- each one opens WhatsApp and waits for
+            a person -- so a batch button with no relay is a button that
+            cannot work, which is worse than no button at all. */}
+        {whatsappStatus?.connected && (
+          <button
+            id="send-all-btn"
+            onClick={() => setShowConfirmModal(true)}
+            disabled={sendingAll || pendingQueue.length === 0}
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow-xs transition disabled:opacity-50"
+          >
+            <Send className="w-4 h-4" />
+            {sendingAll ? 'Transmitting Batch...' : `Send All (${pendingQueue.length} Pending)`}
+          </button>
+        )}
       </div>
 
       {sendError && (
@@ -201,9 +244,11 @@ export const SendQueueView: React.FC<SendQueueViewProps> = ({
             <span>
               <strong>Relay not connected</strong>
               {whatsappStatus?.relayUrl ? ` on ${whatsappStatus.relayUrl}` : ''}
-              {whatsappStatus?.error ? ` -- ${whatsappStatus.error}` : ''}. Sending is
-              refused until it connects; nothing is queued and nothing is copied
-              anywhere, so the messages below stay exactly as they are.
+              {whatsappStatus?.error ? ` -- ${whatsappStatus.error}` : ''}. Nothing
+              can be sent from here, and nothing is queued or copied anywhere --
+              the messages below stay exactly as they are. Use{' '}
+              <strong>Send on my phone</strong> on each card: it opens WhatsApp
+              with the message already written and you press send there.
             </span>
           </div>
         </div>
@@ -340,15 +385,65 @@ export const SendQueueView: React.FC<SendQueueViewProps> = ({
                     )}
                   </div>
 
-                  <button
-                    id={`send-single-btn-${item.lead_id}`}
-                    onClick={() => handleSendSingle(item.lead_id)}
-                    disabled={isSending}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs rounded-lg shadow-xs transition disabled:opacity-50"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    {isSending ? 'Sending...' : 'Send WhatsApp Message'}
-                  </button>
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                    {handedMap[item.lead_id] ? (
+                      <>
+                        <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                          Did it send?
+                        </span>
+                        <button
+                          id={`mark-sent-btn-${item.lead_id}`}
+                          onClick={() => handleMarkSent(item.lead_id)}
+                          disabled={isSending}
+                          className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs rounded-lg shadow-xs transition disabled:opacity-50"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          {isSending ? 'Recording...' : 'Yes, it sent'}
+                        </button>
+                        <button
+                          onClick={() =>
+                            setHandedMap((prev) => ({ ...prev, [item.lead_id]: false }))
+                          }
+                          className="px-3 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"
+                        >
+                          Not yet
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        {/* An anchor, not a button: it has to open WhatsApp,
+                            and a long-press on a phone should be able to copy
+                            or open it elsewhere. */}
+                        {item.wa_link && (
+                          <a
+                            id={`hand-off-btn-${item.lead_id}`}
+                            href={chatLink(item)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() =>
+                              setHandedMap((prev) => ({ ...prev, [item.lead_id]: true }))
+                            }
+                            title="Opens WhatsApp with this message already written. You press send there."
+                            className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs rounded-lg shadow-xs transition"
+                          >
+                            <Smartphone className="w-3.5 h-3.5" />
+                            Send on my phone
+                          </a>
+                        )}
+                        {whatsappStatus?.connected && (
+                          <button
+                            id={`send-single-btn-${item.lead_id}`}
+                            onClick={() => handleSendSingle(item.lead_id)}
+                            disabled={isSending}
+                            className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600 text-white font-semibold text-xs rounded-lg shadow-xs transition disabled:opacity-50"
+                          >
+                            <Send className="w-3.5 h-3.5" />
+                            {isSending ? 'Sending...' : 'Send from here'}
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
 
                 {notes[item.lead_id] && (

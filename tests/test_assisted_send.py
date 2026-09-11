@@ -182,3 +182,172 @@ def test_marking_a_lead_that_is_not_there_says_so(monkeypatch):
 def test_marking_without_a_lead_is_refused():
     client = create_app(configured(sheet_id="s")).test_client()
     assert client.post("/api/whatsapp/mark-sent", json={}).status_code == 400
+
+
+# ------------------------------------------------- the link, on the page
+
+# Everything above proves the server offers a link. None of it proves anyone
+# can press one: `wa_link` was computed, returned in every queue response,
+# and rendered by neither front end for a week. That is the same unwired
+# call site as the reachability stage with no button -- the code was right
+# and unreachable, which from Lyon's side is indistinguishable from absent.
+
+
+def _page_node(harness: str) -> str:
+    """Run the old page's script under node -- the harness lives next door."""
+    from test_dashboard import _run_in_node
+
+    return _run_in_node(harness)
+
+
+QUEUE_STUB = """
+const box = fakeEl();
+document.querySelector = (s) => (s === '#wa-inline' ? box : fakeEl());
+globalThis.fetch = async (url) => {
+  if (url === '/api/whatsapp/status') return {json: async () => STATUS};
+  if (url === '/api/whatsapp/queue') return {json: async () => ({
+    queue: [{lead_id: 'L1', name: 'Kedai Kopi', phone: '+60123456789',
+             message: 'hi there', has_shot: false,
+             wa_link: 'https://wa.me/60123456789?text=hi%20there'}],
+    excluded: [],
+  })};
+  throw new Error('unexpected ' + url);
+};
+"""
+
+
+def test_the_card_offers_the_link_when_there_is_no_relay():
+    """The hosted case, which is now the normal one. With no relay there is
+    no other way to send at all, so a card that only offers the relay button
+    is a dead end."""
+    out = _page_node("const STATUS = {connected: false, enabled: true};\n"
+                     + QUEUE_STUB + """
+    await loadWhatsAppInline();
+    console.log(JSON.stringify({html: box.innerHTML}));
+    """)
+    assert "https://wa.me/60123456789?text=" in out, "no click-to-chat link on the card"
+    assert "Send on my phone" in out
+
+
+def test_the_relay_button_is_absent_when_the_relay_is_not_there():
+    """A button that cannot work is worse than no button: it is pressed,
+    it fails, and the failure reads as the dashboard being broken."""
+    out = _page_node("const STATUS = {connected: false, enabled: true};\n"
+                     + QUEUE_STUB + """
+    await loadWhatsAppInline();
+    console.log(JSON.stringify({html: box.innerHTML}));
+    """)
+    assert "sendWhatsApp(" not in out
+
+
+def test_the_relay_button_is_there_when_the_relay_is():
+    """The control for the test above -- without it, a card rendering no
+    actions at all would pass just as happily."""
+    out = _page_node("const STATUS = {connected: true, enabled: true};\n"
+                     + QUEUE_STUB + """
+    await loadWhatsAppInline();
+    console.log(JSON.stringify({html: box.innerHTML}));
+    """)
+    assert "sendWhatsApp(" in out
+    assert "https://wa.me/60123456789?text=" in out
+
+
+def test_the_link_carries_the_edit_rather_than_the_draft_it_replaced():
+    """The message box is editable and the link was built server-side before
+    the edit existed. Sending the pre-edit text is silent and unrecoverable:
+    the business has already read it."""
+    out = _page_node("""
+    const m = {lead_id: 'L1', message: 'original',
+               wa_link: 'https://wa.me/60123456789?text=original'};
+    console.log(JSON.stringify({link: waHandLink(m, 'edited by hand')}));
+    """)
+    assert "https://wa.me/60123456789?text=edited%20by%20hand" in out
+
+
+def test_the_link_never_rebuilds_the_number():
+    """Everything before the `?` is the server's, byte for byte. A browser
+    that assembles a dialling code is how a UK lead went out as
+    60447450225230 -- accepted, reported as sent, delivered to nobody."""
+    out = _page_node("""
+    const m = {lead_id: 'L1', message: 'x',
+               wa_link: 'https://wa.me/447450225230?text=x'};
+    console.log(JSON.stringify({link: waHandLink(m, 'y')}));
+    """)
+    assert "https://wa.me/447450225230?text=y" in out
+    assert "wa.me/60447450225230" not in out
+
+
+def test_a_message_with_a_quote_cannot_break_out_of_the_href():
+    """The page builds its HTML as strings and `esc` does not escape quotes.
+    Everything after `?text=` is percent-encoded, so this holds -- but it
+    holds by construction, which is exactly the sort of thing that stops
+    being true when someone "simplifies" the encoding."""
+    out = _page_node("""
+    const m = {lead_id: 'L1', message: 'x', wa_link: 'https://wa.me/60123?text=x'};
+    console.log(JSON.stringify({link: waHandLink(m, 'he said "hi" <b>')}));
+    """)
+    import json as _json
+    link = _json.loads(out.strip())["link"]
+    assert '"' not in link.split("?text=")[1]
+    assert "<" not in link
+
+
+def test_following_the_link_makes_the_card_ask_afterwards():
+    """WhatsApp opens elsewhere and tells this page nothing. Without the
+    question the lead stays at the top of the queue and the same business is
+    messaged again tomorrow."""
+    out = _page_node("""
+    globalThis.loadWhatsAppInline = async () => {};
+    handOffWhatsApp('L1');
+    console.log(JSON.stringify({handed: !!waUi['L1'].handed, busy: waBusy()}));
+    """)
+    assert '"handed":true' in out
+    # And the 30-second refresh must stand aside, or the question is wiped
+    # off the card before it can be answered -- the same discard that made
+    # pressing Send twice do nothing at all.
+    assert '"busy":true' in out
+
+
+def test_saying_it_sent_records_the_claim():
+    out = _page_node("""
+    let posted = null;
+    globalThis.fetch = async (url, opts) => {
+      posted = {url, body: JSON.parse(opts.body)};
+      return {json: async () => ({ok: true, status: 'unconfirmed'})};
+    };
+    globalThis.loadWhatsAppInline = async () => {};
+    await markSentWhatsApp('L1');
+    console.log(JSON.stringify({posted, sent: !!waUi['L1'].sent, note: waUi['L1'].note}));
+    """)
+    assert '"url":"/api/whatsapp/mark-sent"' in out
+    assert '"lead_id":"L1"' in out
+    assert '"sent":true' in out
+
+
+def test_a_failed_recording_does_not_claim_it_worked():
+    """The Sheet write can fail -- it is a network call to Google. Showing
+    Sent anyway leaves the lead in the queue with a tick beside it, which
+    reads as the dashboard being confused rather than as a failed write."""
+    out = _page_node("""
+    globalThis.fetch = async () => ({json: async () => ({error: 'Sheet unreachable'})});
+    globalThis.loadWhatsAppInline = async () => {};
+    await markSentWhatsApp('L1');
+    console.log(JSON.stringify({sent: !!waUi['L1'].sent, failed: !!waUi['L1'].failed}));
+    """)
+    assert '"sent":false' in out
+    assert '"failed":true' in out
+
+
+def test_the_new_page_ships_the_hand_off_too():
+    """Weaker than the tests above, and said plainly: this reads the built
+    bundle for the words, because nothing here runs the React queue with a
+    lead in it -- every count in this container is zero for want of a Sheet.
+    What it does catch is the case that actually happened, twice: a source
+    file fixed and the committed build left as it was.
+    """
+    import pathlib
+
+    web = pathlib.Path("src/outreach/web/assets")
+    bundle = "\n".join(p.read_text() for p in web.glob("*.js"))
+    assert "Send on my phone" in bundle, "rebuild frontend/ -- the built page is stale"
+    assert "/api/whatsapp/mark-sent" in bundle

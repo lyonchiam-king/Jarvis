@@ -58,7 +58,9 @@ src/outreach/
 config/campaigns/  penang-my.yaml is the live campaign
 frontend/          React source for /app; `npm run build` writes src/outreach/web
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
-tests/             1343 tests, pytest, no CI -- the suite is the only gate
+fly.toml           the deploy: /data volume, /healthz, asleep when idle
+DEPLOY.md          the guide Lyon follows to put it on the internet
+tests/             1365 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -363,6 +365,17 @@ that safe -- exactly as `--phone` works, and for the same reason the launcher
 owns no decision. `open_browser` is forced off too: there is nothing to open,
 and trying starts a thread that fails a second later in logs nobody reads.
 
+**The login wall answers a health check as though the app were dead.** With a
+password set, every non-`/api/` path returns a 302 to `/login` -- and a
+platform reading a 302 restarts the machine, over and over, while the app
+itself is perfectly fine and says nothing about why. `/healthz` is exempt in
+`_require_login` and is the one URL anybody can reach, so it carries no fact
+about the business: not the campaign, not which keys are set, not a count. It
+touches no Sheet and no API either -- a check that does real work fails on a
+bad minute at Google, and the platform's answer to a failing check is to kill
+a process that was never at fault. The exemption is a named set, not a path
+prefix: a prefix would quietly exempt whatever gets added under it later.
+
 **Assert the property, not the line that implements it.** The old guard on
 `0.0.0.0` held one literal expression, so a *second* route to the wide
 address could be added without it noticing, and a harmless rewrite of the
@@ -553,6 +566,35 @@ which sets the Outreach Log's manual `Status` to `Skipped` -- with
 written: the message and its screenshot cost money to make, so skipping keeps
 them and **Send again** is one press. That reversibility is why it does not
 stop to confirm.
+
+**A queue field nothing renders is a feature nobody has.** `wa_link` -- the
+click-to-chat link that is the *whole* point of hosting this, since the relay
+cannot follow the pipeline to a server -- was computed per lead, returned in
+every queue response, and drawn by neither front end. Both pages offered only
+the relay's Send button, which on a host can never work, so the hosted
+dashboard could draft messages and had no way at all to send one. Same shape
+as the reachability stage with no button and the three unwired
+`render_lovable_prompt` call sites: right code, unreachable, and from Lyon's
+side indistinguishable from absent. The card now runs both pages' send state
+machines under node with a queue in hand and reads the HTML that comes out --
+asserting the link is *rendered*, not that the endpoint returns it.
+
+**Only the text of a click-to-chat link may be rebuilt in the browser.**
+The part before `?` is `https://wa.me/<digits>` as Python built it, where the
+lead's own country was known. The message box is editable, so a link built
+once server-side sends the draft as it was before the edit -- silent, and
+unrecoverable once the business has read it. Replacing the query and keeping
+the number verbatim gets both: the edit goes out, and no browser ever
+assembles a dialling code. Everything after `?text=` is percent-encoded,
+which is also what keeps a quote in a message from breaking out of the href
+the page builds as a string -- `esc` does not escape quotes.
+
+**A button that cannot work is worse than no button.** With no relay, Send
+fails and the failure reads as the dashboard being broken rather than as a
+relay that was never there. Both pages drop the relay button entirely when
+the relay is not connected, and drop *Send All* with it: sending a batch by
+hand is not a thing that exists, since each one opens WhatsApp and waits for
+a person.
 
 **One relay per WhatsApp session, enforced by the port.** WhatsApp allows one
 connection per linked device, so a second relay on the same
@@ -955,5 +997,14 @@ Say so rather than implying otherwise:
   `package-data` and the install that would have shipped no `outreach`
   command. Nobody has yet seen the image start, take a screenshot, or reach
   Google from inside it.
+- Nothing has ever been deployed to Fly from here. `flyctl` is not
+  installed, the image has never been built, and no machine has started --
+  so `fly.toml` is checked only by reading it against the Dockerfile and the
+  app (the port, the mount path, and that the health check names a URL the
+  app really serves without a session). Every command in `DEPLOY.md` is
+  written and unrun.
+- The click-to-chat hand-off has never opened WhatsApp. The link is built,
+  rendered and asserted here; whether an iPhone opens `wa.me` into the app
+  with the text in place is Lyon's to confirm.
 - The Ollama / OpenRouter transports have never reached a real endpoint --
   outbound egress is blocked. `modelcheck` is how Lyon verifies them himself.

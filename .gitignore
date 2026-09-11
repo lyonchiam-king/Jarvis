@@ -50,3 +50,7 @@ GATES.md
 .unlazy/
 .unlazy-hook-state.json
 .claude/settings.local.json
+
+# setuptools scratch. It appeared in two commits because a test installs
+# the package for real; it is a copy of src/, never a source of truth.
+build/

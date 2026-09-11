@@ -107,6 +107,10 @@ export interface SendItem {
   drafted_at: string;
   status?: SendStatus;
   status_detail?: string;
+  /** Click-to-chat link, built server-side where the lead's country was
+   *  known. Only its `?text=` is ever replaced here; the number in it is
+   *  never rebuilt by the browser. */
+  wa_link?: string;
 }
 
 export interface OutreachLogRow {

@@ -356,6 +356,9 @@ class ApiClient {
           // Only offered when a picture actually exists on disk: the queue
           // says so per lead, and a broken image is worse than none.
           screenshot_url: s.has_shot ? `/api/screenshot/${encodeURIComponent(s.lead_id)}` : '',
+          // The relay-free way to send. Python built it where the lead's
+          // country was known; empty when there is no dialable number.
+          wa_link: s.wa_link || '',
           category: '',
           preview_url: '',
           stage: 'Site Built' as Stage,
@@ -392,6 +395,18 @@ class ApiClient {
 
   async skipWhatsApp(lead_id: string): Promise<ApiResponse<{ ok: boolean }>> {
     return this.post('/api/whatsapp/skip', { lead_id });
+  }
+
+  /**
+   * Record that you sent one yourself, from your own phone.
+   *
+   * Following a click-to-chat link tells this page nothing at all, so
+   * without this the lead sits at the top of the queue for ever and the
+   * same business gets messaged again tomorrow. It is stored as
+   * `unconfirmed` because it is a claim, not something observed.
+   */
+  async markWhatsAppSent(lead_id: string): Promise<ApiResponse<{ status: string }>> {
+    return this.post('/api/whatsapp/mark-sent', { lead_id });
   }
 
   // ----------------------------------------------------------- relay + run
