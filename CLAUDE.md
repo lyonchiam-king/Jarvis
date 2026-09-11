@@ -991,9 +991,11 @@ Say so rather than implying otherwise:
   binary cannot even be fetched. Everything on the Python side -- reading the
   published address, the refusals, the rate-limit keying, the shutdown -- is
   driven against a stand-in for cloudflared.
-- The `Dockerfile` has never been built. The Docker daemon is not usable in
-  this container, so every claim about the image is checked by reading it and
-  by installing the package for real -- which is what caught the missing
+- The `Dockerfile` has never been built. A daemon *can* be started here
+  (`sudo dockerd`), but Docker Hub's blob CDN is refused by the proxy, so
+  `FROM python:3.11-slim` cannot be pulled and the build stops at line 9 --
+  don't spend another ten minutes finding that out. Every claim about the
+  image is checked by reading it and by installing the package for real -- which is what caught the missing
   `package-data` and the install that would have shipped no `outreach`
   command. Nobody has yet seen the image start, take a screenshot, or reach
   Google from inside it.
