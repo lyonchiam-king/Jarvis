@@ -2116,7 +2116,7 @@ def create_app(config: Config) -> Flask:
     def api_whatsapp_queue():
         """Leads waiting for WhatsApp send, with phone + message text."""
         from . import phone as phone_lib
-        from .providers.whatsapp import WA_SENT_STATUSES
+        from .providers.whatsapp import WA_SENT_STATUSES, chat_link as wa_chat_link
         from .stages.reachability import _country_of, can_whatsapp
 
         c = current()
@@ -2235,10 +2235,59 @@ def create_app(config: Config) -> Flask:
                     # in the queue because until now the only way to find
                     # out was to send the message and look at your phone.
                     "has_shot": _shot_for(c, lead, lead_id) is not None,
+                    # The relay-free way to send this. Built here because
+                    # this is where the number has just been normalised with
+                    # the lead's own country; the browser must never work a
+                    # dialling code out for itself.
+                    "wa_link": wa_chat_link(
+                        phone_lib.normalise(
+                            phone, _country_of(lead, c.compliance.country_code)
+                        ),
+                        row.get("WhatsApp Message", ""),
+                    ),
                 }
             )
 
         return jsonify({"queue": queue, "excluded": excluded})
+
+    @app.route("/api/whatsapp/mark-sent", methods=["POST"])
+    def api_whatsapp_mark_sent():
+        """Record that you sent this one yourself, through WhatsApp.
+
+        The relay knows when it sent something. Nothing knows when *you* did
+        -- following a click-to-chat link opens WhatsApp and tells this
+        dashboard nothing at all, so the lead would sit at the top of the
+        queue forever, inviting the same business to be messaged twice.
+
+        So this is a claim rather than an observation, and it is recorded as
+        one: the status is `unconfirmed`, the same word used when WhatsApp
+        accepted a message without acknowledging delivery. **Send again**
+        already exists for the case where the claim turns out to be wrong.
+        """
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+
+        from .models import utc_now
+
+        try:
+            sheets = _sheets_client(current())
+            # Both cells, or the queue keeps offering it: the status is what
+            # excludes it and the timestamp is what the daily cap counts.
+            written = sheets.update_column(
+                schema.OUTREACH_LOG, "WhatsApp Status", {lead_id: "unconfirmed"},
+                user_edit=True,
+            )
+            sheets.update_column(
+                schema.OUTREACH_LOG, "WhatsApp Sent At", {lead_id: utc_now()},
+                user_edit=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+        if not written:
+            return jsonify({"error": f"No Outreach Log row for {lead_id}"}), 200
+        return jsonify({"ok": True, "status": "unconfirmed"})
 
     @app.route("/api/whatsapp/undo-send", methods=["POST"])
     def api_whatsapp_undo_send():

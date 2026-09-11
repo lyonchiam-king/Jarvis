@@ -55,6 +55,36 @@ def is_mobile_number(phone: str, country: str = "") -> bool:
 # "pending" is the same state under the name the relay used before the ack
 # was softened from a gate into evidence. Rows carrying it are on the Sheet
 # already and were written by the same send path, so they mean the same thing.
+def chat_link(phone_e164: str, message: str) -> str:
+    """WhatsApp's own click-to-chat address for one drafted message.
+
+    This is how a message gets sent without a relay: the link opens WhatsApp
+    on whatever device follows it, with the text already in the box and the
+    recipient already chosen. A person presses send.
+
+    That matters beyond convenience. The relay is the one part of this
+    pipeline that cannot move to a server -- it needs a phone linked to a
+    machine that stays awake, and running that in a data centre puts the
+    number at more risk rather than less. Everything expensive (finding the
+    lead, researching it, building the page, writing the message) is work a
+    server does well. Pressing send is work a person does in a second.
+
+    The number must already be E.164 and must arrive here with its country
+    code, because this function has no idea what country anyone is in --
+    normalising is done once, on the way into the queue, where the lead's
+    country is known. Digits only: wa.me rejects a leading "+".
+    """
+    from urllib.parse import quote
+
+    digits = "".join(ch for ch in phone_e164 if ch.isdigit())
+    if not digits:
+        return ""
+    # `quote` with no safe characters: a newline, an ampersand or a "#" in
+    # the message would otherwise end the text early or split the URL, and
+    # the message would arrive truncated at exactly the interesting part.
+    return f"https://wa.me/{digits}?text={quote(message, safe='')}"
+
+
 WA_SENT_STATUSES = frozenset(
     {"sent", "delivered", "read", "unconfirmed", "pending"}
 )
