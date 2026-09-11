@@ -1,0 +1,28 @@
+# Secrets never belong in an image. They would be readable by anyone who
+# pulls it, and baked into a layer that outlives any later deletion.
+.env
+.env.*
+credentials/
+token.json
+*.local.yaml
+.whatsapp-session/
+
+# Weight with no purpose inside the image.
+.git/
+.venv/
+node_modules/
+frontend/node_modules/
+tests/
+sites/
+.cache/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# The relay does not run here -- assisted send replaced it, and shipping
+# Node into a Python image to run nothing is 150MB of attack surface.
+whatsapp-relay/
+
+# Windows launchers, which this image has no use for.
+*.bat
+*.ps1

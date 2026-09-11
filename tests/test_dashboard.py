@@ -327,10 +327,54 @@ def test_the_wide_address_is_named_once_and_guarded_where_it_is_used():
 
     assert source.count('"0.0.0.0"') == 1, "the wide address is defined once"
     assert "ALL_INTERFACES = " in source
-    # The only place it is chosen, and it cannot be chosen without a password.
-    assert "ALL_INTERFACES if (phone and has_password) else LOOPBACK" in source
     # The CLI passes intent, never an address, so it cannot widen it alone.
     assert "0.0.0.0" not in (SRC / "cli.py").read_text()
+
+    # The expression that chooses it is not asserted here. This test used to
+    # hold one literal line, which meant a second way of reaching 0.0.0.0
+    # could be added without it noticing, and a harmless rewrite of the same
+    # rule failed it. `test_no_route_to_the_wide_address_skips_the_password`
+    # drives `serve` and asserts the property instead.
+
+
+def test_no_route_to_the_wide_address_skips_the_password(monkeypatch, tmp_path):
+    """Every way of asking to be reachable, with no password set.
+
+    There are two now -- `--phone` and a hosted deployment -- and the point
+    is that neither is a separate decision about safety. The dashboard spends
+    money, messages real businesses and reads the Sheet; on any network wider
+    than this machine the password is the only thing in front of it.
+    """
+    from outreach import dashboard as dash
+    from outreach import paths
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, dashboard_password=""))
+
+    for hosted in (False, True):
+        if hosted:
+            monkeypatch.setenv(paths.ENV_VAR, str(tmp_path))
+        else:
+            monkeypatch.delenv(paths.ENV_VAR, raising=False)
+
+        for phone in (False, True):
+            bound = []
+            monkeypatch.setattr(dash, "load_config", lambda *a, **k: config)
+            monkeypatch.setattr(
+                dash, "create_app",
+                lambda c: type("App", (), {
+                    "config": {"state": {}},
+                    "run": lambda self, **kw: bound.append(kw.get("host")),
+                    "update": lambda self, **kw: None,
+                })(),
+            )
+            try:
+                dash.serve(open_browser=False, phone=phone)
+            except dash.UnsafeBinding:
+                pass  # Refused outright, which is the strongest answer.
+            assert dash.ALL_INTERFACES not in bound, (
+                f"reachable with no password (hosted={hosted}, phone={phone})"
+            )
 
 
 def test_asking_for_phone_access_without_a_password_stays_local(monkeypatch):

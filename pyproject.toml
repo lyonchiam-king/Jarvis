@@ -31,6 +31,15 @@ outreach = "outreach.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The built React page is data, not code, so `packages.find` does not see it
+# and an installed copy would serve /app from a directory that is not there.
+# Locally that never showed: the repo is the working directory and the files
+# are simply on disk beside the module. In a container, where the package is
+# installed rather than run from the checkout, the page would 404 with
+# nothing in the log to explain it.
+[tool.setuptools.package-data]
+outreach = ["web/*", "web/**/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

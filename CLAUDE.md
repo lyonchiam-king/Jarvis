@@ -56,7 +56,8 @@ src/outreach/
   web/             the built React page -- generated, committed, never edited
 config/campaigns/  penang-my.yaml is the live campaign
 frontend/          React source for /app; `npm run build` writes src/outreach/web
-tests/             1310 tests, pytest, no CI -- the suite is the only gate
+Dockerfile         the hosted image -- Chromium, one /data volume, no Node
+tests/             1322 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -337,6 +338,36 @@ message. Signing in already proves whose Google account it is, so
 `/api/create-sheet` makes the Sheet in *their* Drive, adds every tab, and
 writes `SHEET_ID` itself. It refuses once a Sheet exists: a second, empty one
 would make every lead already gathered look lost.
+
+**The built page is data, so it has to be declared as data.**
+`packages.find` sees Python modules; `src/outreach/web/` is HTML, CSS and
+JavaScript, so an installed copy of the package had no page to serve and
+`/app` would have 404'd with nothing in the log. It never showed locally
+because the working directory *is* the checkout and the files sit beside the
+module either way. `[tool.setuptools.package-data]` ships it, and the test
+installs the package for real and then looks for the file rather than
+reading it off the repo.
+
+**Copy the source before installing it.** `pip install .` with only
+`pyproject.toml` present succeeds and installs nothing, because
+`packages.find` looks in `src/` and finds an empty tree. The image would
+build cleanly and then have no `outreach` command -- a failure at first use,
+not at build time. Splitting dependencies into a cached layer is what caused
+it; correctness beat the rebuild time.
+
+**A container's loopback is reachable by nothing.** Not the platform's
+router, not its health check, not you. So `serve` binds every interface by
+itself when a state directory is set, and the password gate is what keeps
+that safe -- exactly as `--phone` works, and for the same reason the launcher
+owns no decision. `open_browser` is forced off too: there is nothing to open,
+and trying starts a thread that fails a second later in logs nobody reads.
+
+**Assert the property, not the line that implements it.** The old guard on
+`0.0.0.0` held one literal expression, so a *second* route to the wide
+address could be added without it noticing, and a harmless rewrite of the
+same rule failed it. `test_no_route_to_the_wide_address_skips_the_password`
+drives `serve` across every combination of `--phone` and hosted with no
+password set, and asserts the bind never happens.
 
 **A server cannot sign in, so it must not try.** Consent means
 `run_local_server`: a browser opens and the call blocks until somebody
@@ -887,5 +918,11 @@ Say so rather than implying otherwise:
   binary cannot even be fetched. Everything on the Python side -- reading the
   published address, the refusals, the rate-limit keying, the shutdown -- is
   driven against a stand-in for cloudflared.
+- The `Dockerfile` has never been built. The Docker daemon is not usable in
+  this container, so every claim about the image is checked by reading it and
+  by installing the package for real -- which is what caught the missing
+  `package-data` and the install that would have shipped no `outreach`
+  command. Nobody has yet seen the image start, take a screenshot, or reach
+  Google from inside it.
 - The Ollama / OpenRouter transports have never reached a real endpoint --
   outbound egress is blocked. `modelcheck` is how Lyon verifies them himself.

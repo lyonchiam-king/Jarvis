@@ -2662,13 +2662,38 @@ def serve(
     has_password = bool(config.secrets.dashboard_password)
 
     if host is None:
-        host = ALL_INTERFACES if (phone and has_password) else LOOPBACK
+        # A container's loopback is reachable by nothing at all -- not the
+        # platform's router, not its health check, not you. So a hosted
+        # deployment binds every interface without being asked, and the
+        # password gate below is what keeps that safe. The launcher has no
+        # flag to forget, which is the same reason --phone became a request
+        # rather than an address.
+        wants_network = phone or paths.is_hosted()
+        host = ALL_INTERFACES if (wants_network and has_password) else LOOPBACK
+
+    # Nothing here can open a browser, and trying starts a thread that fails
+    # a second later with a message about a missing display -- in the logs of
+    # a server nobody is reading, next to the address that actually works.
+    if paths.is_hosted():
+        open_browser = False
 
     # The one hard rule. The dashboard spends money, messages real
     # businesses and reads the Sheet, and it has no other protection -- on a
     # cafe or hotel network, everyone in the building is on that network.
     # Binding wide open without a password is not a thing to warn about; it
     # is a thing to refuse.
+    if paths.is_hosted() and not has_password:
+        # Said separately because the fix differs: there is no .env to edit
+        # by hand on a platform that injects its own environment.
+        raise UnsafeBinding(
+            "Refusing to start with no password set.\n\n"
+            "This deployment is reachable from the internet, and the "
+            "dashboard spends money, messages real businesses and reads "
+            "your Sheet.\n\n"
+            "Set DASHBOARD_PASSWORD in the host's environment "
+            f"({MIN_TUNNEL_PASSWORD} characters or more) and redeploy."
+        )
+
     if host != LOOPBACK and not has_password:
         raise UnsafeBinding(
             f"Refusing to serve on {host} with no password set.\n\n"
