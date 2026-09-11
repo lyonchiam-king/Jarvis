@@ -34,7 +34,7 @@ from flask import (
 )
 from werkzeug.exceptions import NotFound
 
-from . import paths, schema
+from . import paths, schema, scheduler
 from .config import Config, load_config
 from .stages.reachability import stored_verdict
 from .stage import Stage
@@ -698,6 +698,11 @@ def create_app(config: Config) -> Flask:
     # Exposed so `serve` can record that it published this process. Reaching
     # into the closure from outside is worse than one named handle.
     app.config["state"] = state
+    # `serve` needs it to schedule the morning batch, and the Runner's own
+    # refusal-while-busy is what stops a scheduled run stacking on top of one
+    # a person started. Handed over by name rather than reached for through
+    # the closure.
+    app.config["runner"] = runner
 
     # Signed-cookie sessions, with a per-process key. Restarting the
     # dashboard signs every device out, which is the right trade for a tool
@@ -2801,6 +2806,30 @@ def serve(
         print(f"\n  The older page is at  http://{host_part}:{port}/")
         print("\n  If Windows asks about the firewall, tick Private networks")
         print("  and allow it -- the phone cannot connect otherwise.")
+    # The morning batch, if one was asked for. Started before app.run so a
+    # bad time is an error on the way in rather than a morning where nothing
+    # happened and nothing said why.
+    wanted = os.getenv(scheduler.ENV_VAR, "").strip()
+    if wanted:
+        from datetime import datetime
+
+        try:
+            at = scheduler.parse_time(wanted)
+        except scheduler.ScheduleError as exc:
+            raise UnsafeBinding(str(exc)) from exc
+        scheduler.start(
+            at,
+            # Exactly what the Full pipeline button does: discovery through
+            # drafting, stopping before anything is built or sent. The
+            # Runner refuses a second run while one is going, and returning
+            # that refusal is what stops the scheduler stacking one on top
+            # of whatever a person just started.
+            lambda: app.config["runner"].start("Daily run", FULL_RUN, None, None),
+        )
+        print(f"\n  {scheduler.describe(at, datetime.now().astimezone())}")
+    else:
+        print(f"\n  No daily run scheduled. Set {scheduler.ENV_VAR}=07:30 for one.")
+
     print("\n  Close this window when you're done.\n")
     try:
         app.run(host=host, port=port, debug=False)

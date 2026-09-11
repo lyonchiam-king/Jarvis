@@ -53,6 +53,17 @@ USER outreach
 # The platform decides the port; 8765 matches the local default so the same
 # instructions work in both places.
 ENV PORT=8765
+
+# The morning batch is off unless asked for -- a scheduled run spends money,
+# and nobody should learn that from a bill. Set OUTREACH_DAILY_RUN=07:30 in
+# the host's environment to turn it on.
+#
+# TZ decides what "07:30" means. Without it a container is UTC, which is
+# half past three in the afternoon in Penang -- the single most reliable way
+# to schedule something for the wrong moment. The startup line prints the
+# date, time and offset it actually computed, so there is nothing to argue
+# about.
+ENV TZ=UTC
 EXPOSE 8765
 
 # tini reaps the browser. Chromium leaves zombie children behind on a

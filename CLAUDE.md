@@ -53,11 +53,12 @@ src/outreach/
   screenshot.py    photographs the built page for the WhatsApp message
   slug.py          deterministic, unguessable per-business URL paths
   paths.py         the one writable directory -- everything else is read-only
+  scheduler.py     the daily run, in-process so every host works the same
   web/             the built React page -- generated, committed, never edited
 config/campaigns/  penang-my.yaml is the live campaign
 frontend/          React source for /app; `npm run build` writes src/outreach/web
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
-tests/             1322 tests, pytest, no CI -- the suite is the only gate
+tests/             1343 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -368,6 +369,36 @@ address could be added without it noticing, and a harmless rewrite of the
 same rule failed it. `test_no_route_to_the_wide_address_skips_the_password`
 drives `serve` across every combination of `--phone` and hosted with no
 password set, and asserts the bind never happens.
+
+**The daily run lives in the process, not in the platform.** Fly has
+machines, Render has cron services, a VPS has crontab -- three files, three
+vocabularies, three ways to fail, and none of them testable from here. A
+thread in the dashboard behaves identically on all of them and on Lyon's PC.
+It is **off unless `OUTREACH_DAILY_RUN` is set**, because a scheduled run
+spends money on Places lookups, research, a brief and a message per lead, and
+nobody should discover that from a bill. It runs exactly what the Full
+pipeline button runs and stops before building or sending, so the two steps
+that cost the most or reach a real business still wait for a person.
+
+**Never add a day to an aware datetime.** Across a clock change that moves
+the wall clock by an hour, so a 07:30 job becomes 06:30 and stays there
+forever. `next_run_at` combines tomorrow's *date* with the same *time*, which
+is what "every morning at half seven" means. Penang has no DST; a campaign
+run from the UK does.
+
+**A schedule with no timezone on it is a schedule for the wrong moment.**
+"07:30" reads as local to whoever typed it and as UTC to the container --
+eight hours apart in Penang. `TZ` decides, and the startup line prints the
+date, time and offset actually computed rather than echoing what was asked
+for.
+
+**Never sleep all the way to the target.** A paused container, a clock
+corrected by NTP, or a closed laptop all move time in ways one long sleep
+does not notice, and it wakes hours late having missed the run. `MAX_SLEEP`
+caps each nap and the target is recomputed on every wake. A run that cannot
+start is logged and the day skipped, never retried in a loop, and the thread
+catches everything -- a scheduler thread that dies takes every future run
+with it and says so to nobody.
 
 **A server cannot sign in, so it must not try.** Consent means
 `run_local_server`: a browser opens and the call blocks until somebody
