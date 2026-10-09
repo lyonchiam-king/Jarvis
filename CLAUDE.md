@@ -60,7 +60,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1365 tests, pytest, no CI -- the suite is the only gate
+tests/             1369 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -424,12 +424,30 @@ preference. An existing token refreshes over plain HTTP with no browser at
 all, which is why seeding one by hand is the entire setup.
 
 **The fix has to be one the reader can perform.** The local refusal says to
-close the dashboard and run `outreach preflight`; on a server reached over
-ssh that spends the one message that had their attention on a Windows batch
-file. The hosted refusal names the token's absolute path and says to copy one
-up. "Missing" and "could not be renewed" are kept apart too -- the second
-sends someone hunting for a revoked grant when nobody ever put a token on the
-machine.
+close the dashboard and press 9 in `run.bat` -- `outreach preflight` is named
+after it, because the error is read on other machines too, but the owner of
+this tool does not use a terminal and an instruction he cannot follow is not
+an instruction. On a server reached over ssh the same words would spend the
+one message that had his attention on a Windows batch file, so the hosted
+refusal names the token's absolute path and says to copy one up. "Missing"
+and "could not be renewed" are kept apart too -- the second sends someone
+hunting for a revoked grant when nobody ever put a token on the machine.
+
+**The Google sign-in expires after seven days, and that is a setting, not a
+fault.** Google issues a refresh token lasting a week while the OAuth consent
+screen is still in **Testing**, so the tool works, stops a week later, works
+again the moment someone signs in, and stops again -- reported a month after
+setup as "the Google link is broken". The error says only `invalid_grant`,
+which reads as a revoked grant or a clock problem, and the honest report of
+it explained nothing: the fix on offer was to sign in again, which buys
+exactly seven more days. Both refusals now name the cause and the one-time
+cure -- publish the app under Audience -- and say that the "unverified app"
+warning afterwards is expected for your own tool, since that screen looks
+like a refusal and is the next place someone stops. It is matched on
+`invalid_grant` in the error text and nowhere else: the exception type is the
+same for a dropped connection, and sending someone into the Cloud Console
+over a network blip costs an hour and fixes nothing. A control test holds
+that line.
 
 **Consent in a request thread must be bounded.** `run_local_server` opens a
 browser and blocks until somebody finishes -- forever, if they close the tab.

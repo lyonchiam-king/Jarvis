@@ -168,3 +168,90 @@ class TestNonInteractiveCredentials:
         assert "Press the button again" in message
         # Not the library's wording, which reads like a server fault.
         assert "WSGITimeout" not in message
+
+
+# ------------------------------------------- why the sign-in keeps expiring
+
+# Reported a month after it was set up: "it says the Google link is broken."
+# The refresh failed with invalid_grant, which the old message reported
+# faithfully and explained not at all -- so the fix on offer was to sign in
+# again, which works for exactly seven more days. Google expires the refresh
+# token after a week while the consent screen is in "Testing", and that is
+# the whole of it. A tool that breaks weekly and blames nothing is a tool
+# nobody trusts.
+
+
+def _refresh_fails_with(monkeypatch, tmp_path, message: str):
+    """A stored token whose refresh raises `message`, consent forbidden."""
+    from outreach import auth
+
+    token = tmp_path / "token.json"
+    token.write_text(json.dumps({
+        "token": "old", "refresh_token": "r", "client_id": "c",
+        "client_secret": "s", "scopes": list(auth.SCOPES),
+        "expiry": "2020-01-01T00:00:00Z",
+    }))
+
+    def boom(*a, **k):
+        raise RuntimeError(message)
+
+    monkeypatch.setattr("google.oauth2.credentials.Credentials.refresh", boom)
+    monkeypatch.setattr(
+        auth.InstalledAppFlow, "from_client_secrets_file",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("consent started")),
+    )
+    with pytest.raises(auth.AuthError) as exc:
+        auth.get_credentials(tmp_path / "client.json", token, allow_consent=False)
+    return str(exc.value)
+
+
+def test_an_expired_grant_names_the_seven_day_limit(monkeypatch, tmp_path):
+    message = _refresh_fails_with(
+        monkeypatch, tmp_path, "invalid_grant: Token has been expired or revoked."
+    )
+    assert "seven-day" in message or "seven day" in message
+    assert "Testing" in message
+    # And the one-time fix, as somewhere to go rather than something to know.
+    assert "PUBLISH APP" in message
+    assert "console.cloud.google.com" in message
+
+
+def test_the_fix_is_one_he_can_perform(monkeypatch, tmp_path):
+    """He drives this from run.bat and does not use a terminal. The old text
+    offered only `outreach preflight`, which is the right command and the
+    wrong instruction."""
+    message = _refresh_fails_with(
+        monkeypatch, tmp_path, "invalid_grant: Token has been expired or revoked."
+    )
+    assert "run.bat" in message
+    assert "press 9" in message
+
+
+def test_a_network_failure_is_not_blamed_on_the_consent_screen(monkeypatch, tmp_path):
+    """The control, and the reason this is matched on the error text rather
+    than the exception type. Sending someone into the Cloud Console over a
+    dropped connection costs them an hour and fixes nothing."""
+    message = _refresh_fails_with(
+        monkeypatch, tmp_path, "Connection aborted: name resolution failed"
+    )
+    assert "Testing" not in message
+    assert "PUBLISH APP" not in message
+    # It still says what broke and what to do about it.
+    assert "expired" in message
+    assert "run.bat" in message
+
+
+def test_the_hosted_refusal_explains_it_too(monkeypatch, tmp_path):
+    """A server hits this on the same seven-day clock, and the person reading
+    that log is the one who can publish the app."""
+    from outreach import auth, paths
+
+    monkeypatch.setenv(paths.ENV_VAR, str(tmp_path / "state"))
+    message = _refresh_fails_with(
+        monkeypatch, tmp_path, "invalid_grant: Token has been expired or revoked."
+    )
+    assert "Testing" in message
+    assert "PUBLISH APP" in message
+    # Still the hosted instruction, not the Windows one.
+    assert "copy that file to" in message
+    assert "run.bat" not in message

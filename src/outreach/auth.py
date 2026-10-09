@@ -48,6 +48,36 @@ class AuthError(Exception):
     """OAuth could not be completed. Message tells the user what to fix."""
 
 
+# Google issues a refresh token that expires after **seven days** when the
+# OAuth consent screen is still in "Testing". Nothing about the error says
+# so: it arrives as `invalid_grant`, which reads as a revoked grant or a
+# clock problem, and signing in again fixes it -- for another seven days.
+# That is a tool that breaks every week with no hint why, so when the cause
+# is recognisable the message names it and names the one-time fix.
+_SEVEN_DAY_NOTE = (
+    "\nThis usually means the seven-day limit, not anything you did.\n"
+    "Google expires the sign-in after a week while the OAuth consent screen "
+    "is still set to \"Testing\" -- so it works, then stops, then works "
+    "again when you sign in, over and over.\n\n"
+    "To stop it happening again, once:\n"
+    "  1. Open https://console.cloud.google.com/auth/overview\n"
+    "  2. Pick the project this tool uses\n"
+    "  3. Under Audience, press PUBLISH APP and confirm\n"
+    "An \"unverified app\" warning on the sign-in screen after that is "
+    "expected for your own tool -- press Advanced, then continue.\n"
+)
+
+
+def _is_expired_grant(exc: Exception | None) -> bool:
+    """Whether a refresh failed because the grant itself is finished.
+
+    Matched on the error text because that is where Google puts it -- the
+    exception type is the same for a network blip, and treating those alike
+    would send someone to the Cloud Console over a dropped connection.
+    """
+    return exc is not None and "invalid_grant" in str(exc).lower()
+
+
 def get_credentials(
     client_file: Path,
     token_file: Path,
@@ -109,8 +139,9 @@ def get_credentials(
             # one message that had their attention, and "sign in again" is
             # advice this machine cannot act on at all.
             had_one = " and could not be renewed" if creds else " is missing"
+            why = _SEVEN_DAY_NOTE if _is_expired_grant(refresh_error) else ""
             raise AuthError(
-                f"The Google sign-in{had_one}{detail}.\n\n"
+                f"The Google sign-in{had_one}{detail}.\n{why}\n"
                 "This server cannot sign in: that needs a browser, and there "
                 "is none here.\n\n"
                 "On the machine you normally use, sign in once so a fresh "
@@ -118,14 +149,20 @@ def get_credentials(
                 f"    {token_file}\n"
                 "on this server and restart it. Nothing else needs to change."
             )
+        # Named as a double-click first. `outreach preflight` is the same
+        # thing and is kept because the error is also read on other people's
+        # machines, but the owner of this tool does not use a terminal, and
+        # an instruction he cannot follow is not an instruction.
         raise AuthError(
             "Your Google sign-in has expired and could not be renewed"
             f"{detail}.\n"
-            "Signing in again needs a browser, which this process cannot "
+            + (_SEVEN_DAY_NOTE if _is_expired_grant(refresh_error) else "")
+            + "\nSigning in again needs a browser, which this process cannot "
             "open on your behalf.\n"
-            "Close the dashboard, run `outreach preflight` in a terminal, "
-            "finish the Google sign-in it opens, then start Dashboard.bat "
-            "again."
+            "Close the dashboard, double-click run.bat and press 9 "
+            "(\"Check everything works\") -- or run `outreach preflight` in a "
+            "terminal. Finish the Google sign-in it opens, then start "
+            "Dashboard.bat again."
         )
 
     if not client_file.exists():
