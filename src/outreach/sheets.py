@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Sequence
@@ -29,6 +30,15 @@ _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 class SheetsError(Exception):
     """A Sheets operation failed in a way the run cannot work around."""
+
+
+class ApiNotEnabled(SheetsError):
+    """A Google API this tool needs has never been switched on.
+
+    Its own class because the fix is a setting in the Cloud Console rather
+    than anything about the Sheet, and because the message is written to be
+    shown verbatim -- callers must not wrap it in their own words.
+    """
 
 
 class SheetSchemaError(SheetsError):
@@ -64,6 +74,50 @@ def guard_manual_column(tab: Tab, column: str, *, user_edit: bool) -> None:
     )
 
 
+# The three APIs this tool calls, and the only three. A brand-new Cloud
+# project has all of them switched off, so the first run after moving to one
+# fails three times in a row -- once per API, each a separate trip to the
+# Console, each looking like a fresh problem. Naming all three the first
+# time turns three evenings into one.
+_REQUIRED_APIS = (
+    ("sheets.googleapis.com", "Google Sheets API", "reads and writes your Sheet"),
+    ("drive.googleapis.com", "Google Drive API", "creates the Sheet in the first place"),
+    ("gmail.googleapis.com", "Gmail API", "writes email drafts"),
+)
+
+
+def _project_of(detail: str) -> str:
+    """The project number Google names in a SERVICE_DISABLED error."""
+    found = re.search(r"project[s]?[/ ](\d{6,})", detail)
+    return found.group(1) if found else ""
+
+
+def api_disabled_message(detail: str) -> str:
+    """Google's SERVICE_DISABLED, rewritten as something to do.
+
+    What Google returns is 1,300 characters of nested JSON repeating the same
+    sentence four times, and the dashboard shows all of it. The useful parts
+    are the project number and one link; everything else is noise sitting
+    between the reader and the fix.
+    """
+    project = _project_of(detail)
+    where = f"?project={project}" if project else ""
+    lines = [
+        "This Google Cloud project has its APIs switched off"
+        + (f" (project {project})." if project else "."),
+        "",
+        "A new project starts with everything disabled, so switch on all",
+        "three now -- otherwise this fails again on the next one:",
+        "",
+    ]
+    for host, name, why in _REQUIRED_APIS:
+        lines.append(f"  {name} -- {why}")
+        lines.append(f"    https://console.cloud.google.com/apis/library/{host}{where}")
+    lines.append("")
+    lines.append("Give it two minutes after the last one, then try again.")
+    return "\n".join(lines)
+
+
 def _with_retry(fn: Callable[[], object], what: str) -> object:
     """Retry transient Sheets failures with exponential backoff and jitter.
 
@@ -78,6 +132,12 @@ def _with_retry(fn: Callable[[], object], what: str) -> object:
         except HttpError as exc:
             status = getattr(exc.resp, "status", None)
             if status not in _RETRYABLE_STATUS or attempt == _MAX_ATTEMPTS:
+                detail = str(exc)
+                # A disabled API is a setting, not a failure, and it has one
+                # fix. Passing Google's own paragraph through instead buries
+                # that fix in four repetitions of itself.
+                if status == 403 and "SERVICE_DISABLED" in detail:
+                    raise ApiNotEnabled(api_disabled_message(detail)) from exc
                 raise SheetsError(f"{what} failed (HTTP {status}): {exc}") from exc
             sleep_for = delay + random.uniform(0, 0.5)
             log.warning(

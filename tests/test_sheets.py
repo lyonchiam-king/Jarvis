@@ -272,3 +272,111 @@ def test_no_stage_ever_claims_to_be_a_user_edit():
         "a stage passed user_edit -- stages run unattended and must never "
         f"overwrite a manual column: {offenders}"
     )
+
+
+# ------------------------------------------- an API that was never enabled
+
+# What Google returns for a disabled API is 1,300 characters of nested JSON
+# saying the same sentence four times, and the dashboard printed every one
+# of them. The reader needs the project number and one link; the rest sits
+# between them and the fix.
+#
+# Worse, a new project has all three APIs off, so enabling the one named in
+# the error buys exactly one more run before the next 403. Three evenings,
+# three trips to the Console, each looking like a fresh problem.
+
+DISABLED_403 = (
+    "<HttpError 403 when requesting https://sheets.googleapis.com/v4/"
+    "spreadsheets/17Rp2iMaPKoIHgWEHbdp7brMcGOVSSkql9_GPdCPfhto/values/"
+    "%27Leads%27%21A1%3AT?alt=json returned \"Google Sheets API has not been "
+    "used in project 506060726614 before or it is disabled. Enable it by "
+    "visiting https://console.developers.google.com/apis/api/"
+    "sheets.googleapis.com/overview?project=506060726614 then retry.\". "
+    "Details: \"[{'@type': 'type.googleapis.com/google.rpc.ErrorInfo', "
+    "'reason': 'SERVICE_DISABLED', 'domain': 'googleapis.com'}]\">"
+)
+
+
+def test_the_message_names_the_project_google_named():
+    from outreach.sheets import api_disabled_message
+
+    message = api_disabled_message(DISABLED_403)
+    assert "506060726614" in message
+    assert "?project=506060726614" in message
+
+
+def test_all_three_apis_are_named_not_just_the_one_that_failed():
+    """Enabling only Sheets buys one more run before Drive 403s, then
+    Gmail. One trip to the Console, not three."""
+    from outreach.sheets import api_disabled_message
+
+    message = api_disabled_message(DISABLED_403)
+    for host in ("sheets.googleapis.com", "drive.googleapis.com", "gmail.googleapis.com"):
+        assert f"apis/library/{host}" in message, f"{host} is not offered"
+
+
+def test_none_of_google_s_noise_survives():
+    """Length is the wrong measure -- naming three APIs costs lines and is
+    the point. What matters is that nothing in the output is machine
+    wreckage: no JSON fragments, no percent-encoded ranges, no repetition
+    of the same sentence in four dialects."""
+    from outreach.sheets import api_disabled_message
+
+    message = api_disabled_message(DISABLED_403)
+    for noise in ("@type", "HttpError", "%27", "ErrorInfo", "alt=json", "Details:"):
+        assert noise not in message, f"{noise!r} leaked into the message"
+    # And it reads as instructions rather than a paragraph to decode.
+    assert message.count("console.cloud.google.com") == 3
+    assert len(message.splitlines()) < 20
+
+
+def test_an_unrecognisable_error_still_offers_the_links():
+    """No project number in the text is not a reason to say nothing."""
+    from outreach.sheets import api_disabled_message
+
+    message = api_disabled_message("SERVICE_DISABLED and nothing else")
+    assert "apis/library/sheets.googleapis.com" in message
+    assert "?project=" not in message
+
+
+def test_a_disabled_api_raises_its_own_error(monkeypatch):
+    """So a caller can show it verbatim rather than wrapping it in prose
+    about the Sheet, which is not what is wrong."""
+    from googleapiclient.errors import HttpError
+
+    from outreach.sheets import ApiNotEnabled, _with_retry
+
+    class _Resp:
+        status = 403
+        reason = "Forbidden"
+
+    def boom():
+        raise HttpError(_Resp(), DISABLED_403.encode())
+
+    with pytest.raises(ApiNotEnabled) as exc:
+        _with_retry(boom, "read Leads")
+
+    message = str(exc.value)
+    assert "506060726614" in message
+    # Not Google's wall of text, and not "read Leads failed (HTTP 403)".
+    assert "ErrorInfo" not in message
+    assert "switched off" in message
+
+
+def test_other_403s_are_not_relabelled(monkeypatch):
+    """The control. A permissions 403 is a different problem and must not
+    be answered with instructions to enable an API that is already on."""
+    from googleapiclient.errors import HttpError
+
+    from outreach.sheets import ApiNotEnabled, SheetsError, _with_retry
+
+    class _Resp:
+        status = 403
+        reason = "Forbidden"
+
+    def boom():
+        raise HttpError(_Resp(), b"The caller does not have permission")
+
+    with pytest.raises(SheetsError) as exc:
+        _with_retry(boom, "read Leads")
+    assert not isinstance(exc.value, ApiNotEnabled)

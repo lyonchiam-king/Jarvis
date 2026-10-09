@@ -60,7 +60,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1384 tests, pytest, no CI -- the suite is the only gate
+tests/             1390 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -477,6 +477,21 @@ discarded without a refresh call, because that call cannot succeed and only
 returns the misleading sentence. Where consent cannot run, the refusal says
 *replaced client*, not *expired*, and asks for one sign-in. Neither id is
 printed; that they disagree is the whole of what the reader needs.
+
+**A new Cloud project has every API switched off, and fails one at a
+time.** Moving to a fresh project got past the sign-in and straight into
+`SERVICE_DISABLED` on Sheets -- and enabling Sheets would have bought
+exactly one more run before Drive, then Gmail. Three evenings, three trips
+to the Console, each looking like a fresh problem. `api_disabled_message`
+names all three with their own links, pre-filled with the project number
+Google put in the error, and says to wait two minutes. It also throws
+Google's own text away: 1,300 characters of nested JSON repeating one
+sentence four times, printed in full on the dashboard, with the single
+useful link buried in the middle. `ApiNotEnabled` is its own class so a
+caller shows it verbatim rather than wrapping it in prose about the Sheet,
+which is not what is wrong. A control holds that an ordinary permissions
+403 is not relabelled: telling someone to enable an API that is already on
+is a wasted hour.
 
 **An error that explains itself needs an element that lets it.** That
 three-step cure reached the page inside a `<span>`, where HTML collapses
