@@ -67,9 +67,13 @@ SERVICE_DISABLED = HttpError(
 
 
 def test_sheets_probe_names_the_disabled_api(monkeypatch):
+    """The wording moved to `api_disabled_message`, which names all three
+    APIs rather than only the one that happened to fail first. What this
+    still holds is the property: the probe says an API is off, and offers
+    somewhere to switch it on."""
     ok, detail = sheets_client(exc=SERVICE_DISABLED, monkeypatch=monkeypatch).probe()
     assert ok is False
-    assert "Sheets API is not enabled" in detail
+    assert "Google Sheets API" in detail
     assert "console.cloud.google.com" in detail
 
 
@@ -210,3 +214,43 @@ def test_preflight_names_the_project_and_never_the_secret(tmp_path, monkeypatch)
     assert "console.cloud.google.com/auth/audience?project=sme-outreach-live" in out
     assert "GOCSPX-never-show-this" not in out
     assert "123-abc.apps.googleusercontent.com" not in out
+
+
+def test_the_probe_names_the_same_three_apis_as_the_run(monkeypatch):
+    """Preflight is where someone checks whether enabling worked. A second,
+    shorter description naming only Sheets would have them switch on one
+    API, see preflight pass, and hit Drive on the next command."""
+    from googleapiclient.errors import HttpError
+
+    from outreach.sheets import SheetsClient
+
+    disabled = (
+        "returned \"Google Sheets API has not been used in project "
+        "506060726614 before or it is disabled.\" Details: "
+        "\"[{'reason': 'SERVICE_DISABLED'}]\""
+    )
+
+    class _Resp:
+        status = 403
+        reason = "Forbidden"
+
+    class _Req:
+        def execute(self):
+            raise HttpError(_Resp(), disabled.encode())
+
+    class _Sheets:
+        def get(self, **kwargs):
+            return _Req()
+
+    class _Service:
+        def spreadsheets(self):
+            return _Sheets()
+
+    client = SheetsClient.__new__(SheetsClient)
+    client._service = _Service()
+
+    ok, detail = client.probe()
+    assert ok is False
+    assert "506060726614" in detail
+    for host in ("sheets.googleapis.com", "drive.googleapis.com", "gmail.googleapis.com"):
+        assert f"apis/library/{host}" in detail

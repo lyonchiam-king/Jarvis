@@ -202,11 +202,11 @@ class SheetsClient:
             status = getattr(exc.resp, "status", None)
             detail = str(exc)
             if status == 403 and "SERVICE_DISABLED" in detail:
-                return False, (
-                    "the Google Sheets API is not enabled on this Cloud project.\n"
-                    "       Enable it, wait ~2 minutes, then re-run:\n"
-                    "       https://console.cloud.google.com/apis/library/sheets.googleapis.com"
-                )
+                # The same words the run itself gives, naming the same three
+                # APIs and the same project. Preflight is where someone
+                # checks "is it on yet", and a second, shorter description
+                # of one API would have them enable Sheets and stop.
+                return False, api_disabled_message(detail)
             if status == 403:
                 return False, f"Sheets API refused the request: {detail[:200]}"
             if status == 401:

@@ -60,7 +60,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1390 tests, pytest, no CI -- the suite is the only gate
+tests/             1391 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
