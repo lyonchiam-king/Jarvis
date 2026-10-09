@@ -60,7 +60,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1370 tests, pytest, no CI -- the suite is the only gate
+tests/             1374 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -448,6 +448,18 @@ like a refusal and is the next place someone stops. It is matched on
 same for a dropped connection, and sending someone into the Cloud Console
 over a network blip costs an hour and fixes nothing. A control test holds
 that line.
+
+**Nothing told him which Cloud project the tool uses.** An hour went on
+publishing the consent screen of a `gen-lang-client-...` project -- the one
+AI Studio creates for a Gemini key -- which had no consent screen at all and
+so had never issued the sign-in. The advice was right and the project was
+wrong, and that failure looks identical to the advice being wrong. Preflight
+now prints the `project_id` out of `oauth_client.json` with the Console link
+for it, before it says anything about whether the token works, because the
+wrong-project case is most confusing exactly when the token has stopped
+working. Only `project_id` is read: a project id is in every Console URL and
+is not a credential, while the client id and secret share that file and are
+never printed. Secrets stay write-only; that does not bend for a diagnostic.
 
 **An error that explains itself needs an element that lets it.** That
 three-step cure reached the page inside a `<span>`, where HTML collapses

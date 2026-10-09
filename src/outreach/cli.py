@@ -215,6 +215,22 @@ def preflight(ctx: click.Context) -> None:
         click.echo("       See README 'First-time Google Cloud setup'.")
         ok = False
     else:
+        # Which project this sign-in belongs to, before anything else about
+        # it. Publishing the consent screen of the wrong project is an hour
+        # that looks exactly like publishing the right one, and nothing on
+        # screen tied the tool to a project. Printed whether the token works
+        # or not, because the wrong-project case is most confusing when it
+        # does not.
+        from .auth import client_project
+
+        project = client_project(config.secrets.oauth_client_file)
+        if project:
+            click.echo(f"[INFO] Google sign-in belongs to project: {project}")
+            click.echo(
+                "       Settings for it: https://console.cloud.google.com"
+                f"/auth/audience?project={project}"
+            )
+
         try:
             creds = _credentials(config)
             click.echo("[ OK ] Google OAuth token valid")

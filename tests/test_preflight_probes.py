@@ -1,6 +1,8 @@
 """The probes that catch a disabled API before a run trips over it."""
 
+import json
 import types
+from dataclasses import replace
 
 import pytest
 from googleapiclient.errors import HttpError
@@ -126,3 +128,85 @@ def test_probes_never_create_or_send_anything():
         assert not called & {"create", "send", "update", "append", "batchUpdate"}, (
             f"{path.name}.probe() performs a write"
         )
+
+
+# ----------------------------------------- which project the sign-in is from
+
+# An hour went on publishing the consent screen of a `gen-lang-client-...`
+# project -- the one AI Studio makes for a Gemini key. It had no consent
+# screen at all, so it had never issued the sign-in this tool uses. Nothing
+# on screen connected the tool to a project, and there is no way to work it
+# out by looking at either end.
+
+
+def test_the_project_is_read_from_the_client_file(tmp_path):
+    from outreach.auth import client_project
+
+    client = tmp_path / "oauth_client.json"
+    client.write_text(json.dumps({"installed": {
+        "client_id": "123.apps.googleusercontent.com",
+        "project_id": "sme-outreach-live",
+        "client_secret": "DO-NOT-PRINT-ME",
+    }}))
+    assert client_project(client) == "sme-outreach-live"
+
+
+def test_a_web_client_is_read_too(tmp_path):
+    from outreach.auth import client_project
+
+    client = tmp_path / "oauth_client.json"
+    client.write_text(json.dumps({"web": {"project_id": "other-project"}}))
+    assert client_project(client) == "other-project"
+
+
+def test_an_unreadable_client_file_is_unknown_rather_than_fatal(tmp_path):
+    """Preflight exists to report problems, so it may not become one."""
+    from outreach.auth import client_project
+
+    missing = tmp_path / "nope.json"
+    assert client_project(missing) == ""
+
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json at all")
+    assert client_project(broken) == ""
+
+
+def test_preflight_names_the_project_and_never_the_secret(tmp_path, monkeypatch):
+    """The project id is in every Console URL and is not a credential. The
+    client id and secret sit in the same file and are never printed --
+    secrets are write-only, and that does not bend for a diagnostic."""
+    from click.testing import CliRunner
+
+    from outreach import cli as cli_mod
+
+    client = tmp_path / "oauth_client.json"
+    client.write_text(json.dumps({"installed": {
+        "client_id": "123-abc.apps.googleusercontent.com",
+        "project_id": "sme-outreach-live",
+        "client_secret": "GOCSPX-never-show-this",
+    }}))
+
+    from outreach.config import load_config
+
+    base = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(base, secrets=replace(
+        base.secrets,
+        oauth_client_file=client,
+        token_file=tmp_path / "token.json",
+        places_api_key="",
+        sheet_id="s",
+    ))
+
+    monkeypatch.setattr(cli_mod, "load_config", lambda *a, **k: config)
+    monkeypatch.setattr(
+        cli_mod, "_credentials",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no network here")),
+    )
+
+    result = CliRunner().invoke(cli_mod.main, ["preflight"])
+    out = result.output
+
+    assert "sme-outreach-live" in out
+    assert "console.cloud.google.com/auth/audience?project=sme-outreach-live" in out
+    assert "GOCSPX-never-show-this" not in out
+    assert "123-abc.apps.googleusercontent.com" not in out

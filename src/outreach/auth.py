@@ -78,6 +78,34 @@ def _is_expired_grant(exc: Exception | None) -> bool:
     return exc is not None and "invalid_grant" in str(exc).lower()
 
 
+
+def client_project(client_file: Path) -> str:
+    """Which Cloud project issued this OAuth client, or "" if unreadable.
+
+    An hour was lost publishing the consent screen of the wrong project --
+    a `gen-lang-client-...` one that AI Studio makes for a Gemini key, which
+    had no consent screen at all and so had never issued anything. Nothing
+    on screen connected the tool to a project, and there is no way to work
+    it out by looking.
+
+    Only `project_id` is read. The client id and secret live in the same
+    file and are never printed: a project id appears in every Console URL
+    and is not a credential, which is exactly why it is the part worth
+    showing.
+    """
+    try:
+        import json
+
+        data = json.loads(client_file.read_text())
+    except Exception:  # noqa: BLE001 -- absent or malformed is "unknown"
+        return ""
+    for section in ("installed", "web"):
+        found = data.get(section, {})
+        if isinstance(found, dict) and found.get("project_id"):
+            return str(found["project_id"])
+    return str(data.get("project_id", "") or "")
+
+
 def get_credentials(
     client_file: Path,
     token_file: Path,
