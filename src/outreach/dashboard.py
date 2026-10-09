@@ -3017,6 +3017,13 @@ PAGE = """<!doctype html>
   .ok { color:var(--ok); font-size:13px; }
   .status { font-size:13px; color:var(--warn); }
   .err { color:var(--accent); }
+  /* An error that explains itself arrives with line breaks in it, and a
+     <span> throws every one of them away -- the three numbered steps that
+     fix an expired Google sign-in ran together into one paragraph on the
+     only screen he reads them from. The guidance was written and then
+     flattened, which is the same as not writing it. */
+  .long-err { color:var(--accent); white-space:pre-wrap; font-size:13px;
+              line-height:1.55; }
   .stepno { display:inline-flex; align-items:center; justify-content:center;
             width:19px; height:19px; border-radius:50%; background:var(--accent);
             color:#fff; font-size:11.5px; font-weight:700; margin-right:7px;
@@ -3381,7 +3388,7 @@ async function refresh() {
   try { d = await (await fetch('/api/summary')).json(); } catch { panelDead('#totals', 'the totals'); return; }
 
   if (d.error) {
-    $('#totals').innerHTML = `<span class="err">${esc(d.error)}</span>`;
+    $('#totals').innerHTML = `<div class="long-err">${esc(d.error)}</div>`;
     return;
   }
 

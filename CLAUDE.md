@@ -60,7 +60,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1369 tests, pytest, no CI -- the suite is the only gate
+tests/             1370 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -448,6 +448,14 @@ like a refusal and is the next place someone stops. It is matched on
 same for a dropped connection, and sending someone into the Cloud Console
 over a network blip costs an hour and fixes nothing. A control test holds
 that line.
+
+**An error that explains itself needs an element that lets it.** That
+three-step cure reached the page inside a `<span>`, where HTML collapses
+every newline -- so the steps ran together into one paragraph on the only
+screen he reads them from. Guidance written and then flattened is the same
+as guidance never written. `.long-err` is a block with `pre-wrap`, and the
+test drives the page's own `refresh` and reads the element the error landed
+in rather than the line that put it there.
 
 **Consent in a request thread must be bounded.** `run_local_server` opens a
 browser and blocks until somebody finishes -- forever, if they close the tab.

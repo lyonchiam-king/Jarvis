@@ -3336,3 +3336,39 @@ def test_the_login_page_is_phone_shaped_too():
     assert "viewport-fit=cover" in page
     assert "font-size:16px" in page
     assert "env(safe-area-inset-bottom)" in page
+
+
+def test_an_error_with_steps_in_it_keeps_its_line_breaks():
+    """The expired-sign-in message is three numbered steps and a URL.
+
+    It reached the page inside a `<span>`, where HTML collapses every
+    newline, so the steps ran together into one paragraph on the only screen
+    he reads them from -- guidance written and then flattened, which is the
+    same as not writing it.
+
+    Driven through the page's own refresh rather than read off the source:
+    what matters is the element the error lands in, not the line that put it
+    there.
+    """
+    out = _run_in_node("""
+    const box = fakeEl();
+    document.querySelector = (s) => (s === '#totals' ? box : fakeEl());
+    globalThis.fetch = async (url) => {
+      if (url === '/api/summary') {
+        return {json: async () => ({error: 'Step one.\\nStep two.\\nStep three.'})};
+      }
+      throw new Error('no network in this test');
+    };
+    await refresh();
+    console.log(JSON.stringify({html: box.innerHTML}));
+    """)
+
+    # The newlines survive into the markup, and the element preserves them.
+    assert "Step one.\nStep two." in out.replace("\\n", "\n")
+    assert "long-err" in out
+
+    from outreach.dashboard import PAGE
+
+    assert "white-space:pre-wrap" in PAGE, (
+        "the class is applied but nothing makes it keep the breaks"
+    )
