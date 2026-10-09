@@ -1,364 +1,400 @@
 import React, { useState } from 'react';
 import {
-  Play,
-  CheckCircle2,
-  AlertTriangle,
-  Clock,
-  Sparkles,
   ArrowRight,
+  Loader2,
+  Play,
   Terminal,
-  RotateCw,
-  DollarSign,
-  TrendingUp,
-  Sliders,
+  CheckCircle2,
   FileCode,
   Hammer,
   Send,
+  Radio,
   Search,
+  MinusCircle,
 } from 'lucide-react';
-import { Summary, RunLog, Stage } from '../types';
+import { Summary, RunLog } from '../types';
 import { api } from '../api/client';
 import { NavTab } from '../components/Sidebar';
+import { StageKey } from '../components/StageNav';
 
 interface TodayViewProps {
   summary: Summary | null;
   runLog: RunLog | null;
   onRefresh: () => void;
   setActiveTab: (tab: NavTab) => void;
+  /** Deep-link into one step of the campaign rather than its first. */
+  openStage: (stage: StageKey) => void;
 }
 
+/**
+ * The screen someone opens in the morning.
+ *
+ * It answers three questions in order: what should I do first, what is
+ * waiting on me, and how is this going. The old version led with a row of
+ * pipeline counters and seven run buttons, which is the same information
+ * arranged so that nothing is first.
+ *
+ * Every number here is read from the Sheet. Where the data does not exist
+ * -- follow-ups being the honest example -- the tile says so instead of
+ * showing a zero that would read as "none due today".
+ */
 export const TodayView: React.FC<TodayViewProps> = ({
   summary,
   runLog,
   onRefresh,
   setActiveTab,
+  openStage,
 }) => {
-  const [batchLimit, setBatchLimit] = useState(10);
-  const [startingRun, setStartingRun] = useState(false);
+  const [limit, setLimit] = useState(10);
+  const [starting, setStarting] = useState(false);
 
-  const handleRunBatch = async (what: string) => {
-    setStartingRun(true);
-    await api.runBatch(what, batchLimit);
-    setStartingRun(false);
+  const running = runLog?.running || null;
+
+  const runFull = async () => {
+    setStarting(true);
+    await api.runBatch('full', limit);
+    setStarting(false);
     onRefresh();
   };
 
-  const total = summary?.total || 1;
-  const stages: { stage: Stage; count: number; color: string }[] = [
-    { stage: 'Discovered', count: summary?.by_stage?.Discovered || 0, color: 'bg-slate-500' },
-    { stage: 'Researched', count: summary?.by_stage?.Researched || 0, color: 'bg-blue-500' },
-    { stage: 'Site Briefed', count: summary?.by_stage?.['Site Briefed'] || 0, color: 'bg-indigo-500' },
-    { stage: 'Site Built', count: summary?.by_stage?.['Site Built'] || 0, color: 'bg-teal-500' },
-    { stage: 'Email Drafted', count: summary?.by_stage?.['Email Drafted'] || 0, color: 'bg-amber-500' },
-    { stage: 'Sent', count: summary?.by_stage?.Sent || 0, color: 'bg-emerald-500' },
-    { stage: 'Replied', count: summary?.by_stage?.Replied || 0, color: 'bg-green-600' },
-  ];
+  const greeting = () => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 18) return 'Good afternoon';
+    return 'Good evening';
+  };
 
-  const todoItems = [
+  const noSheet = !summary?.sheet_url;
+  const toApprove = summary?.awaiting_approval || 0;
+  const toBuild = summary?.approved_unbuilt || 0;
+  const toSend = summary?.to_draft || 0;
+  const toCheck = summary?.whatsapp_waiting || 0;
+  const toResearch = summary?.to_research || 0;
+  const total = summary?.total || 0;
+  const replied = summary?.by_stage?.Replied || 0;
+
+  /**
+   * One recommendation, chosen in the order the pipeline actually runs --
+   * the furthest-along work first, because a message drafted and unsent is
+   * money already spent and a lead going cold.
+   */
+  const next: {
+    title: string;
+    body: string;
+    cta: string;
+    go: () => void;
+  } = noSheet
+    ? {
+        title: 'Connect your Google Sheet',
+        body: 'Everything this tool does is written to a Sheet in your own Drive. Nothing can run until there is one.',
+        cta: 'Open setup',
+        go: () => setActiveTab('settings'),
+      }
+    : toSend > 0
+      ? {
+          title: `Review and send ${toSend} message${toSend === 1 ? '' : 's'}`,
+          body: 'These are written and waiting. You read each one before it goes -- nothing sends on its own.',
+          cta: 'Review them',
+          go: () => openStage('send'),
+        }
+      : toBuild > 0
+        ? {
+            title: `Build ${toBuild} approved site${toBuild === 1 ? '' : 's'}`,
+            body: 'You approved these briefs. The page has to exist before anyone is messaged about it.',
+            cta: 'Go to Build',
+            go: () => openStage('build'),
+          }
+        : toApprove > 0
+          ? {
+              title: `Approve ${toApprove} brief${toApprove === 1 ? '' : 's'}`,
+              body: 'Each one is a plan for a site. Approving is what lets it be built.',
+              cta: 'Review briefs',
+              go: () => openStage('brief'),
+            }
+          : toCheck > 0
+            ? {
+                title: `Check ${toCheck} lead${toCheck === 1 ? '' : 's'} for reachability`,
+                body: 'Worth answering before anything is built for them -- building is the expensive part.',
+                cta: 'Run the check',
+                go: () => openStage('reachability'),
+              }
+            : toResearch > 0
+              ? {
+                  title: `Research ${toResearch} lead${toResearch === 1 ? '' : 's'}`,
+                  body: 'Reads each business and works out what to say. Costs per lead, and stops at the limit you set.',
+                  cta: 'Go to List',
+                  go: () => openStage('list'),
+                }
+              : {
+                  title: total ? 'Find more businesses' : 'Find your first businesses',
+                  body: total
+                    ? 'Everything in the list has been worked through. A new search adds more.'
+                    : 'Discovery searches Google Places and builds your list. Nothing is contacted at this stage.',
+                  cta: 'Go to List',
+                  go: () => openStage('list'),
+                };
+
+  const tasks = [
     {
-      id: 'briefs',
-      title: 'Site Briefs Ready for Review',
-      count: summary?.awaiting_approval || 0,
-      description: 'Review generated website angles, praise signals & Lovable prompts.',
-      actionLabel: 'Review Brief Queue',
-      tab: 'briefs' as NavTab,
-      costHint: 'Costs nothing',
-      icon: <FileCode className="w-4 h-4 text-indigo-500" />,
-      urgent: (summary?.awaiting_approval || 0) > 0,
+      id: 'task-send',
+      label: 'Messages to review and send',
+      count: toSend,
+      icon: <Send className="w-4 h-4" />,
+      go: () => openStage('send'),
     },
     {
-      id: 'build',
-      title: 'Approved Sites to Build',
-      count: summary?.approved_unbuilt || 0,
-      description: 'Copy prompt to site builder & record preview URLs.',
-      actionLabel: 'Open Build Queue',
-      tab: 'build' as NavTab,
-      costHint: 'Uses your site builder',
-      icon: <Hammer className="w-4 h-4 text-teal-500" />,
-      urgent: (summary?.approved_unbuilt || 0) > 0,
+      id: 'task-build',
+      label: 'Approved sites to build',
+      count: toBuild,
+      icon: <Hammer className="w-4 h-4" />,
+      go: () => openStage('build'),
     },
     {
-      id: 'send',
-      title: 'Outreach Messages to Send',
-      count: summary?.to_draft || 0,
-      description: 'Leads with built sites ready for WhatsApp sending.',
-      actionLabel: 'Open Send Queue',
-      tab: 'send' as NavTab,
-      costHint: 'Sends from your own WhatsApp',
-      icon: <Send className="w-4 h-4 text-emerald-500" />,
-      urgent: (summary?.to_draft || 0) > 0,
+      id: 'task-brief',
+      label: 'Briefs waiting on your approval',
+      count: toApprove,
+      icon: <FileCode className="w-4 h-4" />,
+      go: () => openStage('brief'),
     },
     {
-      id: 'research',
-      title: 'Discovered Leads Needing Research',
-      count: summary?.to_research || 0,
-      description: 'Run deep search for customer praise, tone & social links.',
-      actionLabel: 'Run Lead Research',
-      runAction: 'research',
-      costHint: 'Uses your model credits',
-      icon: <Search className="w-4 h-4 text-blue-500" />,
-      urgent: false,
+      id: 'task-reach',
+      label: 'Leads not yet checked for reachability',
+      count: toCheck,
+      icon: <Radio className="w-4 h-4" />,
+      go: () => openStage('reachability'),
     },
-  ];
+    {
+      id: 'task-research',
+      label: 'Leads still to research',
+      count: toResearch,
+      icon: <Search className="w-4 h-4" />,
+      go: () => openStage('list'),
+    },
+  ].filter((t) => t.count > 0);
 
   return (
-    <div id="today-view" className="space-y-6">
-      {/* Header Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-5 rounded-xl border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-xs">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
-            Today's Outreach Operations
+    <div id="today-view" className="space-y-5">
+      {/* Greeting + the one thing to do */}
+      <section className="rounded-2xl border border-slate-800 bg-slate-900 overflow-hidden">
+        <div className="p-5 sm:p-6">
+          <p className="text-[13px] text-slate-500">{greeting()}</p>
+          <h1 className="mt-1.5 text-xl sm:text-2xl font-semibold text-slate-100 tracking-tight">
+            {next.title}
           </h1>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Prioritized tasks, funnel health metrics, and morning batch execution.
+          <p className="mt-2 text-[13px] text-slate-400 leading-relaxed max-w-xl">
+            {next.body}
           </p>
-        </div>
-
-        {/* Morning Batch Trigger */}
-        <div className="flex items-center gap-3 bg-slate-50 dark:bg-slate-800/80 p-2.5 rounded-lg border border-slate-200 dark:border-slate-700">
-          <div className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
-            <Sliders className="w-3.5 h-3.5 text-slate-400" />
-            <span className="font-medium">Batch Limit:</span>
-            <input
-              id="batch-limit-input"
-              type="number"
-              min={1}
-              max={50}
-              value={batchLimit}
-              onChange={(e) => setBatchLimit(parseInt(e.target.value) || 10)}
-              className="w-14 px-2 py-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded text-xs text-center font-bold"
-            />
-          </div>
-
           <button
-            id="run-morning-batch-btn"
-            onClick={() => handleRunBatch('full')}
-            disabled={startingRun || !!runLog?.running}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white font-semibold text-xs rounded-md shadow-xs transition disabled:opacity-50"
+            id="today-primary-action"
+            onClick={next.go}
+            className="mt-4 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 text-slate-950 text-sm font-semibold hover:bg-emerald-400 studio-transition"
           >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            {runLog?.running ? 'Batch Running...' : "Run This Morning's Batch"}
+            {next.cta} <ArrowRight className="w-4 h-4" />
           </button>
         </div>
-      </div>
+      </section>
 
-      {/* Top Counts Row */}
-      <div id="metric-cards-row" className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
-        <div className="p-3.5 rounded-lg border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800">
-          <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-            Total Leads
+      {/* Honest numbers */}
+      <section className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <Metric
+          label="Ready to contact"
+          value={toSend}
+          note="Message written, waiting for you"
+        />
+        <Metric
+          label="Replies"
+          value={replied}
+          note="Counted from the Stage column you set"
+        />
+        {/* Not supported, and said so. The Sheet holds no due dates, so a
+            zero here would read as "none due today" -- which would be a
+            claim, not a count. */}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+          <div className="flex items-center gap-1.5 text-slate-600">
+            <MinusCircle className="w-4 h-4" />
+            <span className="text-[13px] font-medium">Follow-ups due</span>
           </div>
-          <div className="text-xl font-bold mt-1 text-slate-900 dark:text-slate-100">
-            {summary?.total || 0}
-          </div>
+          <p className="mt-2 text-[11px] text-slate-600 leading-relaxed">
+            Not tracked. Nothing records when a reply is owed, so this would
+            be a guess rather than a count.
+          </p>
         </div>
+      </section>
 
-        <div className="p-3.5 rounded-lg border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800">
-          <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 uppercase">
-            Discovered
-          </div>
-          <div className="text-xl font-bold mt-1 text-slate-700 dark:text-slate-300">
-            {summary?.by_stage?.Discovered || 0}
-          </div>
+      {/* The queue */}
+      <section className="rounded-2xl border border-slate-800 bg-slate-900">
+        <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-slate-100">Waiting on you</h2>
+          {tasks.length > 0 && (
+            <span className="text-[11px] text-slate-500 tabular-nums">
+              {tasks.length} thing{tasks.length === 1 ? '' : 's'}
+            </span>
+          )}
         </div>
-
-        <div className="p-3.5 rounded-lg border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800">
-          <div className="text-[11px] font-medium text-blue-600 dark:text-blue-400 uppercase">
-            Researched
-          </div>
-          <div className="text-xl font-bold mt-1 text-blue-600 dark:text-blue-400">
-            {summary?.by_stage?.Researched || 0}
-          </div>
-        </div>
-
-        <div className="p-3.5 rounded-lg border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800">
-          <div className="text-[11px] font-medium text-indigo-600 dark:text-indigo-400 uppercase">
-            Briefed
-          </div>
-          <div className="text-xl font-bold mt-1 text-indigo-600 dark:text-indigo-400">
-            {summary?.by_stage?.['Site Briefed'] || 0}
-          </div>
-        </div>
-
-        <div className="p-3.5 rounded-lg border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800">
-          <div className="text-[11px] font-medium text-teal-600 dark:text-teal-400 uppercase">
-            Built
-          </div>
-          <div className="text-xl font-bold mt-1 text-teal-600 dark:text-teal-400">
-            {summary?.by_stage?.['Site Built'] || 0}
-          </div>
-        </div>
-
-        <div className="p-3.5 rounded-lg border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800">
-          <div className="text-[11px] font-medium text-amber-600 dark:text-amber-400 uppercase">
-            Drafted
-          </div>
-          <div className="text-xl font-bold mt-1 text-amber-600 dark:text-amber-400">
-            {summary?.by_stage?.['Email Drafted'] || 0}
-          </div>
-        </div>
-
-        <div className="p-3.5 rounded-lg border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800">
-          <div className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 uppercase">
-            Sent
-          </div>
-          <div className="text-xl font-bold mt-1 text-emerald-600 dark:text-emerald-400">
-            {summary?.by_stage?.Sent || 0}
-          </div>
-        </div>
-
-        <div className="p-3.5 rounded-lg border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800">
-          <div className="text-[11px] font-medium text-green-600 dark:text-green-400 uppercase">
-            Replied
-          </div>
-          <div className="text-xl font-bold mt-1 text-green-600 dark:text-green-400">
-            {summary?.by_stage?.Replied || 0}
-          </div>
-        </div>
-      </div>
-
-      {/* Funnel Visualization Chart */}
-      <div id="funnel-visualization-card" className="p-5 rounded-xl border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-xs">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h2 className="font-bold text-sm text-slate-900 dark:text-slate-100 flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-teal-600" /> Pipeline Stage Funnel & Drop-Off
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Visual lead distribution across progression stages.
+        {tasks.length === 0 ? (
+          <div className="px-5 py-10 text-center">
+            <CheckCircle2 className="w-7 h-7 mx-auto text-emerald-500/70" />
+            <p className="mt-3 text-sm font-medium text-slate-200">
+              Nothing is waiting on you
+            </p>
+            <p className="mt-1 text-[12px] text-slate-500">
+              {total
+                ? 'Every lead in the list has been dealt with. Find more when you are ready.'
+                : 'Start by finding some businesses.'}
             </p>
           </div>
-          <span className="text-xs text-slate-400">
-            Disqualified: {summary?.disqualified || 0} leads
-          </span>
+        ) : (
+          <ul className="divide-y divide-slate-800">
+            {tasks.map((t) => (
+              <li key={t.id}>
+                <button
+                  id={t.id}
+                  onClick={t.go}
+                  className="w-full flex items-center justify-between gap-3 px-5 py-3.5 text-left hover:bg-slate-800/50 studio-transition"
+                >
+                  <span className="flex items-center gap-3 min-w-0">
+                    <span className="text-slate-500">{t.icon}</span>
+                    <span className="text-[13px] text-slate-200 truncate">
+                      {t.label}
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    <span className="text-[12px] font-semibold tabular-nums px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300">
+                      {t.count}
+                    </span>
+                    <ArrowRight className="w-4 h-4 text-slate-600" />
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* The campaign, as a card */}
+      <section className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-100">Your campaign</h2>
+            <p className="text-[12px] text-slate-500 mt-0.5">
+              {total
+                ? `${total} business${total === 1 ? '' : 'es'} in the list`
+                : 'No businesses yet'}
+            </p>
+          </div>
+          <button
+            id="today-open-campaign"
+            onClick={() => setActiveTab('campaigns')}
+            className="inline-flex items-center gap-1.5 text-[13px] font-medium text-emerald-400 hover:text-emerald-300 studio-transition"
+          >
+            Open <ArrowRight className="w-3.5 h-3.5" />
+          </button>
         </div>
 
-        <div className="space-y-2.5">
-          {stages.map((item, idx) => {
-            const pct = Math.round((item.count / total) * 100);
-            const prevCount = idx > 0 ? stages[idx - 1].count : total;
-            const conversion = prevCount > 0 ? Math.round((item.count / prevCount) * 100) : 0;
-
-            return (
-              <div key={item.stage} className="space-y-1">
-                <div className="flex items-center justify-between text-xs font-medium">
-                  <div className="flex items-center gap-2">
-                    <span className="w-24 text-slate-700 dark:text-slate-300">{item.stage}</span>
-                    <span className="font-bold text-slate-900 dark:text-slate-100">{item.count}</span>
-                  </div>
-                  <div className="flex items-center gap-3 text-slate-500 text-[11px]">
-                    {idx > 0 && (
-                      <span>Step Conv: <strong className="text-slate-700 dark:text-slate-300">{conversion}%</strong></span>
-                    )}
-                    <span className="w-10 text-right font-semibold text-slate-600 dark:text-slate-400">{pct}%</span>
-                  </div>
-                </div>
-
-                <div className="w-full bg-slate-100 dark:bg-slate-800 h-3 rounded-full overflow-hidden flex">
+        {total > 0 && (
+          <div className="mt-4 flex items-center gap-1.5">
+            {[
+              { k: 'Found', n: total },
+              { k: 'Researched', n: total - toResearch },
+              { k: 'Built', n: summary?.by_stage?.['Site Built'] || 0 },
+              { k: 'Sent', n: summary?.by_stage?.Sent || 0 },
+            ].map((s) => (
+              <div key={s.k} className="flex-1">
+                <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden">
                   <div
-                    className={`${item.color} h-full transition-all duration-500 rounded-full`}
-                    style={{ width: `${Math.max(pct, 2)}%` }}
+                    className="h-full bg-emerald-500/70 rounded-full studio-transition"
+                    style={{ width: `${Math.round((s.n / Math.max(total, 1)) * 100)}%` }}
                   />
                 </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Prioritized To-Do List */}
-      <div id="todo-list-section" className="space-y-3">
-        <h2 className="text-sm font-bold text-slate-900 dark:text-slate-100 uppercase tracking-wider text-slate-500">
-          Prioritized Action Queue
-        </h2>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {todoItems.map((todo) => (
-            <div
-              key={todo.id}
-              className={`p-4 rounded-xl border transition-all ${
-                todo.urgent
-                  ? 'bg-white dark:bg-slate-900 border-teal-500/50 shadow-xs'
-                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
-              }`}
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-2 rounded-lg bg-slate-100 dark:bg-slate-800">
-                    {todo.icon}
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-sm text-slate-900 dark:text-slate-100">
-                      {todo.title}
-                    </h3>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-xs font-bold text-teal-600 dark:text-teal-400">
-                        {todo.count} pending
-                      </span>
-                      {/* Cost Hint Badge */}
-                      <span className="text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 py-0.5 rounded font-mono border border-slate-200 dark:border-slate-700 flex items-center gap-0.5">
-                        <DollarSign className="w-2.5 h-2.5" />
-                        {todo.costHint}
-                      </span>
-                    </div>
-                  </div>
+                <div className="mt-1.5 text-[10px] uppercase tracking-wider text-slate-500">
+                  {s.k}
+                </div>
+                <div className="text-[13px] font-semibold tabular-nums text-slate-200">
+                  {s.n}
                 </div>
               </div>
+            ))}
+          </div>
+        )}
 
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-2.5 leading-relaxed">
-                {todo.description}
-              </p>
-
-              <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-                {todo.tab ? (
-                  <button
-                    onClick={() => setActiveTab(todo.tab!)}
-                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline"
-                  >
-                    {todo.actionLabel} <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => handleRunBatch(todo.runAction!)}
-                    disabled={startingRun}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded text-xs font-medium transition"
-                  >
-                    {todo.actionLabel}
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Live Log Console */}
-      <div id="live-log-console" className="p-4 rounded-xl border bg-slate-950 text-slate-200 border-slate-800 font-mono text-xs shadow-md">
-        <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800">
-          <div className="flex items-center gap-2">
-            <Terminal className="w-4 h-4 text-teal-400" />
-            <span className="font-semibold text-slate-200">Live Execution Log</span>
-            {runLog?.running ? (
-              <span className="flex items-center gap-1.5 text-[11px] text-amber-400 font-medium bg-amber-400/10 px-2 py-0.5 rounded">
-                <RotateCw className="w-3 h-3 animate-spin" /> Running ({runLog.running})
-              </span>
+        {/* The whole morning batch, kept on Today because that is when it is
+            run. It stops before building and before sending: the two steps
+            that cost the most and the one that reaches a real business. */}
+        <div className="mt-5 pt-4 border-t border-slate-800 flex flex-wrap items-center gap-2.5">
+          <button
+            id="run-full-batch"
+            onClick={runFull}
+            disabled={!!running || starting || noSheet}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-700 text-slate-200 text-[13px] font-medium hover:bg-slate-800/70 hover:border-slate-600 studio-transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {starting || running === 'full' ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
-              <span className="text-[11px] text-slate-500 bg-slate-900 px-2 py-0.5 rounded">
-                Idle
+              <Play className="w-4 h-4" />
+            )}
+            Run this morning's batch
+          </button>
+          <label className="flex items-center gap-2 text-[12px] text-slate-500">
+            up to
+            <input
+              id="today-batch-limit"
+              type="number"
+              min={1}
+              max={60}
+              value={limit}
+              onChange={(e) => setLimit(Math.max(1, Number(e.target.value) || 1))}
+              className="w-16 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-100 text-sm"
+            />
+            leads
+          </label>
+          <span className="text-[11px] text-slate-600">
+            Finds, researches, briefs and drafts. Stops before building or sending.
+          </span>
+        </div>
+      </section>
+
+      {/* Recent activity -- the run log, kept small and only when there is
+          something in it. */}
+      {runLog && runLog.lines?.length > 0 && (
+        <section className="rounded-2xl border border-slate-800 bg-slate-900">
+          <div className="px-5 py-3.5 border-b border-slate-800 flex items-center gap-2">
+            <Terminal className="w-4 h-4 text-slate-600" />
+            <h2 className="text-sm font-semibold text-slate-100">Recent activity</h2>
+            {running && (
+              <span className="ml-auto inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-400">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                {running} running
               </span>
             )}
           </div>
-          <span className="text-[11px] text-slate-500">Auto-scrolling</span>
-        </div>
-
-        <div className="space-y-1 max-h-48 overflow-y-auto leading-relaxed text-slate-300">
-          {runLog?.lines?.map((line, idx) => (
-            <div key={idx} className="hover:bg-slate-900/60 px-1 rounded">
-              {line}
-            </div>
-          ))}
-        </div>
-      </div>
+          <div className="px-5 py-3 max-h-48 overflow-y-auto">
+            <ul className="space-y-1">
+              {runLog.lines.slice(-12).map((line, i) => (
+                <li
+                  key={i}
+                  className="text-[11.5px] font-mono text-slate-500 leading-relaxed break-words"
+                >
+                  {line}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
     </div>
   );
 };
+
+const Metric: React.FC<{ label: string; value: number; note: string }> = ({
+  label,
+  value,
+  note,
+}) => (
+  <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+    <div className="text-3xl font-semibold tabular-nums leading-none text-slate-100">
+      {value}
+    </div>
+    <div className="mt-2 text-[13px] font-medium text-slate-300">{label}</div>
+    <div className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">{note}</div>
+  </div>
+);

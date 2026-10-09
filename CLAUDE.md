@@ -60,7 +60,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1380 tests, pytest, no CI -- the suite is the only gate
+tests/             1384 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -971,6 +971,50 @@ page was small grey text among other small grey links, and was missed three
 times running by the person who asked for the page. It is a button now, and
 a test holds it: three rounds of "where is it" is a design defect, not a user
 error.
+
+**The stages are a sequence, so they are drawn as one.** The sidebar listed
+Leads, Reachability, Briefs, Build and Send as five separate destinations,
+which turns a progression into a menu: nothing said a brief cannot exist
+before research, or why Build was empty. They are one navigator inside
+Campaigns now -- `StageNav` -- and the top level is the four places a person
+works from: Today, Campaigns, Contacts, Results, with Settings deliberately
+quieter. Every step stays clickable, because revisiting an earlier one is
+normal work rather than going backwards.
+
+**`empty` is a third state, and not a tick.** A stage with nothing in it has
+not been completed; drawing it as done tells someone the pipeline has run
+when it has not. `StageState` separates `waiting` (a person must act), `done`
+(nothing outstanding *and* something has been through), `empty` (nothing here
+yet) and `blocked` -- which is reserved for a real blocker, and the only one
+that currently exists is having no Sheet. An empty step says "nothing here
+yet" in words beneath it.
+
+**Repainting beats rewriting.** Every view already carried `dark:` variants
+over Tailwind's slate scale, so the dark workspace is a redefinition of that
+scale in `@theme` plus the `dark` class pinned on, not three thousand lines
+of hand-edited class names. The diff is small, each component's tested
+behaviour is untouched, and teal is mapped into the same green family
+because two accents competing is what made the old page look busy.
+
+**A metric nothing records is not a zero.** The redesign asked for
+"follow-ups due". Nothing in the Sheet records when a reply is owed, so a
+zero there would read as "none due today" -- a claim, not a count. The tile
+says it is not tracked and why. Results refuses a chart over time for the
+same reason: the Sheet holds each lead's stage *now*, not when it changed,
+so a trend line would be drawn from data that does not exist. Replied and
+Closed are labelled as stages a person sets by hand, because a reply rate
+that quietly means "rows someone remembered to update" is worse than none.
+
+**Every count in this container is zero, so the render check now brings its
+own.** The empty state was the only thing ever rendered here -- no Sheet
+credentials -- which left the recommendation, the task queue and the stage
+navigator carrying numbers rendered by nobody. `render-check.mjs` installs a
+`fetch` stub before the bundle runs and drives the populated interface:
+Today's recommendation computed from the fixture, the queue rows, the
+deep-link landing on the right step, Results, and the phone layout with all
+of it on screen. It proves nothing about whether Flask returns those shapes
+-- `client.ts` and the endpoint test own that -- and a control confirms the
+pass can fail.
 
 **`/app` is additive, and `/` does not move.** The React page is new, has never
 run on Lyon's machine, and replacing the working dashboard with it would make

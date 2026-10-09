@@ -1,6 +1,98 @@
 @import "tailwindcss";
 
 /*
+ * Outreach Studio -- the dark workspace palette.
+ *
+ * This is done as a token override rather than a rewrite. Every view
+ * already carries `dark:` variants over Tailwind's slate scale, so
+ * redefining that scale repaints the whole application at once and leaves
+ * each component's structure -- and its tested behaviour -- untouched. The
+ * alternative was editing some three thousand lines of class names by hand
+ * to swap one family of colours for another, which is a large diff, a large
+ * risk, and no better looking.
+ *
+ * The greens are warm and desaturated on purpose. A saturated emerald on a
+ * near-black ground vibrates, and this is a page someone reads for an hour
+ * at a time.
+ */
+@theme {
+  /* Ground and surfaces. 900 is the page, 800 the cards that sit on it. */
+  --color-slate-950: #0c110f;
+  --color-slate-900: #111715;
+  --color-slate-800: #19231f;
+  --color-slate-700: #22302a;
+  --color-slate-600: #2e3f37;
+  --color-slate-500: #6d7d75;
+  --color-slate-400: #8a9890;
+  --color-slate-300: #b4c0b8;
+  --color-slate-200: #d3ddd6;
+  --color-slate-100: #ecf1ed;
+  --color-slate-50: #f4f8f5;
+
+  /* The one bright accent: actions worth taking, progress genuinely made. */
+  --color-emerald-950: #0d241a;
+  --color-emerald-900: #103121;
+  --color-emerald-800: #16533a;
+  --color-emerald-700: #2a8f63;
+  --color-emerald-600: #37b07b;
+  --color-emerald-500: #49c990;
+  --color-emerald-400: #6edaab;
+  --color-emerald-300: #95e6c3;
+  --color-emerald-200: #bdf0da;
+  --color-emerald-100: #dcf7eb;
+  --color-emerald-50: #eefbf5;
+
+  /* Teal reads as a second accent competing with the first, so it is the
+     same hue family. The views use both; the eye should not see two. */
+  --color-teal-950: #0d241a;
+  --color-teal-900: #103121;
+  --color-teal-800: #16533a;
+  --color-teal-700: #2a8f63;
+  --color-teal-600: #37b07b;
+  --color-teal-500: #49c990;
+  --color-teal-400: #6edaab;
+  --color-teal-300: #95e6c3;
+  --color-teal-200: #bdf0da;
+  --color-teal-100: #dcf7eb;
+  --color-teal-50: #eefbf5;
+
+  /* Amber is restrained and means "waiting on a person", never "error". */
+  --color-amber-950: #2a1f0e;
+  --color-amber-900: #3a2b13;
+  --color-amber-800: #5c4320;
+  --color-amber-700: #9a7838;
+  --color-amber-600: #c39a56;
+  --color-amber-500: #d6aa66;
+  --color-amber-400: #e0bc85;
+  --color-amber-300: #e9cfa8;
+  --color-amber-200: #f1e0c7;
+  --color-amber-100: #f7eede;
+  --color-amber-50: #fbf6ee;
+
+  /* Errors stay red enough to mean it, dull enough not to shout. */
+  --color-rose-950: #2c1418;
+  --color-rose-900: #3d1a20;
+  --color-rose-800: #5f2630;
+  --color-rose-700: #9c4150;
+  --color-rose-600: #c25a6a;
+  --color-rose-500: #d4707f;
+  --color-rose-400: #e08f9b;
+  --color-rose-300: #ebb2bb;
+  --color-rose-200: #f3d2d7;
+  --color-rose-100: #f9e8eb;
+  --color-rose-50: #fdf4f5;
+
+  /* Blue only ever labels information, so it is pulled towards the ground. */
+  --color-blue-950: #0e1d26;
+  --color-blue-900: #132a35;
+  --color-blue-800: #1d4356;
+  --color-blue-700: #34798f;
+  --color-blue-600: #4c99ae;
+  --color-blue-500: #63aec1;
+  --color-blue-400: #8bc5d3;
+}
+
+/*
  * Below 16px, Safari zooms the page when a field takes focus -- and it does
  * not zoom back. Tapping the message box to fix a typo left the whole
  * dashboard magnified with no obvious way out, which is why this rule exists
@@ -20,4 +112,57 @@
 body {
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
+  background: var(--color-slate-900);
+}
+
+/*
+ * The page is dark whatever the device is set to, so the browser must paint
+ * form controls and scrollbars to match. Without this the scrollbar is a
+ * bright stripe down the side of a charcoal page.
+ */
+:root {
+  color-scheme: dark;
+}
+
+/*
+ * One transition length for the whole interface. Longer than this and the
+ * page feels slow to work in; shorter and a state change is missed.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .studio-transition {
+    transition-property: color, background-color, border-color, opacity, transform;
+    transition-duration: 180ms;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+
+/*
+ * Someone who has asked their system for less motion means it. Animated
+ * progress and the milestone flourish are the two things here that move
+ * on their own, and both are decoration over information that is also
+ * written down.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Keyboard focus has to be visible on every surface, including the dark
+   cards, where a browser's default outline all but disappears. */
+:focus-visible {
+  outline: 2px solid var(--color-emerald-500);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* A scrollbar that belongs to the page rather than to the operating system. */
+* {
+  scrollbar-color: var(--color-slate-700) transparent;
+  scrollbar-width: thin;
 }

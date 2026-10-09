@@ -614,3 +614,52 @@ def test_phone_check_does_not_ask_windows_questions_elsewhere(monkeypatch):
         monkeypatch, open_ports=("127.0.0.1", "192.168.1.50"), platform="linux",
     )
     assert "no firewall rule to check" in out
+
+
+# ------------------------------------------------- the workspace redesign
+
+# The sidebar used to list every pipeline stage as its own destination,
+# which turned a sequence into a menu: nothing said that a brief cannot
+# exist before research, or why Build was empty. The stages are now a
+# progress navigator inside Campaigns.
+#
+# These read the built bundle, which is weaker than driving the page and is
+# said so plainly -- `scripts/verify/render-check.mjs` is what actually
+# renders both the empty and the populated interface under Chromium. What
+# this catches is the failure that has happened twice already: a source
+# file changed and the committed build left as it was.
+
+
+def _bundle() -> str:
+    return "\n".join(p.read_text() for p in (WEB / "assets").glob("*.js"))
+
+
+def test_the_four_destinations_ship():
+    bundle = _bundle()
+    for label in ("Today", "Campaigns", "Contacts", "Results"):
+        assert label in bundle, f"the built page has no {label} destination"
+
+
+def test_the_stages_ship_as_one_sequence():
+    bundle = _bundle()
+    for step in ("Reachability", "Review & Send"):
+        assert step in bundle, f"the stage navigator is missing {step}"
+    # The navigator's own element, which is what makes it a sequence rather
+    # than five more menu items.
+    assert "stage-nav" in bundle
+
+
+def test_the_page_still_refuses_to_invent_a_follow_up_count():
+    """The brief asked for follow-ups due. Nothing records when a reply is
+    owed, so the tile says it is not tracked rather than showing a zero --
+    which would read as "none due today", a claim rather than a count."""
+    bundle = _bundle()
+    assert "Not tracked" in bundle
+
+
+def test_results_says_which_numbers_a_person_sets_by_hand():
+    """Replied and Closed are stages a human types into the Sheet. A reply
+    rate that quietly means "rows someone remembered to update" is worse
+    than none, because it gets believed."""
+    bundle = _bundle()
+    assert "What is not here" in bundle

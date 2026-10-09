@@ -1,23 +1,30 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Sidebar, NavTab } from './components/Sidebar';
 import { OnboardingBanner } from './components/OnboardingBanner';
+import { StageKey } from './components/StageNav';
 import { TodayView } from './views/TodayView';
+import { CampaignsView } from './views/CampaignsView';
 import { LeadsView } from './views/LeadsView';
-import { ReachabilityView } from './views/ReachabilityView';
-import { BriefsQueueView } from './views/BriefsQueueView';
-import { BuildQueueView } from './views/BuildQueueView';
-import { SendQueueView } from './views/SendQueueView';
-import { CampaignView } from './views/CampaignView';
+import { ResultsView } from './views/ResultsView';
 import { SettingsView } from './views/SettingsView';
 import { Summary, RunLog, WhatsAppStatus, ModelSettings, Lead } from './types';
 import { api } from './api/client';
 import { ExternalLink, Sparkles, CheckCircle2, Menu } from 'lucide-react';
 
+const TITLES: Record<NavTab, string> = {
+  today: 'Today',
+  campaigns: 'Campaigns',
+  contacts: 'Contacts',
+  results: 'Results',
+  settings: 'Settings',
+};
+
 export function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('today');
-  const [darkMode, setDarkMode] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(true);
   const [navOpen, setNavOpen] = useState(false);
+  // Which step of the campaign to land on when Today deep-links into one.
+  const [stage, setStage] = useState<StageKey | undefined>(undefined);
 
   // Core Data State
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -62,55 +69,61 @@ export function App() {
     };
   }, [runLog?.running, fetchCoreData]);
 
-  // Handle dark mode DOM class
+  /*
+   * The workspace is dark, full stop -- the palette in index.css is built
+   * for one ground and reads badly inverted. Every view still carries its
+   * `dark:` variants, so the class stays on the root rather than the
+   * variants being stripped out of three thousand lines by hand.
+   */
   useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [darkMode]);
+    document.documentElement.classList.add('dark');
+  }, []);
+
+  // Today's cards open a specific step. Anything else that reaches
+  // Campaigns lands on whichever step the view itself decides.
+  const openStage = (next: StageKey) => {
+    setStage(next);
+    setActiveTab('campaigns');
+  };
 
   return (
     <div
       id="app-root"
-      className={`min-h-screen flex font-sans antialiased transition-colors ${
-        darkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'
-      }`}
+      className="min-h-screen flex font-sans antialiased bg-slate-900 text-slate-100"
     >
-      {/* Sidebar Navigation */}
       <Sidebar
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={(tab) => {
+          // Reaching Campaigns from the sidebar should not silently reopen
+          // the step a card sent you to twenty minutes ago.
+          if (tab === 'campaigns') setStage(undefined);
+          setActiveTab(tab);
+        }}
         summary={summary}
         whatsappStatus={whatsappStatus}
         modelSettings={modelSettings}
-        darkMode={darkMode}
-        setDarkMode={setDarkMode}
         onOpenOnboarding={() => setOnboardingOpen(true)}
         navOpen={navOpen}
         onNavClose={() => setNavOpen(false)}
       />
 
-      {/* Main Content Area */}
       <main id="main-content" className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-        {/* Top App Header */}
         <header
           id="top-app-header"
           style={{ paddingTop: 'calc(0.875rem + env(safe-area-inset-top))' }}
-          className="sticky top-0 z-30 px-4 sm:px-6 py-3.5 border-b bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-slate-200 dark:border-slate-800 flex items-center justify-between shadow-2xs"
+          className="sticky top-0 z-30 px-4 sm:px-6 py-3.5 border-b bg-slate-900/85 backdrop-blur-md border-slate-800 flex items-center justify-between gap-3"
         >
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <button
               id="nav-toggle-btn"
               onClick={() => setNavOpen(true)}
               aria-label="Open menu"
-              className="lg:hidden -ml-1 p-2 rounded-md text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800"
+              className="lg:hidden -ml-1 p-2 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 studio-transition"
             >
               <Menu className="w-5 h-5" />
             </button>
-            <span className="font-bold text-sm tracking-tight text-slate-800 dark:text-slate-200 uppercase">
-              {activeTab} Overview
+            <span className="font-semibold text-sm tracking-tight text-slate-200 truncate">
+              {TITLES[activeTab]}
             </span>
 
             {summary?.sheet_url && (
@@ -118,32 +131,31 @@ export function App() {
                 href={summary.sheet_url}
                 target="_blank"
                 rel="noreferrer"
-                className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-full text-xs font-semibold hover:underline"
+                className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 text-emerald-300 border border-emerald-500/25 rounded-full text-[11px] font-medium hover:bg-emerald-500/15 studio-transition"
               >
-                <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Google Sheet Connected{' '}
+                <CheckCircle2 className="w-3 h-3" /> Sheet connected{' '}
                 <ExternalLink className="w-2.5 h-2.5" />
               </a>
             )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              id="quick-start-toggle-btn"
-              onClick={() => setOnboardingOpen(!onboardingOpen)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-50 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300 border border-teal-200 dark:border-teal-800/80 rounded-lg text-xs font-semibold hover:bg-teal-100 transition"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-teal-600" />
-              {onboardingOpen ? 'Hide Setup' : '3-Step Setup Checklist'}
-            </button>
-          </div>
+          <button
+            id="quick-start-toggle-btn"
+            onClick={() => setOnboardingOpen(!onboardingOpen)}
+            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-700 text-slate-300 rounded-lg text-[12px] font-medium hover:bg-slate-800 hover:text-slate-100 studio-transition"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="hidden sm:inline">
+              {onboardingOpen ? 'Hide setup' : 'Setup checklist'}
+            </span>
+            <span className="sm:hidden">Setup</span>
+          </button>
         </header>
 
-        {/* Inner Content Padding */}
         <div
-          className="p-4 sm:p-6 flex-1 max-w-7xl w-full mx-auto space-y-6"
-          style={{ paddingBottom: 'calc(1.5rem + env(safe-area-inset-bottom))' }}
+          className="p-4 sm:p-6 lg:p-8 flex-1 max-w-6xl w-full mx-auto space-y-6"
+          style={{ paddingBottom: 'calc(2rem + env(safe-area-inset-bottom))' }}
         >
-          {/* Onboarding Banner */}
           <OnboardingBanner
             summary={summary}
             modelSettings={modelSettings}
@@ -153,34 +165,31 @@ export function App() {
             onClose={() => setOnboardingOpen(false)}
           />
 
-          {/* Tab Views */}
           {activeTab === 'today' && (
             <TodayView
               summary={summary}
               runLog={runLog}
               onRefresh={fetchCoreData}
               setActiveTab={setActiveTab}
+              openStage={openStage}
             />
           )}
 
-          {activeTab === 'leads' && (
+          {activeTab === 'campaigns' && (
+            <CampaignsView
+              summary={summary}
+              whatsappStatus={whatsappStatus}
+              runLog={runLog}
+              onRefresh={fetchCoreData}
+              initialStage={stage}
+            />
+          )}
+
+          {activeTab === 'contacts' && (
             <LeadsView leads={leads} onRefresh={fetchCoreData} />
           )}
 
-          {activeTab === 'reachability' && <ReachabilityView />}
-
-          {activeTab === 'briefs' && <BriefsQueueView />}
-
-          {activeTab === 'build' && <BuildQueueView />}
-
-          {activeTab === 'send' && (
-            <SendQueueView
-              whatsappStatus={whatsappStatus}
-              onRefresh={fetchCoreData}
-            />
-          )}
-
-          {activeTab === 'campaign' && <CampaignView />}
+          {activeTab === 'results' && <ResultsView summary={summary} />}
 
           {activeTab === 'settings' && <SettingsView />}
         </div>

@@ -44,6 +44,37 @@ const FORBIDDEN = [
   'gemini-3.8-flash',       // a model name nothing here has verified exists
 ];
 
+const OVERFLOW_PROBE = `(() => {
+    const doc = document.documentElement;
+    const name = (el) =>
+      el.id ? '#' + el.id : el.tagName.toLowerCase() + '.' + String(el.className).split(' ')[0];
+    // Two different failures. The document scrolling sideways is the obvious
+    // one; an element clipped inside a flex container is the one that
+    // actually happened, and it leaves the document width untouched.
+    const insideScroller = (el) => {
+      for (let node = el.parentElement; node; node = node.parentElement) {
+        // A box explicitly told to scroll sideways is doing its job: the
+        // leads table is meant to be wider than the phone.
+        if (node.className && String(node.className).includes('overflow-x-auto')) return true;
+      }
+      return false;
+    };
+    const clipped = [...document.querySelectorAll('body *')]
+      .filter((el) => {
+        if (!el.textContent || !el.textContent.trim()) return false;
+        if (el.children.length) return false;         // leaves only, or every
+        if (insideScroller(el)) return false;          // ancestor repeats it
+        const style = getComputedStyle(el);
+        if (style.visibility === 'hidden' || style.display === 'none') return false;
+        const rect = el.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return false;
+        return rect.right > window.innerWidth + 1;
+      })
+      .map((el) => name(el) + ' "' + el.textContent.trim().slice(0, 24) + '"')
+      .slice(0, 6);
+    return { scrollWidth: doc.scrollWidth, innerWidth: window.innerWidth, clipped };
+  })()`;
+
 const problems = [];
 const fail = (message) => problems.push(message);
 
@@ -216,36 +247,7 @@ try {
   // The layout Lyon will actually use. A page wider than the phone scrolls
   // sideways, which is how the setup panel lost its buttons off the right
   // edge -- visible in a screenshot, invisible to every other check here.
-  const overflow = await dt.evaluate(`(() => {
-    const doc = document.documentElement;
-    const name = (el) =>
-      el.id ? '#' + el.id : el.tagName.toLowerCase() + '.' + String(el.className).split(' ')[0];
-    // Two different failures. The document scrolling sideways is the obvious
-    // one; an element clipped inside a flex container is the one that
-    // actually happened, and it leaves the document width untouched.
-    const insideScroller = (el) => {
-      for (let node = el.parentElement; node; node = node.parentElement) {
-        // A box explicitly told to scroll sideways is doing its job: the
-        // leads table is meant to be wider than the phone.
-        if (node.className && String(node.className).includes('overflow-x-auto')) return true;
-      }
-      return false;
-    };
-    const clipped = [...document.querySelectorAll('body *')]
-      .filter((el) => {
-        if (!el.textContent || !el.textContent.trim()) return false;
-        if (el.children.length) return false;         // leaves only, or every
-        if (insideScroller(el)) return false;          // ancestor repeats it
-        const style = getComputedStyle(el);
-        if (style.visibility === 'hidden' || style.display === 'none') return false;
-        const rect = el.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) return false;
-        return rect.right > window.innerWidth + 1;
-      })
-      .map((el) => name(el) + ' "' + el.textContent.trim().slice(0, 24) + '"')
-      .slice(0, 6);
-    return { scrollWidth: doc.scrollWidth, innerWidth: window.innerWidth, clipped };
-  })()`);
+  const overflow = await dt.evaluate(OVERFLOW_PROBE);
   if (overflow.scrollWidth > overflow.innerWidth + 1) {
     fail(
       `the phone layout scrolls sideways: ${overflow.scrollWidth}px of content in ` +
@@ -254,6 +256,129 @@ try {
   }
   if (overflow.clipped.length) {
     fail(`content is cut off inside: ${overflow.clipped.join(', ')}`);
+  }
+
+  // ------------------------------------------------- the same page, with work in it
+  //
+  // Every count in this container is zero: there are no Sheet credentials
+  // here, so the pass above only ever sees empty states. That left the
+  // half of the interface that matters -- the recommendation, the queue,
+  // the stage navigator carrying numbers -- rendered by nobody, ever.
+  //
+  // So the API is answered from a stub installed before the bundle runs.
+  // This proves the views render real shapes and survive a phone width
+  // with content in them. It proves nothing about whether Flask returns
+  // these shapes; `client.ts` and the endpoint test own that question.
+  const FIXTURE = {
+    '/api/summary': {
+      total: 24, disqualified: 3,
+      by_stage: {
+        Discovered: 5, Researched: 4, 'Site Briefed': 2, 'Site Built': 7,
+        'Email Drafted': 0, Sent: 6, Replied: 2, Closed: 1, Disqualified: 3,
+      },
+      to_research: 5, to_brief: 2, to_draft: 3,
+      awaiting_approval: 2, approved_unbuilt: 1, whatsapp_waiting: 4,
+      emails_waiting: 0, errors: 2, errors_retryable: 1,
+      sheet_url: 'https://docs.google.com/spreadsheets/d/EXAMPLE/edit',
+      has_work: true,
+    },
+    '/api/log': { running: null, lines: ['discovery: 5 new leads', 'research: 4 done'] },
+    '/api/leads': { leads: [] },
+    '/api/campaign': {
+      category: 'beauty salon', location: 'London, UK',
+      areas: ['Soho', 'Shoreditch'], sender_name: 'Lyon',
+      daily_batch_limit: 10, country_code: 'GB', config_file: 'example.yaml',
+    },
+  };
+
+  await dt.send('Page.addScriptToEvaluateOnNewDocument', {
+    source: `(() => {
+      const fixture = ${JSON.stringify(FIXTURE)};
+      window.fetch = async (input) => {
+        const url = typeof input === 'string' ? input : input.url;
+        const key = Object.keys(fixture).find((k) => url.startsWith(k));
+        return new Response(JSON.stringify(key ? fixture[key] : {}), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      };
+    })()`,
+  });
+
+  dt.events.length = 0;
+  await dt.send('Page.navigate', { url: `http://127.0.0.1:${APP_PORT}/app` });
+
+  const withWork = Date.now() + 20000;
+  let loaded = '';
+  while (Date.now() < withWork) {
+    loaded = await dt.evaluate('document.body.innerText || ""');
+    if (loaded.includes('Ready to contact')) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+
+  // Today: a recommendation, the honest tiles, and the queue -- each with
+  // the real numbers from the fixture rather than a placeholder.
+  for (const phrase of [
+    'Review and send 3 messages',   // the recommendation, chosen by state
+    'Ready to contact',
+    'Not tracked',                   // follow-ups, said plainly
+    'Waiting on you',
+    'Messages to review and send',
+  ]) {
+    if (!loaded.includes(phrase)) {
+      fail(`Today with data did not render ${JSON.stringify(phrase)}`);
+    }
+  }
+
+  // The queue must carry the counts, not just the labels.
+  const queueCounts = await dt.evaluate(
+    `[...document.querySelectorAll('#task-send, #task-build, #task-brief')]
+       .map(el => el.innerText.replace(/\\s+/g, ' ').trim())`,
+  );
+  if (!Array.isArray(queueCounts) || queueCounts.length !== 3) {
+    fail(`the task queue rendered ${JSON.stringify(queueCounts)}, expected three rows`);
+  }
+
+  // The stage navigator, reached the way Today reaches it.
+  await dt.evaluate(`document.getElementById('today-primary-action').click()`);
+  await new Promise((r) => setTimeout(r, 400));
+  const stageText = await dt.evaluate('document.body.innerText || ""');
+  for (const step of ['List', 'Reachability', 'Brief', 'Build', 'Review & Send']) {
+    if (!stageText.includes(step)) fail(`the stage navigator is missing ${JSON.stringify(step)}`);
+  }
+  const onSendStep = await dt.evaluate(
+    `document.getElementById('stage-send')?.getAttribute('aria-current') === 'step'`,
+  );
+  if (!onSendStep) {
+    fail('Today\'s recommendation did not land on the Review & Send step');
+  }
+
+  // Results, which is new and entirely derived from the summary.
+  await dt.evaluate(`document.getElementById('nav-item-results').click()`);
+  await new Promise((r) => setTimeout(r, 400));
+  const resultsText = await dt.evaluate('document.body.innerText || ""');
+  for (const phrase of ['Messages sent', 'Where everyone currently sits', 'What is not here']) {
+    if (!resultsText.includes(phrase)) {
+      fail(`Results did not render ${JSON.stringify(phrase)}`);
+    }
+  }
+
+  // And it still fits a phone with all of that on screen.
+  const loadedOverflow = await dt.evaluate(OVERFLOW_PROBE);
+  if (loadedOverflow.scrollWidth > loadedOverflow.innerWidth + 1) {
+    fail(
+      `with data, the phone layout scrolls sideways: ${loadedOverflow.scrollWidth}px ` +
+      `in ${loadedOverflow.innerWidth}px`
+    );
+  }
+  if (loadedOverflow.clipped.length) {
+    fail(`with data, content is cut off inside: ${loadedOverflow.clipped.join(', ')}`);
+  }
+
+  const loadedErrors = dt.events
+    .filter((e) => e.method === 'Log.entryAdded' && e.params.entry.level === 'error')
+    .map((e) => e.params.entry.text);
+  for (const message of loadedErrors) {
+    fail(`with data, the browser reported: ${message}`);
   }
 
   // A control: the same assertions run against the old page must NOT pass.
