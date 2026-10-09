@@ -60,7 +60,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1376 tests, pytest, no CI -- the suite is the only gate
+tests/             1380 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -466,6 +466,17 @@ was the sentence he was stuck on. And because every project he opened said
 that no longer exists, which publishing cannot fix and which needs a new
 Desktop-app client instead. One dead end named beats a correct instruction
 aimed at the wrong page.
+
+**A sign-in from a replaced OAuth client fails in the words of an expired
+one.** Both give `invalid_grant: Bad Request`, so straight after making a new
+client -- which is the repair for a deleted one -- the old token on disk
+produces the exact error that sends you back to publishing a consent screen
+you have just rebuilt. `stale_client` compares the client id recorded in the
+token with the one in `oauth_client.json`: when they differ the token is
+discarded without a refresh call, because that call cannot succeed and only
+returns the misleading sentence. Where consent cannot run, the refusal says
+*replaced client*, not *expired*, and asks for one sign-in. Neither id is
+printed; that they disagree is the whole of what the reader needs.
 
 **An error that explains itself needs an element that lets it.** That
 three-step cure reached the page inside a `<span>`, where HTML collapses

@@ -306,3 +306,109 @@ def test_a_missing_consent_screen_is_a_different_repair(monkeypatch, tmp_path):
     )
     assert "not configured yet" in message
     assert "Desktop app" in message
+
+
+# --------------------------------------- a sign-in from a replaced client
+
+# Straight after replacing a deleted OAuth client, the old token on disk
+# fails to refresh with `invalid_grant: Bad Request` -- word for word what
+# an expired grant gives. So the repair that had just been carried out
+# looked like it had not worked, and the message went on recommending it.
+
+
+def _two_clients(tmp_path, same: bool):
+    from outreach import auth
+
+    client = tmp_path / "client.json"
+    client.write_text(json.dumps({"installed": {
+        "client_id": "new-506060726614.apps.googleusercontent.com",
+        "project_id": "sme-outreach-504919",
+        "client_secret": "GOCSPX-never-show-this",
+    }}))
+    token = tmp_path / "token.json"
+    token.write_text(json.dumps({
+        "token": "old",
+        "refresh_token": "r",
+        "client_id": ("new-506060726614.apps.googleusercontent.com" if same
+                      else "old-111111111111.apps.googleusercontent.com"),
+        "client_secret": "s",
+        "scopes": list(auth.SCOPES),
+        "expiry": "2020-01-01T00:00:00Z",
+    }))
+    return client, token
+
+
+def test_a_token_from_the_previous_client_is_spotted(tmp_path):
+    from outreach.auth import stale_client
+
+    client, token = _two_clients(tmp_path, same=False)
+    assert stale_client(client, token) is True
+
+
+def test_a_matching_client_is_not_called_stale(tmp_path):
+    """The control. Without it, anything at all would look replaced and
+    every sign-in would be thrown away on every run."""
+    from outreach.auth import stale_client
+
+    client, token = _two_clients(tmp_path, same=True)
+    assert stale_client(client, token) is False
+
+
+def test_a_replaced_client_is_never_refreshed(tmp_path, monkeypatch):
+    """Refreshing it cannot work, and the error it returns is the misleading
+    one. Don't spend the call to be told so in the wrong words."""
+    from outreach import auth
+
+    client, token = _two_clients(tmp_path, same=False)
+
+    def must_not_refresh(*a, **k):
+        raise AssertionError("refreshed a token from a replaced client")
+
+    monkeypatch.setattr(
+        "google.oauth2.credentials.Credentials.refresh", must_not_refresh
+    )
+    ran = {"consent": False}
+
+    class _Flow:
+        @staticmethod
+        def from_client_secrets_file(*a, **k):
+            ran["consent"] = True
+
+            class _F:
+                @staticmethod
+                def run_local_server(**kw):
+                    return auth.Credentials(
+                        token="fresh", refresh_token="r2",
+                        client_id="c", client_secret="s",
+                        scopes=list(auth.SCOPES),
+                    )
+            return _F()
+
+    monkeypatch.setattr(auth, "InstalledAppFlow", _Flow)
+    creds = auth.get_credentials(client, token, allow_consent=True)
+    assert ran["consent"], "it should have gone straight to signing in"
+    assert creds.token == "fresh"
+
+
+def test_the_refusal_says_it_is_a_replaced_client_not_an_expiry(tmp_path, monkeypatch):
+    """Where consent cannot run, the words have to change too -- telling
+    someone to publish a consent screen they have just rebuilt sends them
+    round the same hour again."""
+    from outreach import auth
+
+    client, token = _two_clients(tmp_path, same=False)
+    monkeypatch.setattr(
+        auth.InstalledAppFlow, "from_client_secrets_file",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("consent started")),
+    )
+    with pytest.raises(auth.AuthError) as exc:
+        auth.get_credentials(client, token, allow_consent=False)
+
+    message = str(exc.value)
+    assert "different OAuth client" in message
+    assert "run.bat" in message
+    # Not the seven-day story, which would be the wrong hour to send again.
+    assert "PUBLISH APP" not in message
+    # And neither client id, nor the secret beside one of them.
+    assert "GOCSPX-never-show-this" not in message
+    assert "506060726614" not in message

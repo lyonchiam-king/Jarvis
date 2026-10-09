@@ -135,6 +135,40 @@ def client_project(client_file: Path) -> str:
     return str(data.get("project_id", "") or "")
 
 
+
+def _client_id_of(path: Path, *, token: bool) -> str:
+    """The client id recorded in a token file or an OAuth client file."""
+    try:
+        import json
+
+        data = json.loads(path.read_text())
+    except Exception:  # noqa: BLE001
+        return ""
+    if token:
+        return str(data.get("client_id", "") or "")
+    for section in ("installed", "web"):
+        found = data.get(section, {})
+        if isinstance(found, dict) and found.get("client_id"):
+            return str(found["client_id"])
+    return str(data.get("client_id", "") or "")
+
+
+def stale_client(client_file: Path, token_file: Path) -> bool:
+    """Whether the stored sign-in came from a different OAuth client.
+
+    Replacing a deleted OAuth client leaves the old token on disk, and
+    refreshing it fails with `invalid_grant: Bad Request` -- the same words
+    an expired grant produces. So the fix that had just been performed
+    looked like it had not worked, and the message went on recommending it.
+
+    Both ids are read and neither is printed: what the reader needs is that
+    the two disagree, not their values.
+    """
+    stored = _client_id_of(token_file, token=True)
+    current = _client_id_of(client_file, token=False)
+    return bool(stored and current and stored != current)
+
+
 def get_credentials(
     client_file: Path,
     token_file: Path,
@@ -175,6 +209,16 @@ def get_credentials(
             log.warning("Discarding unreadable token file %s: %s", token_file, exc)
             creds = None
 
+    # A sign-in made with a *different* OAuth client cannot be refreshed,
+    # and the failure is word for word the one an expired grant gives. The
+    # old token is simply finished: discard it and sign in, rather than
+    # spending a network call to be told so in misleading terms.
+    replaced_client = bool(creds) and stale_client(client_file, token_file)
+    if replaced_client:
+        log.info("The stored sign-in is from a previous OAuth client; "
+                 "it cannot be refreshed and will be replaced.")
+        creds = None
+
     if creds and creds.valid:
         return creds
 
@@ -210,6 +254,17 @@ def get_credentials(
         # thing and is kept because the error is also read on other people's
         # machines, but the owner of this tool does not use a terminal, and
         # an instruction he cannot follow is not an instruction.
+        if replaced_client:
+            raise AuthError(
+                "The stored Google sign-in was made with a different OAuth "
+                "client, so it cannot be renewed -- this is what you get "
+                "straight after replacing one.\n\n"
+                "Nothing is wrong with the new client. It just needs signing "
+                "in once:\n"
+                "Close the dashboard, double-click run.bat and press 9 "
+                "(\"Check everything works\"), and finish the Google sign-in "
+                "it opens."
+            )
         raise AuthError(
             "Your Google sign-in has expired and could not be renewed"
             f"{detail}.\n"
