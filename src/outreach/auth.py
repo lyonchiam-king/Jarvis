@@ -54,18 +54,47 @@ class AuthError(Exception):
 # clock problem, and signing in again fixes it -- for another seven days.
 # That is a tool that breaks every week with no hint why, so when the cause
 # is recognisable the message names it and names the one-time fix.
-_SEVEN_DAY_NOTE = (
-    "\nThis usually means the seven-day limit, not anything you did.\n"
-    "Google expires the sign-in after a week while the OAuth consent screen "
-    "is still set to \"Testing\" -- so it works, then stops, then works "
-    "again when you sign in, over and over.\n\n"
-    "To stop it happening again, once:\n"
-    "  1. Open https://console.cloud.google.com/auth/overview\n"
-    "  2. Pick the project this tool uses\n"
-    "  3. Under Audience, press PUBLISH APP and confirm\n"
-    "An \"unverified app\" warning on the sign-in screen after that is "
-    "expected for your own tool -- press Advanced, then continue.\n"
-)
+def _seven_day_note(client_file: Path) -> str:
+    """The cure, pointed at the project that actually issued this sign-in.
+
+    The first version said "pick the project this tool uses" -- which is the
+    one sentence the reader cannot act on. Six Cloud projects, three of them
+    called some variant of the same name, and the obvious one was a
+    `gen-lang-client-...` that AI Studio had made for a Gemini key and that
+    had no consent screen at all. An hour went on the wrong page, and from
+    that side it looks exactly like the advice being wrong.
+
+    So the project is named, with its own link. Only `project_id` is used;
+    see `client_project`.
+    """
+    project = client_project(client_file)
+    where = (
+        f"  1. Open https://console.cloud.google.com/auth/audience"
+        f"?project={project}\n"
+        f"     (that is this tool's project: {project})\n"
+        if project
+        else "  1. Open https://console.cloud.google.com/auth/audience\n"
+             "     and pick the project that issued this sign-in\n"
+    )
+    return (
+        "\nThis usually means the seven-day limit, not anything you did.\n"
+        "Google expires the sign-in after a week while the OAuth consent "
+        "screen is still set to \"Testing\" -- so it works, then stops, then "
+        "works again when you sign in, over and over.\n\n"
+        "To stop it happening again, once:\n"
+        + where
+        + "  2. If it says Publishing status: Testing, press PUBLISH APP\n"
+        "  3. Sign in again here\n"
+        "An \"unverified app\" warning on the sign-in screen after that is "
+        "expected for your own tool -- press Advanced, then continue.\n\n"
+        "If that page says \"Google Auth Platform not configured yet\", or "
+        "the project is gone, then the sign-in's OAuth client no longer "
+        "exists and no amount of publishing will help: make a new one "
+        "(APIs & Services > Credentials > Create credentials > OAuth client "
+        "ID > Desktop app), save the JSON over\n"
+        f"    {client_file}\n"
+        "and sign in again.\n"
+    )
 
 
 def _is_expired_grant(exc: Exception | None) -> bool:
@@ -167,7 +196,7 @@ def get_credentials(
             # one message that had their attention, and "sign in again" is
             # advice this machine cannot act on at all.
             had_one = " and could not be renewed" if creds else " is missing"
-            why = _SEVEN_DAY_NOTE if _is_expired_grant(refresh_error) else ""
+            why = _seven_day_note(client_file) if _is_expired_grant(refresh_error) else ""
             raise AuthError(
                 f"The Google sign-in{had_one}{detail}.\n{why}\n"
                 "This server cannot sign in: that needs a browser, and there "
@@ -184,7 +213,7 @@ def get_credentials(
         raise AuthError(
             "Your Google sign-in has expired and could not be renewed"
             f"{detail}.\n"
-            + (_SEVEN_DAY_NOTE if _is_expired_grant(refresh_error) else "")
+            + (_seven_day_note(client_file) if _is_expired_grant(refresh_error) else "")
             + "\nSigning in again needs a browser, which this process cannot "
             "open on your behalf.\n"
             "Close the dashboard, double-click run.bat and press 9 "

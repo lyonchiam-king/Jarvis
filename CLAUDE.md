@@ -60,7 +60,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1374 tests, pytest, no CI -- the suite is the only gate
+tests/             1376 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -459,7 +459,13 @@ for it, before it says anything about whether the token works, because the
 wrong-project case is most confusing exactly when the token has stopped
 working. Only `project_id` is read: a project id is in every Console URL and
 is not a credential, while the client id and secret share that file and are
-never printed. Secrets stay write-only; that does not bend for a diagnostic.
+never printed. Secrets stay write-only; that does not bend for a diagnostic. The refusal names it too, with its own link: "pick the
+project this tool uses" is the one sentence the reader cannot act on, and it
+was the sentence he was stuck on. And because every project he opened said
+"not configured yet", the message now says what *that* means -- a client
+that no longer exists, which publishing cannot fix and which needs a new
+Desktop-app client instead. One dead end named beats a correct instruction
+aimed at the wrong page.
 
 **An error that explains itself needs an element that lets it.** That
 three-step cure reached the page inside a `<span>`, where HTML collapses

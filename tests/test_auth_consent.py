@@ -255,3 +255,54 @@ def test_the_hosted_refusal_explains_it_too(monkeypatch, tmp_path):
     # Still the hosted instruction, not the Windows one.
     assert "copy that file to" in message
     assert "run.bat" not in message
+
+
+def test_the_cure_names_the_project_rather_than_describing_it(monkeypatch, tmp_path):
+    """"Pick the project this tool uses" is the one sentence the reader
+    cannot act on. Six projects, three sharing a name, and the obvious one
+    was an AI Studio project with no consent screen at all -- an hour on the
+    wrong page, which looks exactly like the advice being wrong.
+    """
+    from outreach import auth
+
+    client = tmp_path / "client.json"
+    client.write_text(json.dumps({"installed": {
+        "project_id": "sme-outreach-504919",
+        "client_secret": "GOCSPX-never-show-this",
+    }}))
+
+    token = tmp_path / "token.json"
+    token.write_text(json.dumps({
+        "token": "old", "refresh_token": "r", "client_id": "c",
+        "client_secret": "s", "scopes": list(auth.SCOPES),
+        "expiry": "2020-01-01T00:00:00Z",
+    }))
+
+    def boom(*a, **k):
+        raise RuntimeError("invalid_grant: Bad Request")
+
+    monkeypatch.setattr("google.oauth2.credentials.Credentials.refresh", boom)
+    monkeypatch.setattr(
+        auth.InstalledAppFlow, "from_client_secrets_file",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("consent started")),
+    )
+    with pytest.raises(auth.AuthError) as exc:
+        auth.get_credentials(client, token, allow_consent=False)
+
+    message = str(exc.value)
+    # A link that lands on the right page, not an instruction to find it.
+    assert "audience?project=sme-outreach-504919" in message
+    # And the secret sharing that file is still never printed.
+    assert "GOCSPX-never-show-this" not in message
+
+
+def test_a_missing_consent_screen_is_a_different_repair(monkeypatch, tmp_path):
+    """Publishing cannot fix a client that no longer exists. Every project
+    showing "not configured yet" is the signature of exactly that, and
+    without this the reader keeps pressing a button that was never there.
+    """
+    message = _refresh_fails_with(
+        monkeypatch, tmp_path, "invalid_grant: Bad Request"
+    )
+    assert "not configured yet" in message
+    assert "Desktop app" in message
