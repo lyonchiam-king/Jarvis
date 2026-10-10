@@ -58,7 +58,11 @@ export const OnboardingBanner: React.FC<OnboardingBannerProps> = ({
   } | null>(null);
 
   // Step 3 state
-  const [qrCodeSvg, setQrCodeSvg] = useState<string | null>(null);
+  // A base64 PNG data URI, which is what /api/whatsapp/qr returns. It was
+  // called qrCodeSvg and injected with dangerouslySetInnerHTML -- so the
+  // image data rendered as text inside an empty white box, and the panel
+  // showed a few characters of base64 where a QR code should be.
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [loadingQr, setLoadingQr] = useState(false);
   const [keysMsg, setKeysMsg] = useState<string | null>(null);
 
@@ -131,7 +135,7 @@ export const OnboardingBanner: React.FC<OnboardingBannerProps> = ({
     const res = await api.getWhatsAppQr();
     setLoadingQr(false);
     if (res.data?.qr) {
-      setQrCodeSvg(res.data.qr);
+      setQrDataUrl(res.data.qr);
     }
   };
 
@@ -421,8 +425,11 @@ export const OnboardingBanner: React.FC<OnboardingBannerProps> = ({
                   <CheckCircle2 className="w-3.5 h-3.5" /> Connected
                 </span>
               ) : (
+                // Not "Not Detected", which reads as a fault. Nothing is
+                // broken when this is off -- messages go from the phone
+                // instead, which is how a hosted dashboard works anyway.
                 <span className="flex items-center gap-1 text-xs font-semibold text-slate-400 bg-slate-700 px-2 py-0.5 rounded">
-                  Local Relay
+                  Optional
                 </span>
               )}
             </div>
@@ -450,20 +457,31 @@ export const OnboardingBanner: React.FC<OnboardingBannerProps> = ({
               <div className="mt-3 text-xs space-y-2">
                 <div className="p-2 bg-slate-900/80 rounded border border-slate-700 text-[11px] text-slate-300">
                   <div className="flex items-center gap-1 text-amber-400 font-medium mb-0.5">
-                    <Info className="w-3 h-3" /> Relay Not Detected
+                    <Info className="w-3 h-3" /> Relay off — you can skip this
                   </div>
-                  The relay starts with the dashboard. If it is not running, close
-                  everything and run Dashboard.bat again, then show the QR code below.
+                  <span className="block text-slate-300">
+                    This is optional. The relay sends WhatsApp messages from
+                    this computer automatically. Without it you still send
+                    every message -- the queue gives you a{' '}
+                    <strong className="text-slate-200">Send on my phone</strong>{' '}
+                    link that opens WhatsApp with the text already written.
+                  </span>
+                  <span className="block mt-1.5 text-slate-400">
+                    To use it, the relay must be running (it starts with
+                    Dashboard.bat), then the code below links your WhatsApp
+                    account to it. It is not a login for this dashboard.
+                  </span>
                 </div>
 
-                {qrCodeSvg ? (
+                {qrDataUrl ? (
                   <div className="p-2 bg-white rounded flex flex-col items-center justify-center">
-                    <div
-                      dangerouslySetInnerHTML={{ __html: qrCodeSvg }}
+                    <img
+                      src={qrDataUrl}
+                      alt="WhatsApp pairing QR code"
                       className="w-32 h-32"
                     />
                     <p className="text-[10px] text-slate-600 mt-1 font-medium">
-                      Scan in WhatsApp &gt; Linked Devices
+                      On your phone: WhatsApp &gt; Linked Devices &gt; Link a device
                     </p>
                   </div>
                 ) : (

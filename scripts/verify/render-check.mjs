@@ -284,6 +284,13 @@ try {
     },
     '/api/log': { running: null, lines: ['discovery: 5 new leads', 'research: 4 done'] },
     '/api/leads': { leads: [] },
+    // Shaped exactly like the relay's answer: a base64 PNG data URI. The
+    // panel called it qrCodeSvg and injected it with innerHTML, so the
+    // image data rendered as text in an empty white box.
+    '/api/whatsapp/qr': {
+      qr: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ'
+        + 'AAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    },
     '/api/campaign': {
       category: 'beauty salon', location: 'London, UK',
       areas: ['Soho', 'Shoreditch'], sender_name: 'Lyon',
@@ -360,6 +367,40 @@ try {
     if (!resultsText.includes(phrase)) {
       fail(`Results did not render ${JSON.stringify(phrase)}`);
     }
+  }
+
+  // The pairing QR must arrive as an image, not as its own base64 printed
+  // into the page. Nothing else here would notice: the panel renders, the
+  // request succeeds, and what the reader gets is a blank white square with
+  // a few characters of PNG beside it.
+  await dt.evaluate(`document.getElementById('nav-item-today').click()`);
+  await new Promise((r) => setTimeout(r, 250));
+  const qrButton = await dt.evaluate(
+    `(() => {
+       const b = [...document.querySelectorAll('button')]
+         .find(el => /Show WhatsApp QR/i.test(el.textContent || ''));
+       if (!b) return false;
+       b.click();
+       return true;
+     })()`,
+  );
+  if (!qrButton) {
+    fail('the setup panel offers no way to show the WhatsApp pairing code');
+  } else {
+    await new Promise((r) => setTimeout(r, 600));
+    const qr = await dt.evaluate(`(() => {
+      const img = document.querySelector('img[alt*="pairing" i]');
+      return {
+        hasImage: !!img,
+        src: img ? String(img.getAttribute('src')).slice(0, 24) : '',
+        leaked: (document.body.innerText || '').includes('iVBORw0KGgo'),
+      };
+    })()`);
+    if (!qr.hasImage) fail('the pairing code did not render as an image');
+    if (qr.hasImage && !qr.src.startsWith('data:image/png')) {
+      fail(`the pairing image src is ${JSON.stringify(qr.src)}, not a PNG`);
+    }
+    if (qr.leaked) fail('raw base64 image data is being shown as text on the page');
   }
 
   // And it still fits a phone with all of that on screen.

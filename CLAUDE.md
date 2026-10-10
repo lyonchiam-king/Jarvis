@@ -933,6 +933,21 @@ that a failed send would be "copied to clipboard" -- three sentences that read
 as facts and were not. A dashboard that spends money and messages real
 businesses is the worst place for a convincing guess.
 
+**A data URI is an image source, not markup.** `/api/whatsapp/qr` returns a
+base64 PNG -- the old page puts it in `<img src>` and always has. The
+generated panel named the variable `qrCodeSvg` and injected it with
+`dangerouslySetInnerHTML`, so the pairing code rendered as a blank white
+square with a few characters of its own PNG leaking beside it. Nothing
+noticed: the panel rendered, the request succeeded, and the page looked
+populated. Reported as "the new dashboard is showing a QR for me to log into
+the website" -- which is also the second half of the bug, because a blank
+box under *Step 3* of a *3-Step Quick Start* reads as a login nobody can
+complete. The relay is optional and now says so: the badge is **Optional**,
+not "Not Detected", and the text says messages go from the phone without it.
+`render-check.mjs` clicks the button and asserts an `<img>` whose `src`
+begins `data:image/png`, plus that no base64 appears as text anywhere on the
+page -- the second assertion is the one that reproduces what he saw.
+
 **A generated page states things it cannot support.** The React front end
 arrived with a made-up phone number shown as the linked WhatsApp account,
 per-lead prices nobody measured ("about 0.2¢ each"), a model name
