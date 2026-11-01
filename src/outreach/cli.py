@@ -32,6 +32,7 @@ from .stages import outreach_draft as outreach_stage
 from .stages import research as research_stage
 from .stages import reachability as reachability_stage
 from .stages import site_brief as site_brief_stage
+from .stages import visual_brief as visual_brief_stage
 
 log = logging.getLogger("outreach")
 
@@ -1471,6 +1472,60 @@ def run_site_brief(
             "Prompts are in the Site Briefs tab. Set Approval Status to 'Approved' "
             "on the ones you want built, then run `outreach run site-build` "
             "(or just paste the prompt into Lovable yourself)."
+        )
+    _echo_sheet_link(config)
+
+
+@run.command("visual-brief")
+@click.option("--limit", type=int, default=None, help="Process fewer than the batch size.")
+@click.option(
+    "--social-first/--sheet-order",
+    "social_first",
+    default=None,
+    help=(
+        "Work through businesses that have a Facebook or Instagram page "
+        "before those with no web presence. Defaults to research.social_first."
+    ),
+)
+@click.pass_context
+def run_visual_brief(
+    ctx: click.Context, limit: int | None, social_first: bool | None
+) -> None:
+    """Write one image prompt per researched lead, for the infographic track."""
+    config = _load(ctx.obj["config_path"])
+    if config.outreach.track == "website":
+        click.echo(
+            "outreach.track is 'website', so this campaign is not using the "
+            "infographic track.\n"
+            "Set it to 'visual' (graphic only) or 'both' (graphic and page, in "
+            "one message) in your campaign file, or on the Settings page of "
+            "the dashboard.",
+            err=True,
+        )
+        raise SystemExit(2)
+
+    sheets = _sheets_client(config)
+    report = visual_brief_stage.run(
+        config, sheets, _writer(config), limit=limit, social_first=social_first
+    )
+
+    click.echo("")
+    for line in report.summary_lines():
+        click.echo(line)
+    click.echo("")
+    tool = config.visual.image_tool_name
+    click.echo(
+        f"Prompts are in the Visual Briefs tab. Paste one into {tool}, "
+        "generate the picture, then paste it back into the dashboard's "
+        "Infographic panel -- that is where the message picks it up."
+    )
+    if report.generic:
+        click.echo("")
+        click.echo(
+            f"{report.generic} prompt(s) are the generic graphic: the research "
+            "could not evidence enough to name the business, so they carry no "
+            "name and no claim about them. That is deliberate -- a checkable "
+            "claim that turns out to be wrong is worse than a general one."
         )
     _echo_sheet_link(config)
 

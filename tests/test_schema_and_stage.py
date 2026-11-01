@@ -125,6 +125,12 @@ def test_column_order_is_append_only():
             "Timestamp", "Stage", "Lead ID", "Business Name", "Error Type",
             "Message", "Retryable",
         ],
+        "Visual Briefs": [
+            "Lead ID", "Business Name", "Image Prompt", "Gaps Used",
+            "Style", "Layout", "Character", "Palette", "Specific",
+            "Approval Status", "Image File", "Image Source",
+            "Text Confirmed", "Created At",
+        ],
     }
 
     for tab in schema.ALL_TABS:

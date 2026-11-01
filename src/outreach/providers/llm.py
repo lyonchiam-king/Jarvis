@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -593,6 +594,71 @@ message, worded by the sender, so writing one here duplicates it and risks \
 naming something nobody sells.
 """
 
+# The infographic track. The artefact is not a page they click -- it is the
+# picture attached to the message, so the beats have to put that picture at the
+# centre instead of a link. Written as its own block rather than by editing the
+# two above, for the reason the conversion angle was: adding a track must not
+# change a single word of the prompt the other tracks already produce.
+_BEATS_VISUAL = """\
+1. HOOK -- one or two sentences that prove you looked at THEIR business \
+before you wrote, and that land on the first gap named in the Gaps block. \
+Name the specific thing -- what customers keep praising, what they do that \
+nobody else nearby does -- then the consequence, which is about the customers \
+they are missing, never about you. This is the only sentence that decides \
+whether the rest is read, so it must be impossible to send to any other \
+business. "I hope this finds you well" and "I came across your business" are \
+deleted unread.
+
+2. SOLUTION -- say what the attached picture is, in one or two sentences: the \
+few things you would change, on one page, so they can see all of it at a \
+glance. The subject is their customers, not your work. Never say you "made a \
+graphic" or "designed an infographic" -- that is a sentence about you. Do not \
+list the three items; they are already in the picture, and repeating them in \
+text makes the message long and the picture pointless.
+
+3. OFFER -- the concrete thing they get, and what it costs them to look. The \
+picture is attached to this message, so the offer is to look at it and say \
+which of them is wrong. That question is the whole offer: it is small, it is \
+answerable in one line, and being told they are wrong is a real reply. Never \
+a meeting.
+
+4. MODEL -- how this works in one sentence, so nobody has to guess what the \
+catch is. Say plainly what happens next if they like it and what happens if \
+they do not. Ending without this reads as a trick, and a small business owner \
+who suspects a trick does not reply. Then one clause -- no list -- saying \
+getting found is the wider job and this is one part of it. That is what the \
+appended list of services follows on from, so without it the list arrives out \
+of nowhere. A list of services is appended after your message, worded by the \
+sender, so writing one here duplicates it and risks naming something nobody \
+sells.
+"""
+
+# Added to the visual beats when this lead also has a built page. "Both"
+# produces ONE message, not two: the same business messaged twice in a day is
+# the thing this pipeline works hardest to avoid, so the picture is the hook
+# and the page rides in the offer beside it.
+_VISUAL_PLUS_PAGE = """\
+- This lead also has a working page built for them. Put its link in the offer \
+paragraph, on its own line with a blank line either side, written as \
+"Website: [the link]", AFTER the sentence asking them to look at the picture. \
+The picture is the hook and the page is the proof; a message that leads with \
+the link throws the picture away. Mention the page in one clause only -- the \
+picture is still what the offer asks about.
+"""
+
+# The graphic carries no business name and no claim about them specifically,
+# because the research could not support three. The message must say so, in
+# those terms: a generic picture under a sentence claiming you studied their
+# business is a lie the owner can spot from the picture itself.
+_VISUAL_GENERIC_LINE = """\
+- The attached picture is NOT specific to this business: it names three gaps \
+that are common across businesses like theirs. So the solution paragraph must \
+say that plainly -- the things you see again and again in this trade -- and \
+must never claim the picture was made for them, built from their reviews, or \
+based on looking at their business. The hook may still be specific, because \
+it is written from the brief; the picture may not be described as such.
+"""
+
 # Only added when the campaign says this is genuinely on offer. A message
 # promising follow-up nobody has built is a promise about future work rather
 # than a description of the thing already made -- the same failure as an
@@ -631,16 +697,45 @@ one is a line rather than a paragraph.
 """
 
 
-def outreach_copy_system(angle: str = "no-website", *, offers_follow_up: bool = False) -> str:
+def outreach_copy_system(
+    angle: str = "no-website",
+    *,
+    offers_follow_up: bool = False,
+    pitch: str = "site",
+    has_page: bool = False,
+    specific: bool = True,
+) -> str:
     """The system prompt for one campaign's argument.
 
     Assembled rather than stored twice: the preamble and the rules are the
     same whichever argument is being made, and two full copies would drift
     the moment one was edited.
+
+    ``pitch`` is what the message is actually offering -- "site" (the page,
+    which is every existing caller) or "visual" (the attached picture). It is
+    separate from ``angle`` because the angle decides which *argument* the
+    campaign makes and the pitch decides which *artefact* carries it; a
+    conversion campaign can pitch either.
+
+    ``has_page`` and ``specific`` apply to the visual pitch only. The first
+    adds the page link to the offer so "both tracks" stays one message; the
+    second, when false, forbids describing a generic graphic as if it had
+    been made for this business.
     """
-    beats = _BEATS_CONVERSION if angle == "conversion" else _BEATS_NO_WEBSITE
+    if pitch == "visual":
+        beats = _BEATS_VISUAL
+    elif angle == "conversion":
+        beats = _BEATS_CONVERSION
+    else:
+        beats = _BEATS_NO_WEBSITE
     follow_up = _FOLLOW_UP_LINE if offers_follow_up else _NO_FOLLOW_UP_LINE
-    return f"{_COPY_PREAMBLE}{beats}\n{_COPY_RULES}{follow_up}"
+    extra = ""
+    if pitch == "visual":
+        if has_page:
+            extra += _VISUAL_PLUS_PAGE
+        if not specific:
+            extra += _VISUAL_GENERIC_LINE
+    return f"{_COPY_PREAMBLE}{beats}\n{_COPY_RULES}{follow_up}{extra}"
 
 
 # The original argument, kept as a name because modelcheck and older callers
@@ -1506,6 +1601,195 @@ def render_lovable_prompt(
     return "\n".join(out) + "\n"
 
 
+GAP_WORDING_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "cards": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "problem": {"type": "string"},
+                    "fix": {"type": "string"},
+                },
+                "required": ["id", "problem", "fix"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["cards"],
+    "additionalProperties": False,
+}
+
+
+GAP_WORDING_SYSTEM = """\
+You re-word a fixed set of cards into one business's own vocabulary. You are \
+not choosing what the cards say.
+
+Each card has an id, a problem line and a solution line, already written. Your \
+job is to say the same thing the way this trade says it -- "term fees" for a \
+tuition centre where the card says "prices", "walk-ins" for a salon where it \
+says "customers". Nothing else.
+
+Hard rules:
+- Return exactly the cards you were given, with exactly the same ids, in the \
+same order. Never add a card. Never drop one. If you cannot improve a card, \
+return its lines unchanged -- that is a correct answer, not a failure.
+- The problem line is about what a customer could not do. It is NEVER about \
+what the owner did wrong, did not bother to do, or got badly. This graphic \
+goes to the owner with the sender's name under it, so a line that reads as \
+criticism is the reason they stop reading. "Customers complain the staff are \
+rude" is forbidden; "First-timers are not sure what to expect" says the same \
+gap and can be acted on.
+- Never name, quote or paraphrase a complaint, a bad review, or a star \
+rating. The evidence is how the card was chosen; it is not the card.
+- Plain words. No jargon, no marketing language, no superlatives, no \
+exclamation marks, no emoji.
+- These lines are set in a card on a graphic: at most 6 words for the problem \
+and at most 7 for the solution. A long line is cropped by the image and \
+becomes unreadable, which is worse than a plainer short one.
+- Invent no fact about the business. Only the brief is evidence. If a card's \
+wording would need a detail you were not given, leave that card as it is.
+"""
+
+
+@dataclass(frozen=True)
+class GapCard:
+    """One re-worded card, matched back to its rule by ``id``."""
+
+    id: str
+    problem: str
+    fix: str
+
+
+def build_gap_wording_prompt(
+    *,
+    name: str,
+    category: str,
+    location: str,
+    tone: str,
+    services: str,
+    cards: Sequence[tuple[str, str, str]],
+) -> str:
+    """The evidence block for the card re-wording call.
+
+    ``cards`` is (id, problem, fix) per card, already chosen. Deliberately
+    narrow: the model is shown what this business sells and how it talks, and
+    nothing that would tempt it into inventing a fourth gap. The pain points
+    behind a card are NOT included -- a model handed the complaint will put
+    the complaint on the card, which is the one thing the system prompt
+    forbids.
+    """
+    lines = [
+        f"Business: {name}",
+        f"Category: {category or 'unknown'}",
+        f"Location: {location or 'unknown'}",
+        f"How they talk: {tone or 'unknown'}",
+        f"What they sell: {services or 'unknown'}",
+        "",
+        "Cards to re-word (same ids, same order, same meaning):",
+    ]
+    for card_id, problem, fix in cards:
+        lines.append(f'- id: {card_id}')
+        lines.append(f'    problem: "{problem}"')
+        lines.append(f'    fix: "{fix}"')
+    return "\n".join(lines)
+
+
+# The headline. Fixed text, because it is the same sentence for every business
+# and the card count is the only thing in it that moves.
+def _infographic_headline(business_name: str, count: int, specific: bool) -> str:
+    wins = "quick win" if count == 1 else "quick wins"
+    if specific and business_name:
+        return f"{count} {wins} for {business_name}"
+    return f"{count} {wins} for your business"
+
+
+def render_infographic_prompt(
+    *,
+    business_name: str,
+    cards: Sequence[tuple[str, str]],
+    style: str,
+    layout: str,
+    character: str,
+    palette: str,
+    signature: str = "",
+    aspect: str = "Wide 16:9 landscape",
+    specific: bool = True,
+) -> str:
+    """The prompt Lyon pastes into Google Flow to generate one graphic.
+
+    Deterministic, exactly like ``render_lovable_prompt``: the evidence
+    decides what the cards say, this function decides how the request is
+    worded. Same inputs in, same prompt out -- which is what makes a bad
+    graphic traceable to either the evidence or this template, never to a
+    coin flip.
+
+    ``cards`` is (problem, fix) per row, already chosen and already re-worded.
+    Its length drives the headline: two evidenced gaps produce a two-card
+    graphic headed "2 quick wins", because three cards is the format and not
+    a quota -- padding it is exactly the invention the whole track guards
+    against.
+
+    ``specific`` false renders the generic graphic: no business name anywhere,
+    which is the honest shape for gaps the research could not evidence.
+
+    The coral problem card and the mint solution card keep their colours
+    whatever the palette says, and the signature ribbon keeps its place. A
+    series that varies everything stops reading as one person's work.
+    """
+    if not cards:
+        raise ValueError("render_infographic_prompt needs at least one card")
+
+    name = business_name.strip()
+    headline = _infographic_headline(name, len(cards), specific and bool(name))
+    subject = f'"{name}"' if (specific and name) else "a small local business"
+
+    out = [
+        f"{aspect} semi-infographic, clean and simple, for {subject}. "
+        f"Style: {style}. Palette: {palette}. Lots of white space, easy to "
+        f"read at a glance on a phone.",
+        "",
+        f'Top headline, large: "{headline}". Beside the headline, '
+        f"{character}, waving.",
+        "",
+        # The count leads, because the layout phrases describe a shape rather
+        # than a number: a two-card graphic under a layout that said "three
+        # stops" is the prompt contradicting itself, and the model resolves
+        # that by inventing a third card.
+        f"Layout: {len(cards)} numbered "
+        f"{'step' if len(cards) == 1 else 'steps'}, arranged as {layout}. "
+        f"Each card carries one simple cartoon icon.",
+    ]
+    for index, (problem, fix) in enumerate(cards, start=1):
+        out.append(f'{index}: "{problem}" -> "{fix}"')
+
+    if signature.strip():
+        out += ["", f'Bottom ribbon in small text: "{signature.strip()}".']
+
+    out += [
+        "",
+        # The colour rule survives every style. Stated after the palette on
+        # purpose: a style phrase naming its own colours would otherwise
+        # recolour the cards and break the series' one constant.
+        "Keep the problem cards coral and the solution cards mint green in "
+        "every case, whatever the palette above says -- those two colours are "
+        "the same across this whole series.",
+        # His own flag, and the one failure that cannot be fixed after
+        # sending: a garbled word on a graphic with your name on it.
+        "Text exactly as written above, correctly spelled, no extra words, no "
+        "invented headings and no additional cards.",
+        # A model asked for a business graphic will draw a logo for it. An
+        # invented logo on a pitch to the business that owns the real one is
+        # the same error as an invented price.
+        "No logos of any kind: not this business's, not any other brand's, "
+        "and do not invent one. No photographs of real people or real "
+        "premises. No stars, no review quotes, no star ratings anywhere.",
+    ]
+    return "\n".join(out) + "\n"
+
+
 def build_site_spec_prompt(
     *,
     name: str,
@@ -1755,12 +2039,40 @@ class _Writer:
                 out.append(area.strip())
         return tuple(out)
 
+    def write_gap_wording(self, prompt: str) -> tuple[GapCard, ...]:
+        """Re-word the chosen cards in this business's own vocabulary.
+
+        Returns whatever the model gave back, unvalidated against the cards
+        that went in: matching ids and dropping anything unrecognised is the
+        caller's job, because the caller is the only thing holding the
+        evidence each id has to stay attached to.
+        """
+        payload = self._call(GAP_WORDING_SYSTEM, prompt, GAP_WORDING_SCHEMA)
+        out: list[GapCard] = []
+        for card in payload.get("cards") or []:
+            if not isinstance(card, dict):
+                continue
+            card_id = str(card.get("id", "")).strip()
+            if not card_id:
+                continue
+            out.append(
+                GapCard(
+                    id=card_id,
+                    problem=str(card.get("problem", "")).strip(),
+                    fix=str(card.get("fix", "")).strip(),
+                )
+            )
+        return tuple(out)
+
     def write_outreach_copy(
         self,
         prompt: str,
         *,
         angle: str = "no-website",
         offers_follow_up: bool = False,
+        pitch: str = "site",
+        has_page: bool = False,
+        specific: bool = True,
     ) -> OutreachCopy:
         """Stage 5 -- the email and the WhatsApp opener.
 
@@ -1771,7 +2083,13 @@ class _Writer:
         went on rendering the wrong prompt with every test still green.
         """
         payload = self._call(
-            outreach_copy_system(angle, offers_follow_up=offers_follow_up),
+            outreach_copy_system(
+                angle,
+                offers_follow_up=offers_follow_up,
+                pitch=pitch,
+                has_page=has_page,
+                specific=specific,
+            ),
             prompt,
             OUTREACH_COPY_SCHEMA,
         )

@@ -26,7 +26,7 @@ from ..providers.llm import BriefWriter, build_outreach_prompt
 from .reachability import can_whatsapp, is_waiting_on_a_check
 from ..selection import ORDERS, select_pending
 from ..sheets import SheetsClient
-from .. import screenshot
+from .. import screenshot, visual as visual_lib
 from ..stage import Stage, advance
 
 log = logging.getLogger("outreach")
@@ -51,6 +51,12 @@ class OutreachReport:
     screenshots: int = 0
     screenshot_failures: int = 0
     screenshot_reason: str = ""
+    # Leads whose graphic has not come back from the image tool yet, or has
+    # come back and not been checked. A hold, never a draft: writing one and
+    # advancing the Stage would retire the lead for good, so when the image
+    # did arrive nothing would ever message them -- the same bug the WhatsApp
+    # check's hold exists to prevent.
+    held_for_image: int = 0
     errors: int = 0
     llm_calls: int = 0
     checkpoints: int = 0
@@ -75,6 +81,9 @@ class OutreachReport:
             f"  no screenshot           {self.screenshot_failures:>4}  "
             f"({self.screenshot_reason})"
             if self.screenshot_failures
+            else "",
+            f"  waiting on a graphic    {self.held_for_image:>4}  (held)"
+            if self.held_for_image
             else "",
             f"Errors logged             {self.errors}",
             "",
@@ -209,6 +218,44 @@ def capture_site_shot(
         return None
 
 
+def needs_an_image(config) -> bool:
+    """Whether this campaign's message is supposed to carry a graphic."""
+    return getattr(config.outreach, "track", "website") in ("visual", "both")
+
+
+def attachment_for(config, lead, lead_id, preview_url="", visual_row=None):
+    """The one picture this lead's message carries, and what it is.
+
+    Returns ``(path, kind)`` with kind "visual", "site" or "" -- one image per
+    message, because the relay sends one, and because "both tracks" is one
+    message by design: the same business messaged twice in a day is the thing
+    this pipeline works hardest to avoid.
+
+    The graphic wins over the screenshot whenever there is one. It is the hook
+    -- it names the gaps and it is what the message is written about -- and the
+    page it would displace is still in the message as a link. A screenshot of
+    a site beside a message arguing about three gaps is the pitch
+    contradicting itself.
+
+    Never raises. Both branches are optional decoration over a message that
+    sends regardless.
+    """
+    if visual_row is not None:
+        try:
+            found = visual_lib.confirmed_image(visual_row)
+        except Exception as exc:  # noqa: BLE001 -- deliberately everything
+            log.warning(
+                "Could not resolve the graphic for %s: %s: %s",
+                lead.get("Business Name", lead_id), type(exc).__name__, exc,
+            )
+            found = None
+        if found is not None:
+            return found, "visual"
+
+    shot = capture_site_shot(config, lead, lead_id, preview_url)
+    return (shot, "site") if shot is not None else (None, "")
+
+
 def run(
     config: Config,
     sheets: SheetsClient,
@@ -228,12 +275,27 @@ def run(
     research = sheets.read_rows(schema.RESEARCH)
     site_briefs = sheets.read_rows(schema.SITE_BRIEFS)
     existing = sheets.read_rows(schema.OUTREACH_LOG)
+    # Only read when the campaign actually pitches a graphic. A campaign on
+    # the original track must not pay a Sheet round trip for a tab it has
+    # nothing in.
+    visual_rows = (
+        sheets.read_rows(schema.VISUAL_BRIEFS) if needs_an_image(config) else {}
+    )
     report.candidates = len(leads)
 
     batch_size = min(limit or config.batch_size, config.batch_size)
     # With require_site on, the demo is the pitch: a lead is not ready to be
     # written to until there is a site for them to look at.
-    requires = Stage.SITE_BUILT if config.outreach.require_site else Stage.RESEARCHED
+    #
+    # On the visual-only track there is no site to wait for -- the artefact is
+    # the graphic, which lives on its own tab and not in the Stage column. So
+    # the Stage gate drops back to Researched and the wait happens per lead
+    # below, as a hold. "both" keeps the site gate, because it does promise a
+    # page as well.
+    if needs_an_image(config) and config.outreach.track == "visual":
+        requires = Stage.RESEARCHED
+    else:
+        requires = Stage.SITE_BUILT if config.outreach.require_site else Stage.RESEARCHED
     prioritise = (
         config.research.social_first if social_first is None else social_first
     )
@@ -306,6 +368,34 @@ def run(
             if brief is not None:
                 preview_url = brief[1].get("Preview URL", "")
 
+            visual_entry = visual_rows.get(lead_id)
+            visual_row = visual_entry[1] if visual_entry else None
+            graphic = (
+                visual_lib.confirmed_image(visual_row)
+                if needs_an_image(config)
+                else None
+            )
+
+            # The graphic is the pitch on this track, so there is nothing to
+            # say until it exists. Held rather than drafted: a message
+            # written now would describe a picture that is not attached, and
+            # writing the row would advance the Stage and retire the lead --
+            # so when the image finally arrived, nothing would ever message
+            # them. A graphic marked Skip is not a wait either; it is a
+            # decision, so the lead falls through to the website pitch.
+            if (
+                needs_an_image(config)
+                and graphic is None
+                and not visual_lib.is_skipped(visual_row)
+            ):
+                report.held_for_image += 1
+                log.info(
+                    "  held: no confirmed graphic yet -- paste the image into "
+                    "the dashboard and tick that the text is right."
+                )
+                continue
+
+            pitch = "visual" if graphic is not None else "site"
             copy = writer.write_outreach_copy(
                 build_outreach_prompt(
                     name=name,
@@ -324,6 +414,21 @@ def run(
             ,
                 angle=config.outreach.angle,
                 offers_follow_up=config.outreach.offers_follow_up,
+                pitch=pitch,
+                has_page=bool(preview_url.strip()),
+                # A generic graphic may never be described as made for them.
+                # The owner can see from the picture that it was not, so the
+                # claim fails exactly where it is being read.
+                #
+                # With no graphic attached there is nothing for this to
+                # describe, so it stays at the default every existing caller
+                # already passed -- adding a track must not change the prompt
+                # the other tracks produce, and that includes by one keyword.
+                specific=(
+                    visual_lib.is_specific(visual_row)
+                    if graphic is not None
+                    else True
+                ),
             )
             report.copy_written += 1
 
@@ -360,7 +465,15 @@ def run(
                 lead, research_row, config.compliance.country_code
             ):
                 capture_site_shot.last_error = ""
-                if capture_site_shot(config, lead, lead_id, preview_url) is not None:
+                # One picture per message. A confirmed graphic is already on
+                # disk, so this does not even start a browser for it -- the
+                # old code screenshotted unconditionally, which on the visual
+                # track would have spent a browser launch per lead to produce
+                # an image nothing then attached.
+                attached, _kind = attachment_for(
+                    config, lead, lead_id, preview_url, visual_row
+                )
+                if attached is not None:
                     report.screenshots += 1
                 elif capture_site_shot.last_error:
                     report.screenshot_failures += 1
@@ -488,6 +601,16 @@ def regenerate_one(
     if brief is not None:
         preview_url = brief[1].get("Preview URL", "")
 
+    # The same four arguments the run passes. Its own call site, with its own
+    # test: three render_lovable_prompt call sites once went unwired while
+    # every test stayed green, because each one looked like somebody else's
+    # job.
+    visual_row = None
+    if needs_an_image(config):
+        entry = sheets.read_rows(schema.VISUAL_BRIEFS).get(lead_id)
+        visual_row = entry[1] if entry else None
+    graphic = visual_lib.confirmed_image(visual_row) if visual_row else None
+
     copy = writer.write_outreach_copy(
         build_outreach_prompt(
             name=name,
@@ -506,6 +629,9 @@ def regenerate_one(
     ,
         angle=config.outreach.angle,
         offers_follow_up=config.outreach.offers_follow_up,
+        pitch="visual" if graphic is not None else "site",
+        has_page=bool(preview_url.strip()),
+        specific=visual_lib.is_specific(visual_row) if graphic is not None else True,
     )
 
     body = gmail_provider.compose_body(

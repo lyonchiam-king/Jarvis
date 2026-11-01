@@ -50,7 +50,14 @@ class FakeWriter:
         )
 
     def write_outreach_copy(
-        self, prompt: str, *, angle: str = "no-website", offers_follow_up: bool = False
+        self,
+        prompt: str,
+        *,
+        angle: str = "no-website",
+        offers_follow_up: bool = False,
+        pitch: str = "site",
+        has_page: bool = False,
+        specific: bool = True,
     ) -> OutreachCopy:
         self.calls += 1
         return OutreachCopy(

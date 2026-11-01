@@ -140,6 +140,43 @@ SITE_BRIEFS = Tab(
     ),
 )
 
+VISUAL_BRIEFS = Tab(
+    "Visual Briefs",
+    (
+        Column("Lead ID"),
+        Column("Business Name"),
+        Column("Image Prompt", note="Paste this into the image tool"),
+        Column(
+            "Gaps Used",
+            note="One line per card: the rule id and the evidence that chose "
+            "it. The audit trail for every claim on the graphic -- never "
+            "shown to the business.",
+        ),
+        Column("Style"),
+        Column("Layout"),
+        Column("Character"),
+        Column("Palette"),
+        Column(
+            "Specific",
+            note="yes | no -- no means the generic graphic, which carries no "
+            "business name and no claim about them",
+        ),
+        Column("Approval Status", manual=True, note="Pending | Approved | Skip"),
+        # Written by the dashboard when the image comes back, never by a
+        # stage. Automated rather than manual because a stage DOES have to be
+        # able to leave them alone on a rewrite, which on_conflict does
+        # explicitly -- the same arrangement as Lovable Project ID.
+        Column("Image File", note="Path under the state directory, set by the dashboard"),
+        Column("Image Source", note="upload | url, and the URL it came from"),
+        Column(
+            "Text Confirmed",
+            note="yes once you have checked the words on the image render "
+            "correctly. Nothing is attached to a message before this.",
+        ),
+        Column("Created At"),
+    ),
+)
+
 OUTREACH_LOG = Tab(
     "Outreach Log",
     (
@@ -185,7 +222,19 @@ ERRORS = Tab(
     ),
 )
 
-ALL_TABS: tuple[Tab, ...] = (LEADS, RESEARCH, SITE_BRIEFS, OUTREACH_LOG, ERRORS)
+# Appended at the end, like every column: a tab added in the middle would
+# be harmless here (tabs are addressed by title, not position) but the
+# order is what `init-sheet` creates them in and what the dashboard lists,
+# so keeping it append-only means an existing Sheet gains a tab rather
+# than appearing to have been rearranged.
+ALL_TABS: tuple[Tab, ...] = (
+    LEADS,
+    RESEARCH,
+    SITE_BRIEFS,
+    OUTREACH_LOG,
+    ERRORS,
+    VISUAL_BRIEFS,
+)
 
 
 def column_letter(index: int) -> str:

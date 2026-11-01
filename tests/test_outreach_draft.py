@@ -258,12 +258,30 @@ class FakeWriter:
         # is precisely how three render_lovable_prompt sites went unwired.
         self.angles = []
         self.follow_ups = []
+        # Same reason as the two above: the infographic track decides which
+        # artefact the message pitches, and a call site that stopped passing
+        # it would send a message describing a picture nobody attached.
+        self.pitches = []
+        self.has_pages = []
+        self.specifics = []
 
-    def write_outreach_copy(self, prompt, *, angle="no-website", offers_follow_up=False):
+    def write_outreach_copy(
+        self,
+        prompt,
+        *,
+        angle="no-website",
+        offers_follow_up=False,
+        pitch="site",
+        has_page=False,
+        specific=True,
+    ):
         self.call_count += 1
         self.prompts.append(prompt)
         self.angles.append(angle)
         self.follow_ups.append(offers_follow_up)
+        self.pitches.append(pitch)
+        self.has_pages.append(has_page)
+        self.specifics.append(specific)
         return OutreachCopy(
             subject="A thought about your bookings",
             email_body="Noticed a few reviews asking how to book.",
