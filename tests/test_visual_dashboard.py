@@ -435,3 +435,210 @@ def test_every_stage_the_full_pipeline_names_is_a_real_command():
     for track in ("website", "visual", "both"):
         for stage in full_run_for(cfg(track)):
             assert stage in STAGE_COMMANDS, (track, stage)
+
+
+# ------------------------------------------- what a failed link download says
+
+
+def _download_errors(app, monkeypatch, status, content_type):
+    """Drive the download path with a stand-in for requests.get.
+
+    No egress from this container, so the accepting branch cannot be proven
+    here -- but every refusal can, and the refusals are what a person reads.
+    """
+    import requests
+
+    from outreach import visual as visual_lib
+
+    client, _ = app()
+    # This container resolves no public host, so is_fetchable_url refuses
+    # every address before a download is attempted. Its own refusals are
+    # tested directly above; here the address is taken as reachable so the
+    # download's answers are the thing under test.
+    monkeypatch.setattr(visual_lib, "is_fetchable_url", lambda _url: True)
+
+    class Resp:
+        status_code = status
+        headers = {"Content-Type": content_type}
+
+        def iter_content(self, _n):
+            yield b"x" * 10
+
+    monkeypatch.setattr(requests, "get", lambda *a, **k: Resp())
+    return client.post(
+        "/api/visual/attach",
+        json={"lead_id": "a", "url": "https://example.com/thing"},
+    ).get_json()
+
+
+def test_a_link_needing_a_sign_in_says_so_rather_than_a_status_code(
+    app, monkeypatch
+):
+    """The common case, and the one a bare 403 explains worst: an image tool
+    serves your own generations behind your Google sign-in, and this download
+    carries no sign-in at all."""
+    d = _download_errors(app, monkeypatch, 403, "text/html")
+    assert "needs you to be signed in" in d["error"]
+    assert "paste it in instead" in d["error"]
+
+
+def test_a_page_address_says_which_link_to_copy(app, monkeypatch):
+    """"That is not an image" is true and useless. Naming the right thing to
+    copy is the difference between this working and it looking broken."""
+    d = _download_errors(app, monkeypatch, 200, "text/html; charset=utf-8")
+    assert "address of the page, not of the picture" in d["error"]
+    assert "Copy image address" in d["error"]
+
+
+def test_an_expired_link_says_links_expire(app, monkeypatch):
+    d = _download_errors(app, monkeypatch, 404, "text/html")
+    assert "gone (404)" in d["error"]
+
+
+def test_the_page_tells_him_which_link_to_copy():
+    """A hint nobody renders is a hint nobody has."""
+    from outreach.dashboard import PAGE
+
+    assert "Copy image address" in PAGE
+
+
+# -------------------------------------------------------- the Open button
+
+
+def test_the_tool_address_is_offered_but_never_saved_on_his_behalf(app):
+    """Nothing in this repo can reach that host to check it, so the value
+    sits in front of him before Save rather than being written for him."""
+    from outreach.dashboard import SUGGESTED_IMAGE_TOOL_URL
+
+    client, _ = app()
+    d = client.get("/api/track").get_json()
+    assert d["tool_url"] == "", "a URL was stored that nobody confirmed"
+    assert d["tool_url_suggestion"] == SUGGESTED_IMAGE_TOOL_URL
+    assert load_config(PENANG, env_file=None).visual.image_tool_url == ""
+
+
+def test_saving_the_tool_address_turns_on_the_open_button(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from outreach.campaign_edit import local_path_for
+
+    path = tmp_path / "campaign.yaml"
+    path.write_text(Path(PENANG).read_text())
+    monkeypatch.chdir(tmp_path)
+    client = dash.create_app(load_config(path, env_file=None)).test_client()
+
+    d = client.post("/api/track", json={
+        "track": "visual", "signature": "by Lyon",
+        "tool_name": "Google Flow", "tool_url": "https://example.com/flow",
+    }).get_json()
+    assert d["ok"] is True
+    assert d["tool_url"] == "https://example.com/flow"
+    reloaded = load_config(local_path_for(path), env_file=None)
+    assert reloaded.visual.image_tool_name == "Google Flow"
+    assert reloaded.visual.image_tool_url == "https://example.com/flow"
+
+
+def test_a_malformed_tool_address_is_refused_and_the_track_is_not_saved(
+    tmp_path, monkeypatch
+):
+    """One file write, so a valid track cannot be stored and then rolled back
+    because the address beside it was wrong."""
+    from pathlib import Path
+
+    from outreach.campaign_edit import local_path_for
+
+    path = tmp_path / "campaign.yaml"
+    path.write_text(Path(PENANG).read_text())
+    monkeypatch.chdir(tmp_path)
+    client = dash.create_app(load_config(path, env_file=None)).test_client()
+
+    d = client.post("/api/track", json={
+        "track": "visual", "signature": "by Lyon",
+        "tool_name": "Google Flow", "tool_url": "labs.google",
+    }).get_json()
+    assert "ok" not in d
+    assert "image_tool_url" in d["error"]
+    assert not local_path_for(path).exists() or (
+        load_config(local_path_for(path), env_file=None).outreach.track == "website"
+    )
+
+
+def test_clearing_the_address_removes_the_button_and_stays_cleared(
+    tmp_path, monkeypatch
+):
+    """A fork inherits any key it does not carry from the template, so a key
+    simply deleted would come straight back on the next load."""
+    from pathlib import Path
+
+    from outreach.campaign_edit import local_path_for
+
+    path = tmp_path / "campaign.yaml"
+    path.write_text(Path(PENANG).read_text())
+    monkeypatch.chdir(tmp_path)
+    client = dash.create_app(load_config(path, env_file=None)).test_client()
+
+    client.post("/api/track", json={
+        "track": "visual", "signature": "by Lyon",
+        "tool_name": "Google Flow", "tool_url": "https://example.com/flow",
+    })
+    client.post("/api/track", json={
+        "track": "visual", "signature": "by Lyon",
+        "tool_name": "Google Flow", "tool_url": "",
+    })
+    assert load_config(local_path_for(path), env_file=None).visual.image_tool_url == ""
+
+
+# ------------------------------------------- the revert path, on all four
+#
+# Every campaign edit catches ConfigError and puts the file back rather than
+# leaving a campaign the pipeline cannot load. In two of these endpoints that
+# name was never in scope, so the line raised NameError, the request 500'd,
+# and the broken file stayed on disk -- the exact outcome the revert exists to
+# prevent, reported to the page as a transport failure. Nothing covered it
+# because the revert only runs when a *valid-looking* save produces an
+# unloadable file.
+
+
+@pytest.fixture
+def forkable(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    path = tmp_path / "campaign.yaml"
+    path.write_text(Path(PENANG).read_text())
+    monkeypatch.chdir(tmp_path)
+    client = dash.create_app(load_config(path, env_file=None)).test_client()
+    return client, path
+
+
+@pytest.mark.parametrize(
+    "endpoint,payload",
+    [
+        ("/api/track", {"track": "visual", "signature": "by Lyon"}),
+        ("/api/visual/rotation", {"styles": ["paper-cut"], "layouts": ["rows"]}),
+        ("/api/angle", {"angle": "conversion", "offers_follow_up": False}),
+        ("/api/design-level", {"level": "standard"}),
+    ],
+)
+def test_a_save_that_will_not_load_is_reverted_not_a_crash(
+    forkable, monkeypatch, endpoint, payload
+):
+    from outreach.campaign_edit import local_path_for
+    from outreach.config import ConfigError
+
+    client, path = forkable
+
+    def refuse(*_a, **_k):
+        raise ConfigError("pretend this campaign no longer loads")
+
+    monkeypatch.setattr(dash, "load_config", refuse)
+    r = client.post(endpoint, json=payload)
+    assert r.status_code == 200, f"{endpoint} crashed instead of reverting"
+    d = r.get_json()
+    assert d is not None, f"{endpoint} answered with something that is not JSON"
+    assert "Reverted" in (d.get("error") or ""), d
+    # And the file on disk is the one that loads, not the one that does not.
+    fork = local_path_for(path)
+    if fork.exists():
+        import yaml
+
+        assert isinstance(yaml.safe_load(fork.read_text()), dict)

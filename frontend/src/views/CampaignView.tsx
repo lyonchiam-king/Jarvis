@@ -24,6 +24,8 @@ import { api } from '../api/client';
 const TrackPicker: React.FC = () => {
   const [track, setTrack] = useState('website');
   const [signature, setSignature] = useState('');
+  const [toolName, setToolName] = useState('');
+  const [toolUrl, setToolUrl] = useState('');
   const [note, setNote] = useState('');
   const [bad, setBad] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -33,6 +35,11 @@ const TrackPicker: React.FC = () => {
       if (res.data) {
         setTrack(res.data.track || 'website');
         setSignature(res.data.signature || '');
+        setToolName(res.data.tool_name || '');
+        // Prefilled with the suggestion only while nothing is saved, so what
+        // is in the box is what Save will store -- and a cleared address
+        // stays cleared instead of reappearing on the next load.
+        setToolUrl(res.data.tool_url || res.data.tool_url_suggestion || '');
       }
     });
   }, []);
@@ -42,7 +49,10 @@ const TrackPicker: React.FC = () => {
   const save = async () => {
     setSaving(true);
     setNote('');
-    const res = await api.setTrack(track, signature);
+    const res = await api.setTrack(track, signature, {
+      name: toolName,
+      url: toolUrl,
+    });
     setSaving(false);
     setBad(!!res.error);
     setNote(res.error || 'Saved.');
@@ -114,6 +124,45 @@ const TrackPicker: React.FC = () => {
           </p>
         </div>
       )}
+      {needsSignature && (
+        <div className="space-y-2">
+          <div>
+            <label className="block text-[12px] font-medium text-slate-300 mb-1">
+              Where you make the pictures
+            </label>
+            <input
+              id="tool-name"
+              type="text"
+              value={toolName}
+              onChange={(e) => setToolName(e.target.value)}
+              placeholder="Google Flow"
+              className="w-full p-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-[13px] text-slate-900 dark:text-slate-100"
+            />
+          </div>
+          <div>
+            <label className="block text-[12px] font-medium text-slate-300 mb-1">
+              Its web address
+            </label>
+            <input
+              id="tool-url"
+              type="url"
+              value={toolUrl}
+              onChange={(e) => setToolUrl(e.target.value)}
+              placeholder="https://..."
+              className="w-full p-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-[13px] text-slate-900 dark:text-slate-100"
+            />
+            <p className="text-[11px] text-slate-500 mt-1">
+              This becomes the <strong>Open</strong> button on every card in
+              the Infographic step. The address above is a suggestion, not
+              something checked — nothing here can reach that site to confirm
+              it. If it is not where the tool opens for you, copy the address
+              out of your browser and paste it here. Clear the box and the
+              button simply does not appear.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center gap-3">
         <button
           id="save-track-btn"

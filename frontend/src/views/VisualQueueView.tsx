@@ -399,7 +399,7 @@ const VisualCard: React.FC<CardProps> = ({
               type="url"
               value={url}
               onChange={(e) => onUrl(e.target.value)}
-              placeholder="...or paste the link the picture is at"
+              placeholder="...or right-click the picture, Copy image address, paste here"
               className="flex-1 min-w-[14rem] px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-[13px] text-slate-100"
             />
             <button
@@ -411,6 +411,13 @@ const VisualCard: React.FC<CardProps> = ({
               Fetch it
             </button>
           </div>
+          <p className="text-[11px] text-slate-500">
+            The link has to be the <strong>picture&apos;s</strong> own address,
+            not the page it sits on — right-click the image and choose{' '}
+            <strong>Copy image address</strong>. If the picture is only
+            visible while you are signed in, this cannot reach it: save it and
+            paste the file, which always works.
+          </p>
         </div>
       )}
 

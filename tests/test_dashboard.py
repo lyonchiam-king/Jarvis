@@ -3460,7 +3460,7 @@ def test_a_card_waiting_for_a_picture_offers_all_three_ways_in():
     html = __import__("json").loads(out)["html"]
     assert "Ctrl+V" in html
     assert 'type="file"' in html
-    assert "paste the link" in html
+    assert "Copy image address" in html
 
 
 def test_a_picture_that_nobody_checked_asks_for_the_words_to_be_read():

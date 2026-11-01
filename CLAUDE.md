@@ -64,7 +64,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1538 tests, pytest, no CI -- the suite is the only gate
+tests/             1550 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -1212,6 +1212,36 @@ computed, returned, and drawn by neither front end, and as the three unwired
 `render_lovable_prompt` call sites. A setting Lyon can only reach by editing
 YAML is a setting he does not have. Both pages carry the control now, and
 both are asserted by driving the real interface and reading what came out.
+
+**`ConfigError` was never in scope in two campaign-edit views.** Every one of
+them reverts a bad save by catching it, and in `/api/angle` and
+`/api/design-level` the catch raised `NameError` instead -- so a save that
+produced an unloadable campaign returned a 500 and left that file on disk,
+which is the one outcome the revert exists to prevent. The page could only
+report it as a transport failure. Nothing had covered it because the revert
+only runs when a *valid-looking* save produces a file that will not load,
+which no earlier test could produce. It is a module-level import now, and one
+parametrised test drives all four reverts with `load_config` made to refuse.
+Found by writing the equivalent test for the two new endpoints; the two old
+ones had been broken the whole time.
+
+**An address nothing can check is a field, not a default.** The image tool's
+URL cannot be verified from here -- `labs.google` is outside this session's
+allowed network domains -- and a button pointing at a guess is worse than no
+button, because a dead button reads as the tool being broken rather than as a
+setting being wrong. So `SUGGESTED_IMAGE_TOOL_URL` is *offered to the input*
+and never written to a campaign by this code: it prefills the box only while
+nothing is saved, so what is in front of the user is what Save will store, and
+a cleared address stays cleared instead of reappearing on the next load.
+`visual.image_tool_url` still ships blank.
+
+**"That is not an image" is true and useless.** An image tool hands out the
+address of the *page* as readily as of the picture, and serves the picture
+itself behind the user's own sign-in -- which a server-side download does not
+have. So the link field says to right-click and Copy image address, an HTML
+response says which of the two was pasted, and a 401/403 says the link needs
+a sign-in this download does not carry and to paste the file instead. A bare
+status code sends someone looking for a broken tool.
 
 **The track selector cannot live inside the step it switches on.** The
 Infographic step is hidden when the campaign pitches a page, so the one

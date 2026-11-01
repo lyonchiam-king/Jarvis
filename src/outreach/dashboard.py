@@ -35,7 +35,13 @@ from flask import (
 from werkzeug.exceptions import NotFound
 
 from . import paths, schema, scheduler
-from .config import Config, load_config
+# ConfigError is imported here, not inside each view. Four endpoints revert a
+# campaign edit by catching it, and in two of them -- /api/angle and
+# /api/design-level -- it was never in scope at all: the revert line raised
+# NameError instead, so a save that produced an unloadable campaign returned a
+# 500 and left that file on disk, which is the one outcome the revert exists
+# to prevent. The page could only report it as a transport failure.
+from .config import Config, ConfigError, load_config
 from .stages.reachability import stored_verdict
 from .stage import Stage
 
@@ -137,6 +143,14 @@ RANKS_ITS_QUEUE = {
 # is the real cap and the CLI enforces it. This only stops a typo becoming a
 # very long run.
 MAX_LIMIT = 500
+
+# Offered in the settings field, never written to a campaign by this code.
+# Nothing in this container can reach that host to check it -- egress is
+# blocked -- so it is a suggestion sitting in front of the user before they
+# press Save, which is the difference between them confirming an address and
+# us guessing one. A wrong URL is a dead button, and a dead button reads as
+# the tool being broken rather than as a setting being wrong.
+SUGGESTED_IMAGE_TOOL_URL = "https://labs.google/fx/tools/flow"
 
 # How many names the Next-up preview will render. The point is to curate the
 # run before it happens, so it follows the How-many box -- but sixty names is
@@ -2478,6 +2492,21 @@ def create_app(config: Config) -> Flask:
             raise visual_lib.ImageRejected(
                 f"Could not download that link: {exc}"
             ) from exc
+        if resp.status_code in (401, 403):
+            # The common case, and the one a bare status code explains worst.
+            # An image tool serves your own generations behind your Google
+            # sign-in; this request carries no sign-in at all, so a link that
+            # opens perfectly in your browser is refused here.
+            raise visual_lib.ImageRejected(
+                "That link needs you to be signed in, and this download is "
+                "not. Save the picture and paste it in instead -- that always "
+                "works, because the file never leaves your computer."
+            )
+        if resp.status_code == 404:
+            raise visual_lib.ImageRejected(
+                "That link is gone (404). Image tools expire their links -- "
+                "save the picture and paste it in instead."
+            )
         if resp.status_code != 200:
             raise visual_lib.ImageRejected(
                 f"That link answered {resp.status_code}. Open it in a browser "
@@ -2486,10 +2515,19 @@ def create_app(config: Config) -> Flask:
         content_type = (resp.headers.get("Content-Type") or "").split(";")[0]
         content_type = content_type.strip().casefold()
         if content_type not in visual_lib.IMAGE_TYPES:
+            # Almost always the page's own address rather than the image's.
+            # Saying which to copy is the difference between this working and
+            # it looking broken -- "that is not an image" is true and useless.
+            if content_type.startswith("text/"):
+                raise visual_lib.ImageRejected(
+                    "That is the address of the page, not of the picture. "
+                    "Right-click the picture itself and choose Copy image "
+                    "address -- or just save it and paste the file in."
+                )
             raise visual_lib.ImageRejected(
-                f"That link is {content_type or 'not an image'}, not a picture. "
-                "Image tools often give a link to a *page* -- use the download "
-                "button and paste the file instead."
+                f"That link is {content_type or 'not an image'}, not a "
+                "picture. Right-click the picture and choose Copy image "
+                "address, or save it and paste the file in."
             )
         chunks, total = [], 0
         for chunk in resp.iter_content(64 * 1024):
@@ -2642,6 +2680,13 @@ def create_app(config: Config) -> Flask:
                 "tracks": sorted(TRACKS),
                 "signature": c.visual.signature,
                 "tool_name": c.visual.image_tool_name,
+                "tool_url": c.visual.image_tool_url,
+                # Offered to the field, never saved on his behalf. Nothing in
+                # this repo can reach that host to check it -- the same reason
+                # build.image_model discovers rather than guesses -- so the
+                # value is in front of him before he presses Save, and the
+                # button only exists once he has.
+                "tool_url_suggestion": SUGGESTED_IMAGE_TOOL_URL,
             })
 
         payload = request.json or {}
@@ -2651,6 +2696,13 @@ def create_app(config: Config) -> Flask:
                 "error": f"Unknown track {track!r}. Expected one of {sorted(TRACKS)}."
             }), 400
         signature = (payload.get("signature") or "").strip()
+        # Absent means "leave it alone"; present and empty means "no button".
+        tool_name = payload.get("tool_name")
+        tool_url = payload.get("tool_url")
+        if tool_name is not None:
+            tool_name = str(tool_name).strip()
+        if tool_url is not None:
+            tool_url = str(tool_url).strip()
 
         try:
             path = _writable_campaign()
@@ -2658,7 +2710,9 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": str(exc)}), 200
         try:
             original = path.read_text()
-            path.write_text(rewrite_track(original, track, signature))
+            path.write_text(
+                rewrite_track(original, track, signature, tool_name, tool_url)
+            )
         except CampaignEditError as exc:
             return jsonify({"error": str(exc)}), 200
         except OSError as exc:
@@ -2670,7 +2724,14 @@ def create_app(config: Config) -> Flask:
             path.write_text(original)
             return jsonify({"error": f"Reverted -- {exc}"}), 200
 
-        return jsonify({"ok": True, "track": track, "signature": signature})
+        c = current()
+        return jsonify({
+            "ok": True,
+            "track": track,
+            "signature": signature,
+            "tool_name": c.visual.image_tool_name,
+            "tool_url": c.visual.image_tool_url,
+        })
 
     @app.route("/api/visual/rotation", methods=["POST"])
     def api_visual_rotation():
@@ -3944,6 +4005,20 @@ PAGE = """<!doctype html>
     <p class="hint" id="sig-help" style="display:none;margin:6px 0 0">Required
       for a graphic. It is the one thing that makes the series read as
       yours, so the tool will not start without it.</p>
+    <div id="tool-wrap" style="display:none;margin-top:10px">
+      <label class="sub" style="display:block">Where you make the pictures
+        <input id="tool-name" style="width:100%;margin:4px 0 8px">
+      </label>
+      <label class="sub" style="display:block">Its web address
+        <input id="tool-url" placeholder="https://..." style="width:100%;margin:4px 0 0">
+      </label>
+      <p class="hint" style="margin:6px 0 0">This becomes the
+        <b>Open</b> button on every card in step 3b. The address below is a
+        suggestion, not something checked &mdash; nothing in this tool can
+        reach that site to confirm it. If it is not where the tool opens for
+        you, copy the address out of your browser and paste it here. Clear
+        the box and the button simply does not appear.</p>
+    </div>
     <div class="row" style="margin-top:10px">
       <button onclick="saveTrack()">Save</button>
       <span class="hint" id="track-note"></span>
@@ -5571,10 +5646,15 @@ function vizCard(m, d) {
                onchange="onVizFile('${id}', this)" style="width:auto">
       </div>
       <div class="row" style="margin-top:8px">
-        <input id="vizurl-${id}" placeholder="...or paste the link the picture is at"
+        <input id="vizurl-${id}" placeholder="...or right-click the picture, Copy image address, paste here"
                oninput="vizArm('${id}', true)">
         <button onclick="attachVizUrl('${id}')">Fetch it</button>
-      </div>`;
+      </div>
+      <p class="hint" style="margin:6px 0 0">The link has to be the
+        <b>picture's</b> own address, not the page it sits on &mdash;
+        right-click the image and choose <b>Copy image address</b>. If the
+        picture is only visible while you are signed in, this cannot reach it:
+        save it and paste the file, which always works.</p>`;
   } else {
     const shot = `/api/screenshot/${id}`;
     const ready = m.state === 'ready';
@@ -5768,8 +5848,10 @@ function trackPicked() {
   const needs = pick && (pick.value === 'visual' || pick.value === 'both');
   const wrap = document.querySelector('#sig-wrap');
   const help = document.querySelector('#sig-help');
+  const tool = document.querySelector('#tool-wrap');
   if (wrap) wrap.style.display = needs ? 'block' : 'none';
   if (help) help.style.display = needs ? 'block' : 'none';
+  if (tool) tool.style.display = needs ? 'block' : 'none';
 }
 
 async function loadTrack() {
@@ -5778,8 +5860,15 @@ async function loadTrack() {
   if (d.error) return;
   const pick = document.querySelector('#track-pick');
   const sig = document.querySelector('#track-sig');
+  const name = document.querySelector('#tool-name');
+  const url = document.querySelector('#tool-url');
   if (pick) pick.value = d.track || 'website';
   if (sig) sig.value = d.signature || '';
+  if (name) name.value = d.tool_name || '';
+  // Prefilled with the suggestion only while nothing is saved, so what is in
+  // the box is what pressing Save will store -- and so a cleared address
+  // stays cleared rather than coming back on the next load.
+  if (url) url.value = d.tool_url || d.tool_url_suggestion || '';
   trackPicked();
 }
 
@@ -5793,6 +5882,8 @@ async function saveTrack() {
     body: JSON.stringify({
       track: pick ? pick.value : 'website',
       signature: sig ? sig.value : '',
+      tool_name: (document.querySelector('#tool-name') || {}).value,
+      tool_url: (document.querySelector('#tool-url') || {}).value,
     })
   });
   const d = await r.json();

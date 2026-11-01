@@ -426,16 +426,36 @@ class ApiClient {
   }
 
   async getTrack(): Promise<
-    ApiResponse<{ track: string; tracks: string[]; signature: string; tool_name: string }>
+    ApiResponse<{
+      track: string;
+      tracks: string[];
+      signature: string;
+      tool_name: string;
+      tool_url: string;
+      /**
+       * Offered to the field, never stored on the user's behalf. Nothing in
+       * Jarvis can reach that host to check it, so the value sits in front of
+       * them before they save -- the difference between confirming an address
+       * and us guessing one.
+       */
+      tool_url_suggestion: string;
+    }>
   > {
     return this.request('/api/track');
   }
 
   async setTrack(
     track: string,
-    signature: string
-  ): Promise<ApiResponse<{ ok: boolean; track: string }>> {
-    return this.post('/api/track', { track, signature });
+    signature: string,
+    tool?: { name: string; url: string }
+  ): Promise<ApiResponse<{ ok: boolean; track: string; tool_url: string }>> {
+    return this.post('/api/track', {
+      track,
+      signature,
+      // Omitted rather than sent empty when there is nothing to say: the
+      // server reads absent as "leave it alone" and empty as "no button".
+      ...(tool ? { tool_name: tool.name, tool_url: tool.url } : {}),
+    });
   }
 
   async setVisualRotation(

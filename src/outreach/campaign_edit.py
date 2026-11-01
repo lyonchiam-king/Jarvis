@@ -370,13 +370,25 @@ def _ensure_section(lines: list[str], name: str) -> tuple[int, int]:
     return len(lines), len(lines)
 
 
-def rewrite_track(text: str, track: str, signature: str) -> str:
-    """Set ``outreach.track`` and ``visual.signature``, comments intact.
+def rewrite_track(
+    text: str,
+    track: str,
+    signature: str,
+    tool_name: str | None = None,
+    tool_url: str | None = None,
+) -> str:
+    """Set ``outreach.track`` and the ``visual:`` keys that go with it.
 
-    Both together, because they are one decision in the same sense that the
-    angle and its follow-up promise are: a campaign asking for graphics with
-    nothing to sign them refuses to load, so saving the track alone would
-    leave Lyon with a tool that will not start.
+    Track and signature together, because they are one decision in the same
+    sense that the angle and its follow-up promise are: a campaign asking for
+    graphics with nothing to sign them refuses to load, so saving the track
+    alone would leave Lyon with a tool that will not start.
+
+    ``tool_name`` and ``tool_url`` are written in the same pass when given --
+    one file write, so a valid track cannot be saved and then rolled back
+    because the URL beside it was malformed. ``None`` means leave the key as
+    it is; an empty ``tool_url`` is a real value meaning "no button", which
+    is how it ships.
     """
     from .config import TRACKS
 
@@ -410,6 +422,16 @@ def rewrite_track(text: str, track: str, signature: str) -> str:
     v_start, v_end = _ensure_section(lines, "visual")
     if not _replace_scalar(lines, v_start, v_end, "signature", signature):
         lines.insert(v_start, f"  signature: {_scalar(signature)}")
+
+    for key, value in (("image_tool_name", tool_name), ("image_tool_url", tool_url)):
+        if value is None:
+            continue
+        # Bounds re-read each time: an insert moves the end of the section,
+        # and writing the next key against the old one would put it in
+        # whatever section follows. The same trap rewrite_angle names.
+        v_start, v_end = _section_bounds(lines, "visual")
+        if not _replace_scalar(lines, v_start, v_end, key, value.strip()):
+            lines.insert(v_start, f"  {key}: {_scalar(value.strip())}")
 
     result = "\n".join(lines)
     if text.endswith("\n"):

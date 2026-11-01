@@ -304,6 +304,8 @@ try {
       track: 'both', tracks: ['both', 'visual', 'website'],
       signature: 'by Lyon, Business Growth Consultant',
       tool_name: 'Google Flow',
+      tool_url: 'https://example.com/flow',
+      tool_url_suggestion: 'https://example.com/suggested',
     },
     // The infographic branch. Two rows on purpose: one named for the
     // business and one generic, because telling them apart on the card is
@@ -313,7 +315,9 @@ try {
       enabled: true,
       track: 'both',
       tool_name: 'Google Flow',
-      tool_url: '',
+      // Set, so the Open button must render. Blank it and the button is
+      // supposed to disappear rather than become a dead link.
+      tool_url: 'https://example.com/flow',
       signature: 'by Lyon, Business Growth Consultant',
       counts: { needs_image: 1, needs_check: 1, ready: 0, skipped: 0 },
       catalogue: {
@@ -444,8 +448,11 @@ try {
   })()`);
   if (!vizWaysIn.drop) fail('the Infographic step offers no paste/drop target');
   if (!vizWaysIn.file) fail('the Infographic step offers no file picker');
-  if (!/paste the link/i.test(vizWaysIn.url)) {
-    fail(`the link field's placeholder is ${JSON.stringify(vizWaysIn.url)}`);
+  if (!/copy image address/i.test(vizWaysIn.url)) {
+    fail(
+      `the link field does not say which address to copy: ` +
+      `${JSON.stringify(vizWaysIn.url)}`
+    );
   }
 
   // The thumbnail must be an <img> pointed at the server, not the base64 of
@@ -475,6 +482,25 @@ try {
   if (vizShot.leaked) {
     fail('raw base64 image data is being shown as text on the Infographic step');
   }
+  // The Open button. He asked for one press from the card to the image tool,
+  // and the address is a setting rather than a constant, so this proves the
+  // setting reaches the button.
+  const openButton = await dt.evaluate(`(() => {
+    const a = document.getElementById('visual-open-tool');
+    return { has: !!a, href: a ? a.getAttribute('href') : '',
+             label: a ? (a.textContent || '').trim() : '' };
+  })()`);
+  if (!openButton.has) {
+    fail('the Infographic step has no button through to the image tool');
+  } else {
+    if (openButton.href !== 'https://example.com/flow') {
+      fail(`the Open button points at ${JSON.stringify(openButton.href)}`);
+    }
+    if (!/Google Flow/.test(openButton.label)) {
+      fail(`the Open button is labelled ${JSON.stringify(openButton.label)}`);
+    }
+  }
+
   // The rotation picker. Narrowing the series is the one thing he asked for
   // by name, and an endpoint with no control is a feature nobody has -- the
   // same shape as the click-to-chat link that was computed, returned, and
@@ -555,6 +581,25 @@ try {
       fail('the track picker does not ask for the signature a graphic needs');
     }
     if (!picker.save) fail('the track picker has no save button');
+  }
+  // The address field, with what is saved in it -- not the suggestion, which
+  // is only offered while nothing has been saved. Getting that the wrong way
+  // round would quietly overwrite a corrected address with a guess on the
+  // next Save.
+  const toolFields = await dt.evaluate(`(() => {
+    const url = document.getElementById('tool-url');
+    const name = document.getElementById('tool-name');
+    return { url: url ? url.value : null, name: name ? name.value : null };
+  })()`);
+  if (toolFields.url === null || toolFields.name === null) {
+    fail('campaign settings offers no field for the image tool address');
+  } else {
+    if (toolFields.url !== 'https://example.com/flow') {
+      fail(`the saved tool address rendered as ${JSON.stringify(toolFields.url)}`);
+    }
+    if (toolFields.name !== 'Google Flow') {
+      fail(`the tool name rendered as ${JSON.stringify(toolFields.name)}`);
+    }
   }
   await dt.evaluate(`document.getElementById('campaign-settings-toggle').click()`);
   await new Promise((r) => setTimeout(r, 250));
