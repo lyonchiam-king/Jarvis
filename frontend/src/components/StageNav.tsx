@@ -11,7 +11,16 @@ import { Check, Lock, Circle, Loader2 } from 'lucide-react';
  * every step stays clickable, because revisiting an earlier one is normal
  * work rather than going backwards.
  */
-export type StageKey = 'list' | 'reachability' | 'brief' | 'build' | 'send';
+export type StageKey =
+  | 'list'
+  | 'reachability'
+  | 'brief'
+  | 'build'
+  // The infographic branch. Shown only when the campaign asks for graphics:
+  // a step that can never do anything reads as broken, and on the original
+  // track there is nothing for it to hold.
+  | 'visual'
+  | 'send';
 
 /**
  * `waiting` means a person has to act. `done` means nothing is outstanding

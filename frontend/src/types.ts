@@ -228,3 +228,57 @@ export interface ApiResponse<T> {
   error?: string;
   ok?: boolean;
 }
+
+// --------------------------------------------------------- the visual track
+
+/**
+ * Where one graphic is up to. Four states, because four things are genuinely
+ * different and each needs a different button: retired by hand, waiting for
+ * the picture, waiting for a person to read the words on it, and ready.
+ */
+export type VisualState = 'skipped' | 'needs_image' | 'needs_check' | 'ready';
+
+export interface VisualItem {
+  lead_id: string;
+  business_name: string;
+  category: string;
+  /** The prompt to paste into the image tool. */
+  prompt: string;
+  /**
+   * One line per card: the rule that chose it and the evidence behind it.
+   * Shown so a claim can be checked against the row that justified it
+   * before it reaches a real business.
+   */
+  gaps: string;
+  style: string;
+  layout: string;
+  /** False means the generic graphic -- no name on it, no claim about them. */
+  specific: boolean;
+  state: VisualState;
+  approval: string;
+  /**
+   * Every string that must appear on the picture, in reading order. Nothing
+   * in Jarvis can check that they rendered -- the image is made outside it --
+   * so these exist to be read against the picture by a person.
+   */
+  expected_text: string[];
+  created_at: string;
+}
+
+export interface VisualQueue {
+  /** False on the original track: the campaign pitches a page, not a picture. */
+  enabled: boolean;
+  track: string;
+  tool_name: string;
+  /** Empty when no address is configured. The view then shows no button. */
+  tool_url: string;
+  signature: string;
+  queue: VisualItem[];
+  counts: Record<VisualState, number>;
+  catalogue: {
+    styles: string[];
+    layouts: string[];
+    chosen_styles: string[];
+    chosen_layouts: string[];
+  };
+}

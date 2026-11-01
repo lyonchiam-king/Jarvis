@@ -389,3 +389,49 @@ def test_an_unknown_style_is_refused_and_nothing_is_saved(tmp_path, monkeypatch)
     }).get_json()
     assert "ok" not in d
     assert "watercolor" in d["error"]
+
+
+# -------------------------------------------------- the full pipeline button
+
+
+def test_the_full_pipeline_is_unchanged_on_the_original_track():
+    """A campaign that pitches a page must run what it always ran."""
+    from outreach.dashboard import FULL_RUN, full_run_for
+
+    assert full_run_for(cfg("website")) == FULL_RUN
+    assert "visual-brief" not in full_run_for(cfg("website"))
+
+
+def test_the_full_pipeline_writes_image_prompts_when_the_track_asks():
+    """A stage nobody presses never runs -- which is how the reachability
+    check shipped and did nothing for weeks."""
+    from outreach.dashboard import full_run_for
+
+    assert full_run_for(cfg("visual")) == [
+        "discovery", "research", "visual-brief", "outreach-draft",
+    ]
+
+
+def test_the_visual_only_track_does_not_write_site_briefs():
+    """That stage's whole output is a page this campaign never links to."""
+    from outreach.dashboard import full_run_for
+
+    assert "site-brief" not in full_run_for(cfg("visual"))
+
+
+def test_both_tracks_run_both_briefs_in_order():
+    from outreach.dashboard import full_run_for
+
+    assert full_run_for(cfg("both")) == [
+        "discovery", "research", "site-brief", "visual-brief", "outreach-draft",
+    ]
+
+
+def test_every_stage_the_full_pipeline_names_is_a_real_command():
+    """A name that is not in STAGE_COMMANDS fails at the subprocess, in a log
+    nobody reads, after the earlier stages have already spent money."""
+    from outreach.dashboard import STAGE_COMMANDS, full_run_for
+
+    for track in ("website", "visual", "both"):
+        for stage in full_run_for(cfg(track)):
+            assert stage in STAGE_COMMANDS, (track, stage)

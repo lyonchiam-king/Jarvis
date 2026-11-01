@@ -296,6 +296,43 @@ try {
       areas: ['Soho', 'Shoreditch'], sender_name: 'Lyon',
       daily_batch_limit: 10, country_code: 'GB', config_file: 'example.yaml',
     },
+    // The infographic branch. Two rows on purpose: one named for the
+    // business and one generic, because telling them apart on the card is
+    // the whole safeguard -- a generic graphic sent as though it were
+    // researched is a claim the owner can disprove from the picture.
+    '/api/visual/queue': {
+      enabled: true,
+      track: 'both',
+      tool_name: 'Google Flow',
+      tool_url: '',
+      signature: 'by Lyon, Business Growth Consultant',
+      counts: { needs_image: 1, needs_check: 1, ready: 0, skipped: 0 },
+      catalogue: {
+        styles: ['paper-cut', 'watercolour'], layouts: ['rows', 'road'],
+        chosen_styles: [], chosen_layouts: [],
+      },
+      queue: [
+        {
+          lead_id: 'LEAD-A', name: 'Your Nail Crush', category: 'Nail salon',
+          prompt: 'Wide 16:9 landscape semi-infographic for "Your Nail Crush".',
+          gaps: 'no_website: Google lists no website for this business',
+          style: 'paper-cut', layout: 'rows', specific: true,
+          state: 'needs_image', approval: 'Approved',
+          expected_text: ['3 quick wins for Your Nail Crush'],
+          created_at: '2026-01-01T00:00:00Z',
+        },
+        {
+          lead_id: 'LEAD-B', name: 'Second Salon', category: 'Hair salon',
+          prompt: 'Wide 16:9 landscape semi-infographic for a small local business.',
+          gaps: 'generic_manual: Generic graphic -- not a claim about this business',
+          style: 'watercolour', layout: 'road', specific: false,
+          state: 'needs_check', approval: 'Approved',
+          expected_text: ['3 quick wins for your business',
+                          'Time going on jobs a tool could do  ->  Automate the repeated ones'],
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      ],
+    },
   };
 
   await dt.send('Page.addScriptToEvaluateOnNewDocument', {
@@ -359,6 +396,89 @@ try {
     fail('Today\'s recommendation did not land on the Review & Send step');
   }
 
+  // The infographic branch. It only appears when the campaign asks for
+  // graphics, so without the fixture above it would never render at all --
+  // which is exactly how a stage with no button once shipped and never ran.
+  if (!stageText.includes('Infographic')) {
+    fail('the stage navigator is missing the Infographic branch');
+  }
+  await dt.evaluate(`document.getElementById('stage-visual').click()`);
+  await new Promise((r) => setTimeout(r, 500));
+  const vizText = await dt.evaluate('document.body.innerText || ""');
+  for (const phrase of [
+    'Your Nail Crush',
+    'Named for this business',
+    // The safeguard, rendered. A generic graphic has to say so on its own
+    // card, before anyone sends it.
+    'Generic',
+    // The one thing only a person can do, and the words to do it with.
+    'These exact words must be on the picture',
+    '3 quick wins for your business',
+    // All three ways the picture comes back.
+    'Ctrl+V',
+  ]) {
+    if (!vizText.includes(phrase)) {
+      fail(`the Infographic step did not render ${JSON.stringify(phrase)}`);
+    }
+  }
+  // All three ways in. The link field is a placeholder, so it is not in
+  // innerText -- asserted off the DOM instead, which is also what proves the
+  // field exists rather than that some sentence mentions a link.
+  const vizWaysIn = await dt.evaluate(`(() => {
+    const drop = document.querySelector('[id^="visual-drop-"]');
+    const url = document.querySelector('[id^="visual-item-"] input[type="url"]');
+    const file = document.querySelector('[id^="visual-item-"] input[type="file"]');
+    return {
+      drop: !!drop, file: !!file,
+      url: url ? String(url.getAttribute('placeholder') || '') : '',
+    };
+  })()`);
+  if (!vizWaysIn.drop) fail('the Infographic step offers no paste/drop target');
+  if (!vizWaysIn.file) fail('the Infographic step offers no file picker');
+  if (!/paste the link/i.test(vizWaysIn.url)) {
+    fail(`the link field's placeholder is ${JSON.stringify(vizWaysIn.url)}`);
+  }
+
+  // The thumbnail must be an <img> pointed at the server, not the base64 of
+  // one printed into the page -- the same bug the pairing code had.
+  //
+  // Either outcome is correct here, and both are asserted: the image, with a
+  // src pointing at the server, or -- in this container, where that route
+  // cannot answer without a Sheet -- the named note saying so. What must
+  // never happen is a tick offered beside nothing, or base64 printed as text.
+  const vizShot = await dt.evaluate(`(() => {
+    const img = document.querySelector('[id^="visual-item-"] img');
+    const note = document.querySelector('[id^="visual-noimage-"]');
+    return {
+      has: !!img,
+      src: img ? String(img.getAttribute('src')).slice(0, 20) : '',
+      explained: !!note,
+      leaked: /base64,[A-Za-z0-9+/]{16}/.test(document.body.innerText || ''),
+    };
+  })()`);
+  if (vizShot.has) {
+    if (!vizShot.src.startsWith('/api/screenshot/')) {
+      fail(`the picture src is ${JSON.stringify(vizShot.src)}, not a server path`);
+    }
+  } else if (!vizShot.explained) {
+    fail('the card shows neither the picture nor a reason it is missing');
+  }
+  if (vizShot.leaked) {
+    fail('raw base64 image data is being shown as text on the Infographic step');
+  }
+  // Phone width, with the prompt and the words on screen. The prompt is the
+  // longest unbroken text anywhere in this interface.
+  const vizOverflow = await dt.evaluate(OVERFLOW_PROBE);
+  if (vizOverflow.scrollWidth > vizOverflow.innerWidth + 1) {
+    fail(
+      `the Infographic step scrolls sideways on a phone: ` +
+      `${vizOverflow.scrollWidth}px in ${vizOverflow.innerWidth}px`
+    );
+  }
+  if (vizOverflow.clipped.length) {
+    fail(`the Infographic step clips content: ${vizOverflow.clipped.join(', ')}`);
+  }
+
   // Results, which is new and entirely derived from the summary.
   await dt.evaluate(`document.getElementById('nav-item-results').click()`);
   await new Promise((r) => setTimeout(r, 400));
@@ -417,6 +537,15 @@ try {
 
   const loadedErrors = dt.events
     .filter((e) => e.method === 'Log.entryAdded' && e.params.entry.level === 'error')
+    // The fetch stub above cannot intercept an <img src>, and
+    // /api/screenshot/ is the one route serving a file rather than JSON -- so
+    // in this container, which has no Sheet credentials, it answers 502 and
+    // the browser logs it. That is the container's state, not a defect in
+    // the page: the card has an onError path and says so instead of showing
+    // a broken image, which is asserted above. Matched on the entry's own
+    // url, not on its message, so this exempts that one request and nothing
+    // else that happens to fail the same way.
+    .filter((e) => !String(e.params.entry.url || '').includes('/api/screenshot/'))
     .map((e) => e.params.entry.text);
   for (const message of loadedErrors) {
     fail(`with data, the browser reported: ${message}`);

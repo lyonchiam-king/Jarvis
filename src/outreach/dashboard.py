@@ -75,6 +75,31 @@ STAGE_COMMANDS = {
 
 FULL_RUN = ["discovery", "research", "site-brief", "outreach-draft"]
 
+
+def full_run_for(config) -> list[str]:
+    """The Full pipeline for this campaign's track.
+
+    FULL_RUN above is the original and stays exactly what it was, because a
+    campaign that pitches a page must run what it always ran. A campaign that
+    pitches a graphic needs the image prompts written in the same pass -- a
+    stage nobody presses never runs, which is how reachability shipped and
+    did nothing for weeks.
+
+    "visual" drops the site brief: that stage's whole output is a page this
+    campaign never links to, and writing one per lead is a model call spent
+    on something nothing will read. "both" keeps both, in that order, because
+    the message carries the link as well as the picture.
+    """
+    track = getattr(config.outreach, "track", "website")
+    if track == "visual":
+        return ["discovery", "research", "visual-brief", "outreach-draft"]
+    if track == "both":
+        return [
+            "discovery", "research", "site-brief", "visual-brief",
+            "outreach-draft",
+        ]
+    return list(FULL_RUN)
+
 # Stages that accept `--limit N`. `preflight` just checks connections, so a
 # number would be meaningless there.
 TAKES_LIMIT = {
@@ -1559,7 +1584,9 @@ def create_app(config: Config) -> Flask:
             social_first = bool(social_first)
 
         if what == "full":
-            started = runner.start("Full pipeline", FULL_RUN, limit, social_first)
+            started = runner.start(
+                "Full pipeline", full_run_for(current()), limit, social_first
+            )
         elif what in STAGE_COMMANDS:
             started = runner.start(what, [what], limit, social_first)
         else:
@@ -3412,7 +3439,9 @@ def serve(
             # Runner refuses a second run while one is going, and returning
             # that refusal is what stops the scheduler stacking one on top
             # of whatever a person just started.
-            lambda: app.config["runner"].start("Daily run", FULL_RUN, None, None),
+            lambda: app.config["runner"].start(
+                "Daily run", full_run_for(current()), None, None
+            ),
         )
         print(f"\n  {scheduler.describe(at, datetime.now().astimezone())}")
     else:

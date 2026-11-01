@@ -12,9 +12,10 @@ import { StageNav, StageKey, StageInfo, StageState } from '../components/StageNa
 import { ReachabilityView } from './ReachabilityView';
 import { BriefsQueueView } from './BriefsQueueView';
 import { BuildQueueView } from './BuildQueueView';
+import { VisualQueueView } from './VisualQueueView';
 import { SendQueueView } from './SendQueueView';
 import { CampaignView } from './CampaignView';
-import { Summary, WhatsAppStatus, CampaignConfig, RunLog } from '../types';
+import { Summary, WhatsAppStatus, CampaignConfig, RunLog, VisualQueue } from '../types';
 import { api } from '../api/client';
 
 interface CampaignsViewProps {
@@ -45,6 +46,10 @@ export const CampaignsView: React.FC<CampaignsViewProps> = ({
   const [stage, setStage] = useState<StageKey>(initialStage || 'list');
   const [showSettings, setShowSettings] = useState(false);
   const [campaign, setCampaign] = useState<CampaignConfig | null>(null);
+  // Asked for rather than inferred from the campaign: the track decides
+  // whether this step exists at all, and the counts behind it only mean
+  // something once the server has answered.
+  const [visual, setVisual] = useState<VisualQueue | null>(null);
 
   useEffect(() => {
     if (initialStage) setStage(initialStage);
@@ -53,6 +58,9 @@ export const CampaignsView: React.FC<CampaignsViewProps> = ({
   useEffect(() => {
     api.getCampaign().then((res) => {
       if (res.data) setCampaign(res.data);
+    });
+    api.getVisualQueue().then((res) => {
+      if (res.data) setVisual(res.data);
     });
   }, []);
 
@@ -104,6 +112,25 @@ export const CampaignsView: React.FC<CampaignsViewProps> = ({
       count: summary?.approved_unbuilt || 0,
       blockedReason: noSheet ? 'Connect a Google Sheet first' : undefined,
     },
+    // The branch, inserted only when the campaign asks for graphics. Both
+    // tracks end at the same step: one message per business, whichever
+    // artefact it carries.
+    ...(visual?.enabled
+      ? [
+          {
+            key: 'visual' as StageKey,
+            label: 'Infographic',
+            blurb: 'Make the picture that pitches the gaps',
+            state: describe(
+              (visual.counts?.needs_image || 0) + (visual.counts?.needs_check || 0),
+              (visual.counts?.ready || 0) > 0,
+            ),
+            count:
+              (visual.counts?.needs_image || 0) + (visual.counts?.needs_check || 0),
+            blockedReason: noSheet ? 'Connect a Google Sheet first' : undefined,
+          },
+        ]
+      : []),
     {
       key: 'send',
       label: 'Review & Send',
@@ -163,6 +190,16 @@ export const CampaignsView: React.FC<CampaignsViewProps> = ({
         {stage === 'reachability' && <ReachabilityView />}
         {stage === 'brief' && <BriefsQueueView />}
         {stage === 'build' && <BuildQueueView />}
+        {stage === 'visual' && (
+          <VisualQueueView
+            onRefresh={() => {
+              onRefresh();
+              api.getVisualQueue().then((res) => {
+                if (res.data) setVisual(res.data);
+              });
+            }}
+          />
+        )}
         {stage === 'send' && (
           <SendQueueView whatsappStatus={whatsappStatus} onRefresh={onRefresh} />
         )}

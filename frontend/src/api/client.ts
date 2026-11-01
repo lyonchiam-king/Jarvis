@@ -32,6 +32,9 @@ import {
   WhatsAppStatus,
   ApiResponse,
   Stage,
+  VisualItem,
+  VisualQueue,
+  VisualState,
 } from '../types';
 
 /** Everything the Python side may answer with, before translation. */
@@ -337,6 +340,109 @@ class ApiClient {
 
   async recordBuild(lead_id: string, preview_url: string): Promise<ApiResponse<{ ok: boolean }>> {
     return this.post('/api/record-build', { lead_id, preview_url });
+  }
+
+  // ---------------------------------------------------------- the graphic
+
+  /**
+   * The infographic queue. `enabled` false means this campaign pitches a
+   * page, so the stage is not shown at all -- a panel that can never do
+   * anything reads as broken.
+   */
+  async getVisualQueue(): Promise<ApiResponse<VisualQueue>> {
+    const res = await this.request<Raw>('/api/visual/queue');
+    return this.map(res, (d) => ({
+      enabled: !!d.enabled,
+      track: d.track || 'website',
+      tool_name: d.tool_name || '',
+      // Left empty rather than defaulted to a guess: a button pointing at the
+      // wrong address is worse than no button, and nothing here knows the
+      // real one.
+      tool_url: d.tool_url || '',
+      signature: d.signature || '',
+      counts: (d.counts || {}) as Record<VisualState, number>,
+      catalogue: {
+        styles: d.catalogue?.styles || [],
+        layouts: d.catalogue?.layouts || [],
+        chosen_styles: d.catalogue?.chosen_styles || [],
+        chosen_layouts: d.catalogue?.chosen_layouts || [],
+      },
+      queue: (d.queue || []).map(
+        (v: Raw): VisualItem => ({
+          lead_id: v.lead_id,
+          business_name: v.name || v.lead_id,
+          category: v.category || '',
+          prompt: v.prompt || '',
+          gaps: v.gaps || '',
+          style: v.style || '',
+          layout: v.layout || '',
+          specific: !!v.specific,
+          state: (v.state || 'needs_image') as VisualState,
+          approval: v.approval || '',
+          expected_text: v.expected_text || [],
+          created_at: v.created_at || '',
+        })
+      ),
+    }));
+  }
+
+  /** Hand the picture back: the bytes as a data URL, or an address. */
+  async attachVisual(
+    lead_id: string,
+    source: { data_url?: string; url?: string }
+  ): Promise<ApiResponse<{ ok: boolean; state: VisualState; bytes: number }>> {
+    return this.post('/api/visual/attach', { lead_id, ...source });
+  }
+
+  /**
+   * Record that a person has read the words on the picture. The gate, not
+   * advice: nothing here can test that the text rendered correctly, and a
+   * garbled word on a graphic carrying your name cannot be fixed after it
+   * has been sent.
+   */
+  async confirmVisual(
+    lead_id: string
+  ): Promise<ApiResponse<{ ok: boolean; state: VisualState }>> {
+    return this.post('/api/visual/confirm', { lead_id });
+  }
+
+  async clearVisual(
+    lead_id: string
+  ): Promise<ApiResponse<{ ok: boolean; state: VisualState }>> {
+    return this.post('/api/visual/clear', { lead_id });
+  }
+
+  async decideVisual(
+    lead_id: string,
+    decision: 'Skip' | 'Approved'
+  ): Promise<ApiResponse<{ ok: boolean; approval: string }>> {
+    return this.post('/api/visual/skip', { lead_id, decision });
+  }
+
+  async regenerateVisual(
+    lead_id: string
+  ): Promise<ApiResponse<{ ok: boolean; prompt: string; style: string; layout: string }>> {
+    return this.post('/api/visual/regenerate', { lead_id });
+  }
+
+  async getTrack(): Promise<
+    ApiResponse<{ track: string; tracks: string[]; signature: string; tool_name: string }>
+  > {
+    return this.request('/api/track');
+  }
+
+  async setTrack(
+    track: string,
+    signature: string
+  ): Promise<ApiResponse<{ ok: boolean; track: string }>> {
+    return this.post('/api/track', { track, signature });
+  }
+
+  async setVisualRotation(
+    styles: string[],
+    layouts: string[]
+  ): Promise<ApiResponse<{ ok: boolean; styles: string[]; layouts: string[] }>> {
+    return this.post('/api/visual/rotation', { styles, layouts });
   }
 
   // ------------------------------------------------------------------ send

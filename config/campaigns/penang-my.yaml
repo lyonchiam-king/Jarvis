@@ -145,6 +145,22 @@ outreach:
     - "Meta ads on Facebook and Instagram, targeted to your area"
     - "Google ads, so you appear the moment someone searches for what you do"
 
+  # Which artefact the message carries. One setting, not three that can
+  # disagree: it decides what gets written, what the draft waits for, and
+  # what the message claims.
+  #
+  #   website  a demo site is built and the message links to it. The
+  #            original, and what this campaign does today.
+  #   visual   a one-page graphic naming the gaps we can evidence. The
+  #            prompt is written here, you generate the picture in the image
+  #            tool, and paste it back into the dashboard's Infographic step.
+  #   both     both -- and still exactly ONE message per business: the
+  #            picture is attached and the page link rides beside it.
+  #
+  # `visual` and `both` also need `visual.signature` further down, or the
+  # campaign refuses to load: it is the ribbon on every graphic.
+  track: website
+
   # Places rarely returns email for these businesses, so WhatsApp leads.
   channel_priority:
     - whatsapp
@@ -231,6 +247,59 @@ build:
   # builders (e.g. back to Lovable). Sheet columns are unaffected.
   # site_builder_name: Google AI Studio
   # site_builder_url: https://aistudio.google.com/
+
+# The infographic track's craft settings. Every one of these is the same
+# answer for every business -- which is why they live here and not in a
+# schema field the model fills in per lead. The per-business part is the
+# evidence, which comes out of the Research tab.
+#
+# Nothing here switches the track on; `outreach.track` above is the one
+# switch, so there is nothing in this block that can disagree with it.
+visual:
+  # The ribbon along the bottom of every graphic, rendered word for word.
+  # REQUIRED once outreach.track is `visual` or `both`.
+  #   signature: "by Lyon, Business Growth Consultant"
+
+  # The rotation. Leave both lists out and every style and layout is in
+  # play, picked per industry and never repeating the previous lead's pair.
+  # Cutting these two lists narrows every industry at once -- the one place
+  # to trim the series down to the looks that actually work. There are tick
+  # boxes for both on the dashboard's Infographic step.
+  #
+  #   styles:   flat-vector paper-cut claymation chalkboard retro-comic
+  #             watercolour pop-art
+  #   layouts:  rows road flip-cards sticky-notes ladder
+  #
+  #   styles:
+  #     - paper-cut
+  #     - watercolour
+  #   layouts:
+  #     - rows
+
+  # How many problem/solution cards at most. Three is the format. Fewer
+  # evidenced gaps produce fewer cards, never a padded third -- a claim the
+  # owner can check and disprove is worse than saying less.
+  #   max_cards: 3
+
+  # Spend one small model call per lead re-wording the chosen cards in that
+  # trade's own vocabulary ("term fees" rather than "prices"). Turn it off
+  # and the fixed wording is used, which is always true and slightly
+  # blander. A failed call falls back to it either way.
+  #   localise_wording: true
+
+  # Whether the card drawn from their own reviews may be used. It is the
+  # strongest evidence there is and the easiest to read as criticism, so it
+  # is a judgement about tone rather than a constant. The wording rules
+  # forbid naming the complaint, but turn this off if a graphic ever reads
+  # as a dig.
+  #   use_review_pain: true
+
+  # The tool you paste image prompts into. The URL is blank by default on
+  # purpose -- a button pointing at a guessed address is worse than no
+  # button, and nothing in this repo can check one. Fill it in and the
+  # Infographic step grows an "Open ..." button.
+  #   image_tool_name: Google Flow
+  #   image_tool_url: ""
 
 compliance:
   # ISO 3166-1 alpha-2. Drives the outreach-law gate in compliance.py.

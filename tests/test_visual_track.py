@@ -465,32 +465,40 @@ def test_the_live_campaign_still_loads_on_the_original_track():
     assert cfg.outreach.track == "website"
 
 
-def test_an_unknown_track_fails_at_load_naming_the_fix(tmp_path):
-    src = (
-        open(PENANG).read().replace("  sender_name:", "  track: graphics\n  sender_name:")
-    )
+def campaign_with(tmp_path, track, *, extra=""):
+    """The live campaign with its own `track:` line replaced.
+
+    Replaced, never prepended: a second `outreach.track` key is last-wins
+    YAML, so the config loaded would not be the config the test thought it
+    wrote. The `visual:` block is likewise edited rather than appended, since
+    the file now ships one.
+    """
+    src = open(PENANG).read()
+    assert "\n  track: website\n" in src, "the campaign file no longer names a track"
+    src = src.replace("\n  track: website\n", f"\n  track: {track}\n", 1)
+    if extra:
+        assert "\nvisual:\n" in src, "the campaign file no longer has a visual block"
+        src = src.replace("\nvisual:\n", f"\nvisual:\n{extra}", 1)
     path = tmp_path / "c.yaml"
     path.write_text(src)
+    return path
+
+
+def test_an_unknown_track_fails_at_load_naming_the_fix(tmp_path):
     with pytest.raises(ConfigError, match="outreach.track must be one of"):
-        load_config(path, env_file=None)
+        load_config(campaign_with(tmp_path, "graphics"), env_file=None)
 
 
 def test_a_graphics_campaign_must_say_who_the_graphics_are_from(tmp_path):
-    src = open(PENANG).read().replace(
-        "  sender_name:", "  track: visual\n  sender_name:"
-    )
-    path = tmp_path / "c.yaml"
-    path.write_text(src)
     with pytest.raises(ConfigError, match="visual.signature"):
-        load_config(path, env_file=None)
+        load_config(campaign_with(tmp_path, "visual"), env_file=None)
 
 
 def test_a_graphics_campaign_loads_once_it_has_a_signature(tmp_path):
-    src = open(PENANG).read().replace(
-        "  sender_name:", "  track: both\n  sender_name:"
-    ) + '\nvisual:\n  signature: "by Lyon, Business Growth Consultant"\n'
-    path = tmp_path / "c.yaml"
-    path.write_text(src)
+    path = campaign_with(
+        tmp_path, "both",
+        extra='  signature: "by Lyon, Business Growth Consultant"\n',
+    )
     cfg = load_config(path, env_file=None)
     assert cfg.outreach.track == "both"
     assert cfg.visual.signature == "by Lyon, Business Growth Consultant"
@@ -499,21 +507,18 @@ def test_a_graphics_campaign_loads_once_it_has_a_signature(tmp_path):
 def test_a_typo_in_the_style_list_fails_at_load(tmp_path):
     """Dropped silently, it looks exactly like the rotation ignoring the
     setting -- the drift discovery.social_domains already fails loudly over."""
-    src = open(PENANG).read() + (
-        '\nvisual:\n  signature: "by Lyon"\n  styles:\n    - paper-cut\n'
-        "    - watercolor\n"
+    path = campaign_with(
+        tmp_path, "visual",
+        extra='  signature: "by Lyon"\n  styles:\n    - paper-cut\n    - watercolor\n',
     )
-    path = tmp_path / "c.yaml"
-    path.write_text(src)
     with pytest.raises(ConfigError, match="visual.styles lists 'watercolor'"):
         load_config(path, env_file=None)
 
 
 def test_a_guessed_image_tool_url_is_refused(tmp_path):
-    src = open(PENANG).read() + (
-        '\nvisual:\n  signature: "by Lyon"\n  image_tool_url: "labs.google"\n'
+    path = campaign_with(
+        tmp_path, "visual",
+        extra='  signature: "by Lyon"\n  image_tool_url: "labs.google"\n',
     )
-    path = tmp_path / "c.yaml"
-    path.write_text(src)
     with pytest.raises(ConfigError, match="image_tool_url must be a full"):
         load_config(path, env_file=None)
