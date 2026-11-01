@@ -86,7 +86,7 @@ browser, and the first thing on the page is a short setup list.
 
 Press **Create my Google Sheet**. A Google window opens; sign in with your
 own account and allow access. The spreadsheet is made **in your Drive**,
-with all five tabs already set up, and the dashboard remembers it. You never
+with every tab already set up, and the dashboard remembers it. You never
 have to create a spreadsheet or copy an ID out of a web address.
 
 > If you close that Google window without finishing, nothing is created.

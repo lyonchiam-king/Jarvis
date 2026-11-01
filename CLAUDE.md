@@ -37,6 +37,10 @@ On Windows the equivalents are `run.bat` and `Dashboard.bat`.
 src/outreach/
   config.py        campaign YAML + .env loading, all validation at load time
   selection.py     who gets picked next, and in what order -- shared by stages
+  gaps.py          which gaps a business may be shown, and the evidence for
+                   each -- never a model's choice
+  visual.py        the infographic's look: styles, layouts, characters,
+                   palettes, the rotation, and where a pasted image lives
   sheets.py        Google Sheets client; column-position based
   schema.py        tab + column definitions
   stage.py         the Stage enum and legal transitions
@@ -45,7 +49,7 @@ src/outreach/
   env_edit.py      writes keys into .env without ever reading them back
   modelcheck.py    proves a model can produce every required shape
   stages/          discovery, research, reachability, site_brief,
-                   outreach_draft, publish
+                   visual_brief, outreach_draft, publish
   providers/       places, sheets auth, llm, social, web, lovable, sitegen,
                    whatsapp, cloudflare
   images.py        generated page imagery -- mood and texture, never the premises
@@ -60,7 +64,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1405 tests, pytest, no CI -- the suite is the only gate
+tests/             1529 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -1095,6 +1099,122 @@ a bad first render into a lost morning. Both pages get their own
 `start_url` manifest so each has its own home-screen icon; the old one stays
 the default until he says otherwise.
 
+**A graphic makes three checkable claims, so no model may choose them.** The
+infographic puts statements about a real business on a picture with Lyon's
+name along the bottom, and the owner can check every one in about two
+seconds. A model asked to "name three gaps" always returns three, because
+that is what the format asks for -- the same failure as asking it to list the
+services on offer. So `gaps.py` holds the rules and their wording, each with
+a test the research row either passes or does not, and the one model call may
+only re-word a chosen card in that trade's vocabulary. The returned cards are
+matched back **by id**: an id it invented is dropped, which is what enforces
+"never add a card" rather than the system prompt asking nicely. Every card
+carries an `evidence` line into `Gaps Used`, because a claim sent months ago
+is defensible only if the row still says what justified it.
+
+**Three cards is the format, not a quota.** Two evidenced gaps produce two
+cards. Fewer than `MIN_SPECIFIC` produces the *generic* graphic -- no business
+name, no claim about them -- and his own two sample images were already
+exactly those two modes, so the system only has to pick. A specific claim that
+turns out to be wrong is worse than a general one that is true.
+
+**A generic graphic may never be described as made for them.** The owner can
+see from the picture that it was not, so the lie fails at the only moment
+anyone is reading. `Specific` is carried from the Sheet into the copy prompt,
+and a blank cell reads as *not* specific -- a row written before the column
+existed must not license the claim.
+
+**`specific` is not passed at all when no graphic is attached.** It defaults
+to what every existing caller already got, because adding a track must not
+change the prompt the other tracks produce -- not even by one keyword. A test
+asserting `[True]` on the website track is what caught it.
+
+**The visual track writes no Stage.** `Stage` is a forward-only sequence
+compared with `>=`, so a second entry at rank 2 would make `advance` return
+the *other* one and the site-brief stage would silently stop recording
+itself. A lead's progress down this track is recorded by its Visual Briefs
+row existing -- the same arrangement as the WhatsApp verdict living in a
+column rather than a stage, and for the same reason.
+
+**A lead whose picture has not come back is held, not drafted.** A drafted row
+advances the Stage and retires the lead, so when the image finally arrived
+nothing would ever message them. Exactly the bug `held_for_check` exists to
+prevent, one stage further down. A graphic marked `Skip` is a *decision*
+rather than a wait, so that lead falls through to the page pitch instead of
+being held for ever.
+
+**"Both" is one message.** Not two. The graphic is the attachment and the page
+link rides in the offer beside it, because the same business messaged twice in
+a day is the thing this pipeline works hardest to avoid. `attachment_for`
+returns one picture for the same reason the relay sends one, and the graphic
+wins over the site screenshot: it is what the message is written about, and the
+page it displaces is still in the text as a link.
+
+**Nothing here can read the words on the picture, so the tick is the gate.**
+The image is generated by hand in Google Flow, outside this tool. A garbled
+word on a graphic carrying your name is the one failure that cannot be fixed
+after sending, so `Text Confirmed` is binding rather than advisory: the card
+shows the exact strings the prompt asked for, next to the picture, at about
+the width WhatsApp gives it in a chat. Attaching a new image **clears** any
+previous tick -- carrying one across from the picture it replaced would attach
+unchecked words to a real message. The expected text is lifted back out of the
+stored prompt, not recomputed from the Sheet: the prompt is what was actually
+pasted into the tool, so it is the only honest source.
+
+**A path stored in the Sheet is user input.** `Image File` is a cell a person
+can type into, so `resolve_image` resolves it and then checks containment
+inside the visuals directory -- without that, a hand-edited
+`../credentials/token.json` would be served by the dashboard and attached to a
+WhatsApp message. The screenshot route has always refused a filename off the
+wire; this is the same rule for a filename off the Sheet.
+
+**A URL typed into the dashboard is a request made from the dashboard.** Which
+is Lyon's machine, or a container inside a private network. So
+`is_fetchable_url` allows only public http(s) and refuses a host that
+*resolves* anywhere private -- not a blocklist of strings, because `127.0.0.1`
+is one spelling of loopback out of many and `localtest.me` resolves to it from
+a name that looks public. The download is streamed against a cap rather than
+read whole, and the content type must be an image: image tools hand out links
+to *pages* as often as to files.
+
+**A layout phrase that names a count argues with the card count.** The first
+draft had "three numbered stops" inside each layout description, so a
+two-card graphic asked for two cards under a layout demanding three -- and a
+model resolves that contradiction by inventing a third. The count leads the
+sentence and the layout describes only a shape.
+
+**A Full pipeline button that ignores the track means the new stage never
+runs.** Reachability shipped as a stage with no button and did nothing for
+weeks. `full_run_for` reads the track: `visual` writes image prompts *instead
+of* site briefs, since that stage's whole output would be a page the campaign
+never links to, and `both` writes both in order. `FULL_RUN` itself is
+untouched, so the original track still runs exactly what it ran.
+
+**The campaign file now ships `track:` and a `visual:` block, so a test must
+replace them.** Prepending a second `outreach.track` is last-wins YAML and the
+config loaded is not the config the test wrote -- the duplicate-key rule
+above, met again the moment the template grew the key. `campaign_with` in
+`tests/test_visual_track.py` asserts the line exists before replacing it, so
+the helper fails loudly if the template is reorganised rather than quietly
+testing nothing.
+
+**`_ensure_section` exists because `visual:` is the first section a rewrite
+had to create.** Every earlier rewrite edited a section the shipped file
+already has. Saving a signature into a campaign written before this track
+would otherwise fail with "no such section" on precisely the file everybody
+has on disk.
+
+**Narrowing the series has one place.** `visual.styles` and `visual.layouts`
+filter every industry's rotation ring, so unticking a style on the page
+removes it everywhere -- the alternative is seven rings to keep in step by
+hand. An allow-list that empties a ring still has to answer, so it falls back
+to the first allowed pair: narrowing the series must never be able to stop it
+producing a graphic.
+
+**An unknown style name fails at load, naming the fix.** Dropped silently from
+the ring it looks exactly like the rotation ignoring the setting -- the drift
+`discovery.social_domains` already fails loudly over.
+
 ## Conventions
 
 - Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`, `chore:`)
@@ -1182,3 +1302,17 @@ Say so rather than implying otherwise:
   with the text in place is Lyon's to confirm.
 - The Ollama / OpenRouter transports have never reached a real endpoint --
   outbound egress is blocked. `modelcheck` is how Lyon verifies them himself.
+- Nothing here has ever opened Google Flow, generated a graphic, or seen one
+  arrive on a phone. The prompt is rendered and asserted, the image intake is
+  driven with real bytes, and the attachment path is the screenshot path that
+  already works -- but whether Flow produces a readable picture from these
+  prompts, and whether its text comes out spelled correctly, is Lyon's to
+  judge. That is also why the confirmation tick exists rather than a check.
+- The **URL** half of the image intake has never fetched anything. Egress is
+  blocked here, so `is_fetchable_url` is driven against real addresses (every
+  private and loopback form is refused, which is testable offline) and
+  `_download_image` against a stand-in. A public host cannot even be resolved
+  from this container, so the accepting branch is unproven end to end.
+- No graphic has been sent through the relay. The body limit was raised for a
+  PNG screenshot and a 16:9 infographic is smaller, so the arithmetic says it
+  fits; nobody has watched one arrive.

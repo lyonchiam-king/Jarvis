@@ -137,7 +137,7 @@ usual numbers:
 
 1. **Their own Google Sheet.** They press **Create my Google Sheet**, sign in
    with their own Google account, and the spreadsheet is created in *their*
-   Drive with all five tabs already set up. The ID is saved for them — no
+   Drive with every tab already set up. The ID is saved for them — no
    spreadsheet to make by hand, no ID to copy out of a web address. If they
    close the Google window without finishing, nothing is created and they can
    just press it again.
@@ -636,6 +636,136 @@ Turn it off if the pages come back worse — a longer prompt is not always a
 better one, and you are the judge of that. To apply a change to briefs that
 already exist, run **site-brief --rewrite**; a normal run skips anything
 already briefed, by design.
+
+## The second pitch: a picture instead of a page
+
+A site is one way to open a conversation. The other is a single graphic that
+names the few things costing them customers, and what the businesses doing
+well do instead. Three cards, their name on it, your name along the bottom.
+
+Nothing about the website track changes. This sits beside it.
+
+### Switching it on
+
+Campaign settings → **Track**:
+
+| Track | What the message carries |
+|---|---|
+| **Website** | The demo site, linked. The original, and what you run today. |
+| **Infographic** | The picture, attached. No site is built. |
+| **Both** | The picture attached **and** the site link in the text — still one message. |
+
+**Both** is one message, not two. The same business messaged twice in a day is
+the thing this whole tool works hardest to avoid, so the picture leads and the
+link rides beside it.
+
+You also have to fill in **Signature** — the ribbon along the bottom of every
+graphic, e.g. *by Lyon, Business Growth Consultant*. Without it the tool
+refuses to start, because a series of graphics with nothing identifying them
+is not a series.
+
+### What a day looks like on this track
+
+1. **Run this morning's batch.** It now writes an image prompt per lead as
+   well, from the research it already has. One small model call each.
+2. **Step 3b, Infographic.** One card per lead. Press **Copy prompt**, paste it
+   into Google Flow, generate the picture.
+3. **Paste the picture back.** Click the box and press Ctrl+V, drop the file on
+   it, or paste the link and press **Fetch it** — whichever you have.
+4. **Read the words.** The card shows the picture at about the size WhatsApp
+   gives it in a chat, with the exact words that are supposed to be on it
+   right underneath. Check them, then press **The words are right**.
+5. **Step 4, Send.** The picture is attached to the message. Press Send.
+
+Step 4 holds a lead until step 4 of that list is done. That is deliberate:
+until someone has read the words, there is no message, because the message is
+written about a picture nobody has checked.
+
+### Why you have to read the words yourself
+
+Google Flow is outside this tool. Jarvis writes the prompt and takes the
+picture back, and at no point can it see what the picture says — so it cannot
+spell-check it. A garbled word on a graphic with your name on it is the one
+mistake that cannot be fixed after you press Send.
+
+More elaborate layouts garble text more often. The winding road and the flip
+cards are the two to watch.
+
+### What a card is allowed to claim
+
+This is the part worth understanding, because it is what keeps the pitch
+honest.
+
+A graphic makes three statements about a real business, and the owner can
+check every one in about two seconds. So the cards are **not** written by the
+model. They come from a fixed list of gaps, each with a test the research
+either passes or does not:
+
+- **No website** — Google lists none.
+- **Everything lives in the feed** — their only link is a social page.
+- **The same question keeps coming up** — drawn from their own reviews.
+- **Great reviews, nowhere to send them** — a high rating with no site.
+- **Only N reviews to go on** — Google's own count.
+- **The phone is the only way in** — the email search found nothing.
+
+Open **Why these cards** on any card and you will see which rule chose each one
+and the evidence behind it. That line is stored on the Sheet, so a graphic you
+sent months ago can still be defended.
+
+The model's only job is to say the same thing in that trade's words — *term
+fees* rather than *prices* for a tuition centre. It cannot add a card, and if it
+tries, the extra one is thrown away.
+
+**Two evidenced gaps means two cards.** Three is the format, not a quota.
+
+**Fewer than two and the graphic goes out generic** — no business name, no
+claim about them, just three gaps every small business recognises. The card
+says **Generic** so you can see which is which before you send it, and the
+message is forbidden from pretending it was made for them. A general picture
+honestly described beats a specific one that is wrong.
+
+### Changing how they look
+
+Five things vary across the series and the content does not:
+
+- **Style** — flat vector, paper-cut, claymation, chalkboard, retro comic,
+  watercolour, pop-art.
+- **Layout** — rows, a winding road, flip cards, sticky notes, a ladder.
+- **Character** — an owl for tuition, a fox for a trade, a lightbulb for
+  beauty. Matched to the trade, not rotated, so it always fits.
+- **Palette** — the industry's, for now. Reading a business's real brand
+  colours off their logo is not something this does yet, so it does not pretend
+  to.
+- The coral problem cards, the mint solution cards and your ribbon **never**
+  change, so the series still reads as one person's work.
+
+Style and layout rotate per industry and never repeat the previous lead's pair,
+so ten salons in a row do not all get the same graphic. Once you know which
+looks work, untick the rest in the Infographic step — that narrows every
+industry at once.
+
+**Different look** on a card re-rolls that one prompt onto the next pair in the
+rotation. The picture and your confirmation are kept; it is the prompt that
+changes.
+
+### Two other buttons
+
+**Not this one** retires a graphic without stranding the lead — it stops being
+held for a picture and is messaged with the page instead. **Put it back**
+undoes that.
+
+**Wrong picture** forgets the image so you can paste a corrected one. The file
+stays on disk; it cost a generation, and nothing here deletes your only copy of
+it.
+
+### What this does not do yet
+
+- **No animation.** A moving file is a video to WhatsApp, not an image —
+  different message type and megabytes rather than kilobytes. Still pictures
+  first.
+- **No brand colours.** Nothing reads their logo. The palette is the
+  industry's.
+- **No automatic spell-check.** See above — Flow is outside the tool.
 
 ## Where tomorrow's 60 come from
 

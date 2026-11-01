@@ -24,9 +24,15 @@ briefs, site build, outreach drafts. Nothing sends automatically.
           │
           ├─► Research tab      reviews + social → structured brief
           ├─► Site Briefs tab   ready-to-paste site builder prompt
+          ├─► Visual Briefs tab image prompt for the infographic pitch
           ├─► Outreach Log tab  Gmail draft + WhatsApp text
           └─► Errors tab        anything that failed, per lead
 ```
+
+`outreach.track` picks which artefact the message carries: the demo site
+(`website`, the default), a one-page infographic naming the gaps (`visual`),
+or both in one message (`both`). Both tracks share research and end at the
+same place — a message you read before it goes.
 
 Every stage is separately runnable. Nothing sends automatically — email lands
 in your Gmail **drafts** and you press send.
@@ -242,13 +248,14 @@ https://www.googleapis.com/auth/gmail.compose   create drafts
 | Command | What it does |
 |---|---|
 | `outreach preflight` | Checks config, Places key, OAuth, and Sheet access. Costs one Places request. |
-| `outreach init-sheet` | Creates the spreadsheet with all five tabs. Idempotent — repairs missing tabs on an existing Sheet. |
+| `outreach init-sheet` | Creates the spreadsheet with all six tabs. Idempotent — repairs missing tabs on an existing Sheet. |
 | `outreach compliance` | Prints the outreach rules on file for the campaign's country. |
 | `outreach run discovery` | **Stage 1.** Finds no-website businesses, writes to `Leads`. |
 | `outreach run discovery --dry-run` | Searches and reports without touching the Sheet or needing Google credentials. |
 | `outreach run research` | **Stage 2.** Pulls reviews + social, writes a brief per lead to `Research`. |
 | `outreach run site-brief` | **Stage 4.** Writes a ready-to-paste site builder prompt per researched lead. Free — no builds. |
 | `outreach run site-build` | **Stage 4b.** Builds the sites you marked `Approved` via your site builder. |
+| `outreach run visual-brief` | Writes one infographic prompt per researched lead, for the `visual` / `both` tracks. One small model call each; generates no image. |
 | `outreach run outreach-draft` | **Stage 5.** Creates Gmail **drafts** and WhatsApp text. Sends nothing. |
 | `--limit N` | On any stage: process fewer than the batch size. Good for a first trial. |
 | `--dry-run` | On `discovery` and `outreach-draft`: do the work, write nothing. |
@@ -306,7 +313,7 @@ run dies at lead 47, the first 40 are already saved and the next run starts at
 
 ## The Sheet
 
-Five tabs, all keyed on **Lead ID** (the Google `place_id`) in column A. That
+Six tabs, all keyed on **Lead ID** (the Google `place_id`) in column A. That
 key is what makes re-runs idempotent — running discovery twice over Georgetown
 refreshes rows instead of duplicating them.
 
@@ -329,6 +336,7 @@ it.
 
 - **`Research`** — tone, services, price tier, customer praise/pain points, suggested website angle, social handle/bio/post, **`Social Profiles`** (every profile found, as `platform handle url`, one per line), email found and where it came from
 - **`Site Briefs`** — the site builder prompt, plus a manual `Approval Status` column you set to `Approved` before anything is built
+- **`Visual Briefs`** — the infographic prompt, the evidence behind every card it claims (`Gaps Used`), the look it was rolled onto, and the image once it is pasted back. `Text Confirmed` is the gate: no message carries a graphic until a person has read the words on it, because nothing here can see what the picture says
 - **`Outreach Log`** — Gmail draft ID and link, WhatsApp message text to copy, plus manual `Status` / `Sent At` / `Notes`
 - **`Errors`** — timestamp, stage, lead, error type, message, whether retrying could help
 
