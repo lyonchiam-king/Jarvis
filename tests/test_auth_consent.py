@@ -412,3 +412,19 @@ def test_the_refusal_says_it_is_a_replaced_client_not_an_expiry(tmp_path, monkey
     # And neither client id, nor the secret beside one of them.
     assert "GOCSPX-never-show-this" not in message
     assert "506060726614" not in message
+
+
+def test_the_cure_names_the_page_and_warns_off_the_picker(monkeypatch, tmp_path):
+    """Two of his projects share the display name "SME Outreach", so the
+    Console's picker and the chip at the top prove nothing -- the link is
+    the only safe route. And he went to Enabled APIs & services, which is a
+    different screen with nothing on it to press."""
+    from outreach import auth
+
+    client = tmp_path / "client.json"
+    client.write_text(json.dumps({"installed": {"project_id": "sme-outreach-504919"}}))
+
+    note = auth._seven_day_note(client)
+    assert "OAuth consent screen" in note
+    assert "Enabled APIs" in note
+    assert "share a display name" in note

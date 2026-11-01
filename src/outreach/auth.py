@@ -68,13 +68,24 @@ def _seven_day_note(client_file: Path) -> str:
     see `client_project`.
     """
     project = client_project(client_file)
+    # The link carries the project because two projects can share a display
+    # name -- his do -- so the name in the Console's picker proves nothing
+    # and the chip at the top looks identical on the wrong one. And the page
+    # has two names depending on which Console a project shows you, so both
+    # are given: looking for the wrong one ends up on Enabled APIs, which is
+    # a different screen with nothing to press.
     where = (
         f"  1. Open https://console.cloud.google.com/auth/audience"
         f"?project={project}\n"
-        f"     (that is this tool's project: {project})\n"
+        f"     (this tool's project is {project} -- use the link, not the\n"
+        f"      project picker: two projects can share a display name)\n"
+        f"     The page is called Audience, or OAuth consent screen on an\n"
+        f"     older Console. It is NOT Enabled APIs & services.\n"
         if project
         else "  1. Open https://console.cloud.google.com/auth/audience\n"
-             "     and pick the project that issued this sign-in\n"
+             "     and pick the project that issued this sign-in. The page is\n"
+             "     called Audience, or OAuth consent screen on an older\n"
+             "     Console. It is NOT Enabled APIs & services.\n"
     )
     return (
         "\nThis usually means the seven-day limit, not anything you did.\n"
