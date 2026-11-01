@@ -568,7 +568,16 @@ class _PerThreadClient:
     """
 
     def __init__(self, key: tuple) -> None:
+        # Unpacked once, by name. The key grew a fourth element when the
+        # service account arrived, and every `self._key[3]` elsewhere would
+        # be one more place to get an index wrong -- the same positional
+        # hazard the Sheet itself has. A short key is still accepted so the
+        # service account is simply absent, which is what it means.
         self._key = key
+        self._client_file = key[0]
+        self._token_file = key[1]
+        self._sheet_id = key[2]
+        self._service_account_file = key[3] if len(key) > 3 else None
         self._local = threading.local()
         # Building credentials can refresh and rewrite the token file, so two
         # threads arriving at once must not both do it.
@@ -579,17 +588,21 @@ class _PerThreadClient:
         if existing is not None:
             return existing
         with self._build_lock:
-            from .auth import get_credentials
+            from .auth import sheets_credentials
             from .sheets import SheetsClient
 
             # allow_consent=False: nobody is watching a terminal here. Consent
             # opens a browser and blocks until it is completed, so an expired
             # token would hang this request thread rather than fail it, and
-            # the page would just stop answering.
-            creds = get_credentials(
-                self._key[0], self._key[1], allow_consent=False
+            # the page would just stop answering. A service account never
+            # reaches that path at all, which is the point of it.
+            creds = sheets_credentials(
+                self._client_file,
+                self._token_file,
+                self._service_account_file,
+                allow_consent=False,
             )
-            client = SheetsClient(creds, self._key[2])
+            client = SheetsClient(creds, self._sheet_id)
         self._local.client = client
         return client
 
@@ -610,10 +623,14 @@ def _sheets_client(config: Config):
     switched to a different Sheet or token.
     """
     global _shared_sheets, _shared_sheets_key
+    # The service account file is part of the key: dropping one in is how
+    # the credential changes, and a cached client built on the old sign-in
+    # would go on failing with a key sitting right there on disk.
     key = (
         config.secrets.oauth_client_file,
         config.secrets.token_file,
         config.secrets.sheet_id,
+        config.secrets.service_account_file,
     )
     with _shared_sheets_lock:
         if _shared_sheets is None or _shared_sheets_key != key:
@@ -627,6 +644,25 @@ def _invalidate_sheets_cache() -> None:
     with _shared_sheets_lock:
         if _shared_sheets is not None:
             _shared_sheets.invalidate()
+
+
+
+def _explain_sheets(exc: Exception, config: Config) -> str:
+    """What to show when the Sheet refuses.
+
+    The commonest failure right after installing a service account is
+    forgetting to share the spreadsheet with it, and Google reports that as
+    a flat permission error that reads like a broken key.
+    """
+    from .auth import service_account_email, uses_service_account
+    from .sheets import explain
+
+    robot = (
+        service_account_email(config.secrets.service_account_file)
+        if uses_service_account(config.secrets.service_account_file)
+        else ""
+    )
+    return explain(exc, robot_email=robot, sheet_id=config.secrets.sheet_id)
 
 
 def _load_summary(config: Config) -> Summary:
@@ -1243,7 +1279,7 @@ def create_app(config: Config) -> Flask:
         try:
             summary = _load_summary(c)
         except Exception as exc:  # noqa: BLE001
-            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+            return jsonify({"error": _explain_sheets(exc, c)}), 200
         return jsonify(
             {
                 "total": summary.total,

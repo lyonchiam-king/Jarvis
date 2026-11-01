@@ -118,6 +118,43 @@ def api_disabled_message(detail: str) -> str:
     return "\n".join(lines)
 
 
+class NotSharedWithRobot(SheetsError):
+    """The service account can reach Google but not this spreadsheet.
+
+    Its own class because the repair is a Share dialog, not a credential:
+    everything about the sign-in is working, and the usual advice about
+    tokens and consent screens would send the reader a long way from the
+    one thing that fixes it.
+    """
+
+
+def not_shared_message(email: str, sheet_id: str = "") -> str:
+    """The one thing nobody thinks of after installing a robot account.
+
+    A service account owns nothing it was not given. Google answers a
+    spreadsheet it cannot see with "The caller does not have permission",
+    which reads as a broken key -- and the key is fine. It simply has not
+    been invited.
+    """
+    where = (
+        f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+        if sheet_id
+        else "your Sheet"
+    )
+    return (
+        "The service account cannot open your Sheet.\n\n"
+        "Nothing is wrong with the key -- it has just not been invited.\n"
+        "A service account is its own account, and sees only what is\n"
+        "shared with it.\n\n"
+        f"  1. Open {where}\n"
+        "  2. Press Share\n"
+        f"  3. Paste this address and give it Editor:\n"
+        f"       {email or '(the client_email in your service account file)'}\n"
+        "  4. Press Send. Ignore the warning about sharing outside your\n"
+        "     organisation -- that address is yours.\n"
+    )
+
+
 def _with_retry(fn: Callable[[], object], what: str) -> object:
     """Retry transient Sheets failures with exponential backoff and jitter.
 
@@ -159,6 +196,26 @@ class UpsertResult:
     @property
     def total(self) -> int:
         return self.inserted + self.updated
+
+
+def explain(exc: Exception, *, robot_email: str = "", sheet_id: str = "") -> str:
+    """A Sheets failure, in words that name the repair.
+
+    Done here rather than inside `_with_retry` because thirteen call sites
+    would each have to carry the robot's address to tell this story, and a
+    parameter threaded through thirteen places is twelve chances to forget
+    it. The two screens that show a Sheets error to a person -- the
+    dashboard and preflight -- both hold the config already.
+    """
+    if isinstance(exc, (ApiNotEnabled, NotSharedWithRobot, SheetSchemaError)):
+        return str(exc)
+    detail = str(exc)
+    # Google says the same sentence whether the caller is a person or a
+    # robot, but only one of them has an obvious fix.
+    denied = "does not have permission" in detail or "PERMISSION_DENIED" in detail
+    if denied and robot_email:
+        return not_shared_message(robot_email, sheet_id)
+    return f"{type(exc).__name__}: {exc}"
 
 
 class SheetsClient:

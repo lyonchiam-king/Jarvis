@@ -338,6 +338,11 @@ class Secrets:
     sheet_id: str = ""
     oauth_client_file: Path = Path("credentials/oauth_client.json")
     token_file: Path = Path("credentials/token.json")
+    # The robot account that reads the Sheet. Optional: when the file is
+    # there it is used and nothing ever expires; when it is not, the OAuth
+    # token above is used exactly as before. Presence is the whole switch,
+    # so there is no setting that can disagree with what is on disk.
+    service_account_file: Path = Path("credentials/service_account.json")
     anthropic_api_key: str = ""
     # The key for whichever provider research.provider names. Equals
     # anthropic_api_key on the default provider; empty for local Ollama,
@@ -791,6 +796,10 @@ def load_config(
         token_file=Path(
             os.getenv("GOOGLE_TOKEN_FILE", "")
             or paths.credentials_dir() / "token.json"
+        ),
+        service_account_file=Path(
+            os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "")
+            or paths.credentials_dir() / "service_account.json"
         ),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
         dashboard_password=os.getenv("DASHBOARD_PASSWORD", ""),

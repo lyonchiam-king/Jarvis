@@ -148,3 +148,81 @@ yours and must survive.
 **Costs are yours.** Google gives new accounts free credit; Places and the
 model both bill after that. Start at 5 leads a day until you know what it
 costs you.
+
+---
+
+# The sign-in that never expires
+
+If your Google sign-in keeps dying — "expired and could not be renewed",
+every week or two — this replaces it for good. No consent screen, nothing to
+publish, no "unverified app" warning, and nothing to sign in to again.
+
+A **service account** is a robot Google account. It is not you, it has its own
+address, and it refreshes itself from a file on your computer. It owns
+nothing until you share something with it, which is the one step people
+forget.
+
+## 1. Make the robot account
+
+Open this, in the project the tool already uses:
+
+https://console.cloud.google.com/iam-admin/serviceaccounts?project=sme-outreach-504919
+
+1. **CREATE SERVICE ACCOUNT**
+2. Name it **jarvis-sheets**. Press **CREATE AND CONTINUE**
+3. It asks for a role — **skip it**, press **CONTINUE**, then **DONE**.
+   It needs no project role at all; only the Sheet matters
+
+## 2. Download its key
+
+1. Click the account you just made
+2. **KEYS** tab → **ADD KEY** → **Create new key** → **JSON** → **CREATE**
+3. A `.json` file downloads. That file is a password — treat it like one.
+   Never email it, never paste it into a chat
+
+## 3. Put it where the tool looks
+
+Move the downloaded file into your Jarvis folder, inside **`credentials`**,
+and rename it to exactly:
+
+```
+service_account.json
+```
+
+That is the whole switch. The file being there is what turns this on; delete
+it and the old sign-in is used again.
+
+## 4. Share your Sheet with it
+
+The robot cannot see your Sheet until you invite it.
+
+1. Open the service account's page in the Console and copy its **Email** —
+   it looks like `jarvis-sheets@your-project.iam.gserviceaccount.com`
+2. Open your Google Sheet → **Share**
+3. Paste that address, give it **Editor**, press **Send**
+4. Ignore the warning about sharing outside your organisation. That address
+   is yours
+
+## 5. Check it
+
+Double-click `run.bat`, press **9**. You should see:
+
+```
+[ OK ] Reading the Sheet as jarvis-sheets@...
+       This one does not expire. Nothing to sign in.
+[ OK ] Google Sheets API enabled
+[ OK ] The Sheet is shared with it
+```
+
+If the last line fails, step 4 was missed — it tells you the address to
+share with.
+
+## What this does not cover
+
+**Email drafts.** A service account cannot write a draft in your mailbox;
+only you can. Those still use the Google sign-in, so while it is expired you
+get a warning and no email drafts — and everything else carries on. WhatsApp
+copy is written into the Sheet and needs no Google identity at all.
+
+If you want email drafts back, sign in once more with `run.bat` → 9. If you
+never draft emails, you can ignore the sign-in from now on.

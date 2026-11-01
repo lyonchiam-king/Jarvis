@@ -60,7 +60,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1392 tests, pytest, no CI -- the suite is the only gate
+tests/             1404 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -492,6 +492,42 @@ caller shows it verbatim rather than wrapping it in prose about the Sheet,
 which is not what is wrong. A control holds that an ordinary permissions
 403 is not relabelled: telling someone to enable an API that is already on
 is a wasted hour.
+
+**A user's token is a person's token, and this one kept dying.** Three
+failures in three weeks on a Workspace account whose app is **Internal** --
+which has no publishing status, so the seven-day cure had no button to
+press. A service account has no consent screen at all: nothing to publish,
+nothing to verify, no warning screen, and no expiry. Installing one is
+`credentials/service_account.json` existing; there is no setting to
+disagree with what is on disk, and removing the file restores the old
+behaviour exactly, which is what keeps every other install working.
+
+**What a robot cannot do is be a person.** Gmail drafts are written *as*
+Lyon, so they stay on OAuth and `SHEETS_SCOPES` deliberately omits
+`gmail.compose` -- asking for a scope a service account cannot exercise
+buys an authorisation that still fails at the call. The corollary is that a
+dead sign-in must then cost the email drafts and nothing else:
+`_gmail_or_none` warns and returns None on a service-account install, since
+WhatsApp copy goes into the Sheet and needs no Google identity. On an OAuth
+install it still raises -- there the sign-in is also what reads the Sheet,
+so there is nothing to degrade to, and carrying on would produce a run that
+silently did nothing.
+
+**A service account owns nothing it was not given.** The first failure after
+installing one is a Sheet nobody shared with it, and Google reports that as
+"The caller does not have permission" -- which reads as a broken key when
+the key is perfect. `not_shared_message` names the address and the Share
+dialog. It is translated in `explain`, called from the two screens a person
+reads an error on, rather than inside `_with_retry`: thirteen call sites
+would each have to carry the robot's address, which is twelve chances to
+forget it. A control holds that the same words on an OAuth install are left
+alone, and that a disabled API is not relabelled as a sharing problem.
+
+**A positional key grows a fourth element eventually.** `_PerThreadClient`
+read `self._key[3]` the moment the service account joined the cache key,
+which is the Sheet's own hazard moved into Python. The key is unpacked once,
+by name, and a short key still means "no service account" so older callers
+keep working.
 
 **An error that explains itself needs an element that lets it.** That
 three-step cure reached the page inside a `<span>`, where HTML collapses

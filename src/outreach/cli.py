@@ -51,12 +51,70 @@ def _load(config_path: str | None) -> Config:
 
 
 def _credentials(config: Config):
+    """The sign-in that acts *as Lyon*. Gmail drafts need this one."""
     try:
         return get_credentials(
             config.secrets.oauth_client_file, config.secrets.token_file
         )
     except AuthError as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+def _sheets_credentials(config: Config):
+    """Whatever reads the Sheet -- the robot account when one is installed.
+
+    Separate from `_credentials` because the Sheet and Gmail have different
+    answers now: a service account can own the spreadsheet work outright,
+    and cannot write a draft in a person's mailbox at all.
+    """
+    from .auth import sheets_credentials
+
+    try:
+        return sheets_credentials(
+            config.secrets.oauth_client_file,
+            config.secrets.token_file,
+            config.secrets.service_account_file,
+        )
+    except AuthError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _gmail_or_none(config: Config):
+    """Gmail, or nothing, when nothing is survivable.
+
+    A service account can own the Sheet outright but cannot write a draft in
+    a person's mailbox -- that needs the OAuth sign-in, and the whole reason
+    for installing a service account is that the OAuth sign-in keeps dying.
+    So on a service-account install a dead sign-in must cost the email
+    drafts and nothing else: WhatsApp copy is written into the Sheet and
+    needs no Google identity at all, and killing the run over the channel
+    that is not in use would throw away the channel that is.
+
+    On an OAuth install it still raises. There the sign-in is also what
+    reads the Sheet, so there is nothing left to degrade to.
+    """
+    from .auth import uses_service_account
+
+    if not uses_service_account(config.secrets.service_account_file):
+        return GmailClient(_credentials(config))
+    try:
+        from .auth import get_credentials
+
+        return GmailClient(
+            get_credentials(
+                config.secrets.oauth_client_file, config.secrets.token_file
+            )
+        )
+    except AuthError as exc:
+        click.echo(
+            "[WARN] No Gmail drafts this run: the Google sign-in is not "
+            f"usable ({type(exc).__name__}).\n"
+            "       WhatsApp copy is unaffected -- it is written into the "
+            "Sheet, which the service account reads.\n"
+            "       To draft emails again, run this and finish the sign-in: "
+            "run.bat > 9."
+        )
+        return None
 
 
 def _writer(config: Config):
@@ -125,7 +183,7 @@ def _image_client(config: Config, *, require_model: bool = True):
 
 
 def _sheets_client(config: Config, *, require_sheet_id: bool = True) -> SheetsClient:
-    creds = _credentials(config)
+    creds = _sheets_credentials(config)
 
     if require_sheet_id and not config.secrets.sheet_id:
         raise click.ClickException(
@@ -232,8 +290,18 @@ def preflight(ctx: click.Context) -> None:
             )
 
         try:
-            creds = _credentials(config)
-            click.echo("[ OK ] Google OAuth token valid")
+            from .auth import service_account_email, uses_service_account
+            from .sheets import explain as explain_sheets
+
+            robot = ""
+            if uses_service_account(config.secrets.service_account_file):
+                robot = service_account_email(config.secrets.service_account_file)
+                creds = _sheets_credentials(config)
+                click.echo(f"[ OK ] Reading the Sheet as {robot or 'a service account'}")
+                click.echo("       This one does not expire. Nothing to sign in.")
+            else:
+                creds = _credentials(config)
+                click.echo("[ OK ] Google OAuth token valid")
 
             # Check the APIs are actually switched on. Without this, preflight
             # passes and then `init-sheet` fails on a Cloud setting -- which is
@@ -242,6 +310,19 @@ def preflight(ctx: click.Context) -> None:
             sheets_ok, sheets_detail = sheets.probe()
             if sheets_ok:
                 click.echo("[ OK ] Google Sheets API enabled")
+                # The API answering says nothing about this spreadsheet. A
+                # robot that has not been shared in fails only on the first
+                # real read, which is a long way from here.
+                if robot and config.secrets.sheet_id:
+                    try:
+                        sheets.read_rows(schema.LEADS)
+                        click.echo("[ OK ] The Sheet is shared with it")
+                    except Exception as exc:  # noqa: BLE001
+                        click.echo("[FAIL] " + explain_sheets(
+                            exc, robot_email=robot,
+                            sheet_id=config.secrets.sheet_id,
+                        ))
+                        ok = False
             else:
                 click.echo(f"[FAIL] {sheets_detail}")
                 ok = False
@@ -1497,7 +1578,7 @@ def run_outreach_draft(
         raise click.ClickException(str(exc)) from exc
 
     sheets = _sheets_client(config)
-    gmail = None if dry_run else GmailClient(_credentials(config))
+    gmail = None if dry_run else _gmail_or_none(config)
 
     report = outreach_stage.run(
         config, sheets, _outreach_writer(config), gmail,

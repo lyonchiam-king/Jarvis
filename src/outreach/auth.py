@@ -43,6 +43,15 @@ SCOPES = [
 # loses Sheets and Gmail too.
 VERTEX_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
 
+# What a service account is given. Deliberately not gmail.compose: a service
+# account cannot write a draft in a person's mailbox without domain-wide
+# delegation, so asking for the scope would buy an authorisation that still
+# fails at the call, which is a worse failure than not having it.
+SHEETS_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive.file",
+]
+
 
 class AuthError(Exception):
     """OAuth could not be completed. Message tells the user what to fix."""
@@ -178,6 +187,97 @@ def stale_client(client_file: Path, token_file: Path) -> bool:
     stored = _client_id_of(token_file, token=True)
     current = _client_id_of(client_file, token=False)
     return bool(stored and current and stored != current)
+
+
+
+# --------------------------------------------------- the robot account
+
+class ServiceAccountError(AuthError):
+    """The service account file is absent or unusable.
+
+    Separate from the OAuth refusals because the repair has nothing to do
+    with signing in: nobody signs a service account in, so advice about
+    browsers and consent screens is noise here.
+    """
+
+
+def service_account_email(path: Path) -> str:
+    """Who to share the Sheet with, read out of the key file.
+
+    A service account owns nothing it was not given, so a Sheet it cannot
+    see answers 403 and no amount of correct code helps. The address is the
+    one part of that file anybody needs to see -- and it is only an address.
+    The private key beside it is never read by anything but Google's own
+    library, and never printed.
+    """
+    try:
+        import json
+
+        data = json.loads(path.read_text())
+    except Exception:  # noqa: BLE001 -- absent or malformed is "unknown"
+        return ""
+    return str(data.get("client_email", "") or "")
+
+
+def service_account_credentials(path: Path, scopes: list[str] | None = None):
+    """Credentials that never expire and never need a person.
+
+    This is the whole reason the option exists. A user's OAuth token is
+    issued to a human and carries that human's limits -- a consent screen,
+    an unverified-app warning, and a lifetime measured in days on some
+    Workspace configurations. None of that applies to a service account: it
+    is an account in its own right, it refreshes itself from a key on disk,
+    and it keeps working while nobody is watching.
+
+    What it cannot do is act as a person. Gmail drafts are written *as*
+    Lyon, so they stay on the OAuth token -- see `gmail_credentials`.
+    """
+    if not path.exists():
+        raise ServiceAccountError(f"No service account key at {path}")
+    try:
+        from google.oauth2 import service_account
+
+        return service_account.Credentials.from_service_account_file(
+            str(path), scopes=scopes or SHEETS_SCOPES
+        )
+    except ServiceAccountError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ServiceAccountError(
+            f"The service account key at {path} could not be read "
+            f"({type(exc).__name__}).\n\n"
+            "It should be the JSON Google downloaded when you made the key, "
+            "saved whole and unedited."
+        ) from exc
+
+
+def uses_service_account(service_account_file: Path | None) -> bool:
+    """Whether the robot account is the one reading the Sheet.
+
+    Presence of the file is the whole switch. There is no setting to forget
+    and no second place to look: put the key there and it is used, remove it
+    and the OAuth token is used again.
+    """
+    return bool(service_account_file) and service_account_file.exists()
+
+
+def sheets_credentials(
+    client_file: Path,
+    token_file: Path,
+    service_account_file: Path | None = None,
+    *,
+    allow_consent: bool = True,
+    consent_timeout: int | None = None,
+):
+    """Whatever can read the Sheet, preferring the account that cannot expire."""
+    if uses_service_account(service_account_file):
+        return service_account_credentials(service_account_file, SHEETS_SCOPES)
+    return get_credentials(
+        client_file,
+        token_file,
+        allow_consent=allow_consent,
+        consent_timeout=consent_timeout,
+    )
 
 
 def get_credentials(
