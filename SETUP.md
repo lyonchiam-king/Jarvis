@@ -196,9 +196,14 @@ it and the old sign-in is used again.
 
 The robot cannot see your Sheet until you invite it.
 
+**Which Sheet?** The one the tool made for you during setup — it is the
+database. Every lead, every message and every status lives in it. Open it
+from the dashboard's **Open Your Google Sheet** button, or from the link
+`run.bat` → **9** prints.
+
 1. Open the service account's page in the Console and copy its **Email** —
    it looks like `jarvis-sheets@your-project.iam.gserviceaccount.com`
-2. Open your Google Sheet → **Share**
+2. Open that Sheet → **Share**
 3. Paste that address, give it **Editor**, press **Send**
 4. Ignore the warning about sharing outside your organisation. That address
    is yours

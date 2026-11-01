@@ -299,6 +299,15 @@ def preflight(ctx: click.Context) -> None:
                 creds = _sheets_credentials(config)
                 click.echo(f"[ OK ] Reading the Sheet as {robot or 'a service account'}")
                 click.echo("       This one does not expire. Nothing to sign in.")
+                # "Share your Sheet with it" is the one instruction that
+                # cannot be followed without knowing which Sheet, and
+                # nothing printed the address -- it was asked for after
+                # weeks of the word "Sheet" meaning nothing in particular.
+                if config.secrets.sheet_id:
+                    click.echo(
+                        "       Your Sheet: https://docs.google.com"
+                        f"/spreadsheets/d/{config.secrets.sheet_id}/edit"
+                    )
             else:
                 creds = _credentials(config)
                 click.echo("[ OK ] Google OAuth token valid")

@@ -60,7 +60,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1404 tests, pytest, no CI -- the suite is the only gate
+tests/             1405 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -522,6 +522,13 @@ reads an error on, rather than inside `_with_retry`: thirteen call sites
 would each have to carry the robot's address, which is twelve chances to
 forget it. A control holds that the same words on an OAuth install are left
 alone, and that a disabled API is not relabelled as a sharing problem.
+
+**"Share your Sheet with it" names a thing nobody had ever pointed at.**
+Asked outright, after weeks of the word: *what is the sheet? where do I get
+it?* The Sheet is the database -- the tool made it during setup and then
+never mentioned where it lives, so every instruction naming it was one the
+reader could not follow. Preflight prints its address beside the account
+reading it, and the share instruction carries the same link.
 
 **A positional key grows a fourth element eventually.** `_PerThreadClient`
 read `self._key[3]` the moment the service account joined the cache key,

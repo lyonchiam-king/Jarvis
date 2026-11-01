@@ -254,3 +254,42 @@ def test_the_probe_names_the_same_three_apis_as_the_run(monkeypatch):
     assert "506060726614" in detail
     for host in ("sheets.googleapis.com", "drive.googleapis.com", "gmail.googleapis.com"):
         assert f"apis/library/{host}" in detail
+
+
+def test_preflight_prints_the_sheet_it_means(tmp_path, monkeypatch):
+    """"Share your Sheet with it" cannot be followed without knowing which
+    Sheet, and after weeks of using the word nothing had ever printed the
+    address. Asked outright: "what is the sheet? where do I get it?"."""
+    from click.testing import CliRunner
+
+    from outreach import cli as cli_mod
+
+    key = tmp_path / "service_account.json"
+    key.write_text(json.dumps({"client_email": "jarvis-sheets@p.iam.gserviceaccount.com"}))
+
+    from outreach.config import load_config
+
+    base = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(base, secrets=replace(
+        base.secrets,
+        service_account_file=key,
+        oauth_client_file=tmp_path / "client.json",
+        sheet_id="17Rp2iMaPKoIHgWEHbdp7brMcGOVSSkql9",
+        places_api_key="",
+    ))
+    (tmp_path / "client.json").write_text(json.dumps({"installed": {"project_id": "p"}}))
+
+    monkeypatch.setattr(cli_mod, "load_config", lambda *a, **k: config)
+    monkeypatch.setattr(cli_mod, "_sheets_credentials", lambda *a, **k: "CREDS")
+
+    class _Stub:
+        def __init__(self, *a, **k):
+            pass
+
+        def probe(self):
+            return False, "not reaching Google in a test"
+
+    monkeypatch.setattr(cli_mod, "SheetsClient", _Stub)
+
+    out = CliRunner().invoke(cli_mod.main, ["preflight"]).output
+    assert "docs.google.com/spreadsheets/d/17Rp2iMaPKoIHgWEHbdp7brMcGOVSSkql9/edit" in out
