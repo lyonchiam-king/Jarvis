@@ -148,3 +148,20 @@ def test_the_steps_the_dashboard_links_to_all_exist():
         "3-build-the-ones-you-approved",
     ):
         assert f'id="{anchor}"' in out, f"missing anchor: {anchor}"
+
+
+def test_the_infographic_steps_help_link_lands_somewhere_real():
+    """Every other step heading links into the handbook. A link to an anchor
+    that does not exist drops the reader at the top of an 800-line page,
+    which is the same as no link at all."""
+    from outreach.dashboard import PAGE
+    from outreach.guide import slugify
+
+    anchors = {
+        slugify(line.lstrip("#").strip())
+        for line in open("DAILY.md").read().splitlines()
+        if line.startswith("#")
+    }
+    wanted = "the-second-pitch-a-picture-instead-of-a-page"
+    assert wanted in anchors, "the handbook section the Infographic step links to is gone"
+    assert f'href="/guide#{wanted}"' in PAGE

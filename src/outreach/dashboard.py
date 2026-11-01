@@ -3953,7 +3953,9 @@ PAGE = """<!doctype html>
   <h2 id="visual-step"><span class="stepno">3b</span> Infographic
       <span class="sub" style="text-transform:none;letter-spacing:0">
       &mdash; the picture that pitches the gaps. Copy the prompt, make the
-      picture, paste it back</span></h2>
+      picture, paste it back</span>
+      <a class="sub" href="/guide#the-second-pitch-a-picture-instead-of-a-page"
+         target="_blank" rel="noopener">What is this?</a></h2>
   <div class="row" style="margin-bottom:10px" id="visual-controls">
     <button data-run="visual-brief">Write image prompts</button>
     <span class="hint" id="visual-note"></span>
