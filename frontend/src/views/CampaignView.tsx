@@ -13,6 +13,129 @@ import {
 import { CampaignConfig } from '../types';
 import { api } from '../api/client';
 
+/**
+ * Which artefact the message carries.
+ *
+ * Saved on its own, not with the rest of the campaign: it is one decision
+ * with its own refusal (a graphics track needs a signature, or the tool will
+ * not start), and folding it into Save Configuration would make that refusal
+ * reject everything else on this screen with it.
+ */
+const TrackPicker: React.FC = () => {
+  const [track, setTrack] = useState('website');
+  const [signature, setSignature] = useState('');
+  const [note, setNote] = useState('');
+  const [bad, setBad] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api.getTrack().then((res) => {
+      if (res.data) {
+        setTrack(res.data.track || 'website');
+        setSignature(res.data.signature || '');
+      }
+    });
+  }, []);
+
+  const needsSignature = track === 'visual' || track === 'both';
+
+  const save = async () => {
+    setSaving(true);
+    setNote('');
+    const res = await api.setTrack(track, signature);
+    setSaving(false);
+    setBad(!!res.error);
+    setNote(res.error || 'Saved.');
+  };
+
+  const choice = (value: string, label: string, blurb: string) => (
+    <label
+      key={value}
+      className={`block p-3 rounded-lg border cursor-pointer studio-transition ${
+        track === value
+          ? 'border-emerald-500/50 bg-emerald-500/10'
+          : 'border-slate-700 hover:border-slate-600'
+      }`}
+    >
+      <span className="flex items-start gap-2">
+        <input
+          type="radio"
+          name="outreach-track"
+          value={value}
+          checked={track === value}
+          onChange={() => setTrack(value)}
+          className="mt-0.5"
+        />
+        <span>
+          <span className="block text-[13px] font-medium text-slate-200">{label}</span>
+          <span className="block text-[11px] text-slate-500">{blurb}</span>
+        </span>
+      </span>
+    </label>
+  );
+
+  return (
+    <div
+      id="track-picker"
+      className="p-5 rounded-xl border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 space-y-3"
+    >
+      <h2 className="text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+        What the message pitches
+      </h2>
+      <p className="text-[11px] text-slate-500">
+        One setting, not three that can disagree. It decides what gets
+        written, what the send step waits for, and what the message claims.
+      </p>
+      <div className="space-y-2">
+        {choice('website', 'Website', 'Build a demo page and link to it. The original.')}
+        {choice('visual', 'Infographic', 'A picture naming the gaps. No site is built.')}
+        {choice(
+          'both',
+          'Both',
+          'The picture attached and the link beside it — still one message per business.',
+        )}
+      </div>
+      {needsSignature && (
+        <div>
+          <label className="block text-[12px] font-medium text-slate-300 mb-1">
+            The ribbon on every graphic, word for word
+          </label>
+          <input
+            id="track-signature"
+            type="text"
+            value={signature}
+            onChange={(e) => setSignature(e.target.value)}
+            placeholder="by Lyon, Business Growth Consultant"
+            className="w-full p-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-[13px] text-slate-900 dark:text-slate-100"
+          />
+          <p className="text-[11px] text-slate-500 mt-1">
+            Required for a graphic. It is the one thing that makes the series
+            read as yours, so the tool will not start without it.
+          </p>
+        </div>
+      )}
+      <div className="flex items-center gap-3">
+        <button
+          id="save-track-btn"
+          onClick={save}
+          disabled={saving}
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-500 text-slate-950 text-[12px] font-semibold hover:bg-emerald-400 studio-transition disabled:opacity-50"
+        >
+          <Save className="w-3.5 h-3.5" />
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+        {note && (
+          <span
+            className={`text-[12px] whitespace-pre-wrap ${bad ? 'text-amber-300' : 'text-emerald-300'}`}
+          >
+            {note}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
+
 export const CampaignView: React.FC = () => {
   const [config, setConfig] = useState<CampaignConfig | null>(null);
   const [loading, setLoading] = useState(true);
@@ -105,6 +228,8 @@ export const CampaignView: React.FC = () => {
           <CheckCircle2 className="w-4 h-4" /> Campaign parameters saved successfully!
         </div>
       )}
+
+      <TrackPicker />
 
       {/* Primary Niche & Location */}
       <div className="p-5 rounded-xl border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-xs space-y-4">

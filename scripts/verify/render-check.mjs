@@ -296,6 +296,15 @@ try {
       areas: ['Soho', 'Shoreditch'], sender_name: 'Lyon',
       daily_batch_limit: 10, country_code: 'GB', config_file: 'example.yaml',
     },
+    // The picker reads its own setting rather than the campaign's, so it
+    // needs its own answer -- without one it falls back to the website
+    // track and the signature field is correctly not asked for, which would
+    // make the assertion below untestable rather than false.
+    '/api/track': {
+      track: 'both', tracks: ['both', 'visual', 'website'],
+      signature: 'by Lyon, Business Growth Consultant',
+      tool_name: 'Google Flow',
+    },
     // The infographic branch. Two rows on purpose: one named for the
     // business and one generic, because telling them apart on the card is
     // the whole safeguard -- a generic graphic sent as though it were
@@ -466,6 +475,42 @@ try {
   if (vizShot.leaked) {
     fail('raw base64 image data is being shown as text on the Infographic step');
   }
+  // The rotation picker. Narrowing the series is the one thing he asked for
+  // by name, and an endpoint with no control is a feature nobody has -- the
+  // same shape as the click-to-chat link that was computed, returned, and
+  // drawn by neither page.
+  const rotation = await dt.evaluate(`(() => {
+    const toggle = document.getElementById('rotation-toggle');
+    if (!toggle) return { toggle: false };
+    toggle.click();
+    return { toggle: true };
+  })()`);
+  if (!rotation.toggle) {
+    fail('the Infographic step offers no way to narrow the rotation');
+  } else {
+    await new Promise((r) => setTimeout(r, 300));
+    const boxes = await dt.evaluate(`(() => {
+      const names = (group) =>
+        [...document.querySelectorAll('input[data-rotation="' + group + '"]')]
+          .map((el) => el.value);
+      return {
+        styles: names('styles'),
+        layouts: names('layouts'),
+        save: !!document.getElementById('save-rotation-btn'),
+      };
+    })()`);
+    // Drawn from the fixture's catalogue, not from a list in the page: a
+    // hardcoded one drifts from what the server will accept and the mismatch
+    // only shows as a refused save.
+    if (!boxes.styles.includes('paper-cut') || !boxes.styles.includes('watercolour')) {
+      fail(`the rotation styles rendered ${JSON.stringify(boxes.styles)}`);
+    }
+    if (!boxes.layouts.includes('road')) {
+      fail(`the rotation layouts rendered ${JSON.stringify(boxes.layouts)}`);
+    }
+    if (!boxes.save) fail('the rotation picker has no save button');
+  }
+
   // Phone width, with the prompt and the words on screen. The prompt is the
   // longest unbroken text anywhere in this interface.
   const vizOverflow = await dt.evaluate(OVERFLOW_PROBE);
@@ -478,6 +523,41 @@ try {
   if (vizOverflow.clipped.length) {
     fail(`the Infographic step clips content: ${vizOverflow.clipped.join(', ')}`);
   }
+
+  // The track picker, in campaign settings. It is the control that switches
+  // graphics on, so it has to be reachable from a campaign that has them off
+  // -- which is why it does not live inside the step it enables.
+  await dt.evaluate(`document.getElementById('campaign-settings-toggle').click()`);
+  await new Promise((r) => setTimeout(r, 400));
+  const picker = await dt.evaluate(`(() => {
+    const el = document.getElementById('track-picker');
+    if (!el) return { has: false };
+    const chosen = [...el.querySelectorAll('input[type="radio"]')]
+      .map((r) => r.value);
+    return {
+      has: true,
+      options: chosen,
+      // "both" is the fixture's track, so the signature field must be asked
+      // for: a graphics campaign with nothing to sign them will not load.
+      signature: !!document.getElementById('track-signature'),
+      save: !!document.getElementById('save-track-btn'),
+    };
+  })()`);
+  if (!picker.has) {
+    fail('campaign settings offers no way to choose what the message pitches');
+  } else {
+    for (const option of ['website', 'visual', 'both']) {
+      if (!picker.options.includes(option)) {
+        fail(`the track picker is missing ${JSON.stringify(option)}`);
+      }
+    }
+    if (!picker.signature) {
+      fail('the track picker does not ask for the signature a graphic needs');
+    }
+    if (!picker.save) fail('the track picker has no save button');
+  }
+  await dt.evaluate(`document.getElementById('campaign-settings-toggle').click()`);
+  await new Promise((r) => setTimeout(r, 250));
 
   // Results, which is new and entirely derived from the summary.
   await dt.evaluate(`document.getElementById('nav-item-results').click()`);

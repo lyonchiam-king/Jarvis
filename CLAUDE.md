@@ -64,7 +64,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1529 tests, pytest, no CI -- the suite is the only gate
+tests/             1537 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -1203,6 +1203,21 @@ had to create.** Every earlier rewrite edited a section the shipped file
 already has. Saving a signature into a campaign written before this track
 would otherwise fail with "no such section" on precisely the file everybody
 has on disk.
+
+**The two settings this track added nearly shipped as endpoints with no
+controls.** `/api/track` and `/api/visual/rotation` were written, tested, and
+reachable by nothing -- and a commit message had already claimed both were
+editable from the page. Same shape as the click-to-chat link that was
+computed, returned, and drawn by neither front end, and as the three unwired
+`render_lovable_prompt` call sites. A setting Lyon can only reach by editing
+YAML is a setting he does not have. Both pages carry the control now, and
+both are asserted by driving the real interface and reading what came out.
+
+**The track selector cannot live inside the step it switches on.** The
+Infographic step is hidden when the campaign pitches a page, so the one
+control that turns graphics on would have been visible only once they were
+already on. It sits in campaign settings, outside the step, and a test holds
+the ordering.
 
 **Narrowing the series has one place.** `visual.styles` and `visual.layouts`
 filter every industry's rotation ring, so unticking a style on the page

@@ -522,3 +522,21 @@ def test_a_guessed_image_tool_url_is_refused(tmp_path):
     )
     with pytest.raises(ConfigError, match="image_tool_url must be a full"):
         load_config(path, env_file=None)
+
+
+def test_a_card_cap_below_two_is_refused_rather_than_silently_generic(tmp_path):
+    """Below MIN_SPECIFIC no lead could ever earn its name on the graphic, so
+    every one would come out generic -- looking exactly like thin evidence
+    rather than like a setting."""
+    path = campaign_with(
+        tmp_path, "visual",
+        extra='  signature: "by Lyon"\n  max_cards: 1\n',
+    )
+    with pytest.raises(ConfigError, match="visual.max_cards must be at least 2"):
+        load_config(path, env_file=None)
+
+
+def test_the_default_card_cap_can_reach_specific():
+    """A guard on the guard: the shipped default must not be refused by the
+    rule above, and must leave room for a named graphic."""
+    assert load_config(PENANG, env_file=None).visual.max_cards >= gaps.MIN_SPECIFIC

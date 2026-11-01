@@ -167,6 +167,11 @@ export const VisualQueueView: React.FC<{ onRefresh?: () => void }> = ({
         ) : null}
       </div>
 
+      <RotationPicker
+        catalogue={data.catalogue}
+        onSaved={() => load()}
+      />
+
       {data.queue.map((item) => (
         <VisualCard
           key={item.lead_id}
@@ -483,6 +488,133 @@ const VisualCard: React.FC<CardProps> = ({
           {note || `${busy}...`}
         </p>
       )}
+    </div>
+  );
+};
+
+
+/**
+ * Which looks are in the rotation.
+ *
+ * Drawn from what the server says exists rather than a list written out here:
+ * a name typed twice drifts from the one the server will accept, and the
+ * mismatch only ever shows up as a refused save.
+ *
+ * Both lists feed every industry's ring, so unticking a style removes it
+ * everywhere -- which is the point. Ticking nothing means all of them.
+ */
+const RotationPicker: React.FC<{
+  catalogue: VisualQueue['catalogue'];
+  onSaved: () => void;
+}> = ({ catalogue, onSaved }) => {
+  const [open, setOpen] = useState(false);
+  const [styles, setStyles] = useState<string[]>(catalogue.chosen_styles);
+  const [layouts, setLayouts] = useState<string[]>(catalogue.chosen_layouts);
+  const [note, setNote] = useState('');
+  const [bad, setBad] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const toggle = (
+    list: string[],
+    set: (v: string[]) => void,
+    name: string,
+  ) => set(list.includes(name) ? list.filter((n) => n !== name) : [...list, name]);
+
+  const boxes = (
+    all: string[],
+    chosen: string[],
+    set: (v: string[]) => void,
+    group: string,
+  ) => (
+    <div className="flex flex-wrap gap-x-4 gap-y-2">
+      {all.map((name) => (
+        <label
+          key={name}
+          className="flex items-center gap-1.5 text-[12px] text-slate-300"
+        >
+          <input
+            type="checkbox"
+            data-rotation={group}
+            value={name}
+            checked={chosen.includes(name)}
+            onChange={() => toggle(chosen, set, name)}
+          />
+          {name}
+        </label>
+      ))}
+    </div>
+  );
+
+  if (!open) {
+    return (
+      <button
+        id="rotation-toggle"
+        onClick={() => setOpen(true)}
+        className="text-[12px] text-slate-400 hover:text-slate-200 studio-transition"
+      >
+        Which looks are in the rotation
+      </button>
+    );
+  }
+
+  return (
+    <div
+      id="rotation-picker"
+      className="rounded-2xl border border-slate-800 bg-slate-900 p-5 space-y-3"
+    >
+      <div>
+        <h2 className="text-[13px] font-semibold text-slate-100">
+          Which looks are in the rotation
+        </h2>
+        <p className="text-[11px] text-slate-500 mt-0.5">
+          Each industry rotates through its own pairs and never repeats the
+          previous lead&apos;s, so ten salons in a row do not all get the same
+          graphic. Unticking here narrows every industry at once. Tick none and
+          all of them stay in play.
+        </p>
+      </div>
+      <div>
+        <p className="text-[12px] font-medium text-slate-300 mb-1.5">Style</p>
+        {boxes(catalogue.styles, styles, setStyles, 'styles')}
+      </div>
+      <div>
+        <p className="text-[12px] font-medium text-slate-300 mb-1.5">Layout</p>
+        {boxes(catalogue.layouts, layouts, setLayouts, 'layouts')}
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          id="save-rotation-btn"
+          onClick={async () => {
+            setSaving(true);
+            setNote('');
+            const res = await api.setVisualRotation(styles, layouts);
+            setSaving(false);
+            setBad(!!res.error);
+            setNote(
+              res.error ||
+                'Saved. New prompts use it; press Different look to re-roll one you already have.',
+            );
+            if (!res.error) onSaved();
+          }}
+          disabled={saving}
+          className="px-3.5 py-2 rounded-lg bg-emerald-500 text-slate-950 text-[12px] font-semibold hover:bg-emerald-400 studio-transition disabled:opacity-50"
+        >
+          {saving ? 'Saving...' : 'Save rotation'}
+        </button>
+        <button
+          onClick={() => setOpen(false)}
+          className="text-[12px] text-slate-400 hover:text-slate-200"
+        >
+          Close
+        </button>
+        {note && (
+          <span
+            className={`text-[12px] ${bad ? 'text-amber-300' : 'text-emerald-300'}`}
+          >
+            {note}
+          </span>
+        )}
+      </div>
     </div>
   );
 };

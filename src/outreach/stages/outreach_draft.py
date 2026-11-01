@@ -57,6 +57,10 @@ class OutreachReport:
     # did arrive nothing would ever message them -- the same bug the WhatsApp
     # check's hold exists to prevent.
     held_for_image: int = 0
+    # Counted apart from `screenshots`, which says "with a site screenshot" --
+    # true of a photographed page and a lie about a graphic. One number
+    # covering both would make the summary describe work that did not happen.
+    graphics_attached: int = 0
     errors: int = 0
     llm_calls: int = 0
     checkpoints: int = 0
@@ -84,6 +88,9 @@ class OutreachReport:
             else "",
             f"  waiting on a graphic    {self.held_for_image:>4}  (held)"
             if self.held_for_image
+            else "",
+            f"  with an infographic     {self.graphics_attached:>4}"
+            if self.graphics_attached
             else "",
             f"Errors logged             {self.errors}",
             "",
@@ -470,10 +477,12 @@ def run(
                 # old code screenshotted unconditionally, which on the visual
                 # track would have spent a browser launch per lead to produce
                 # an image nothing then attached.
-                attached, _kind = attachment_for(
+                attached, kind = attachment_for(
                     config, lead, lead_id, preview_url, visual_row
                 )
-                if attached is not None:
+                if kind == "visual":
+                    report.graphics_attached += 1
+                elif attached is not None:
                     report.screenshots += 1
                 elif capture_site_shot.last_error:
                     report.screenshot_failures += 1

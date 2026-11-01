@@ -3579,3 +3579,86 @@ def test_an_error_from_the_server_is_shown_on_the_card_not_swallowed():
     console.log(JSON.stringify({note: vizUi['LEAD-1'].note}));
     """)
     assert "over the 8MB limit" in __import__("json").loads(out)["note"]
+
+
+def test_the_track_selector_is_outside_the_step_it_switches_on():
+    """Put inside, the one control that turns graphics on would only be
+    visible once they were already on."""
+    from outreach.dashboard import PAGE
+
+    page = PAGE
+    settings = page.index('id="track-settings"')
+    step = page.index('id="visual-step"')
+    assert settings < step, "the track selector is rendered inside the step"
+    # And it is not in the block the panel hides.
+    assert 'id="rotation-settings"' in page
+
+
+def test_the_track_selector_offers_all_three_and_asks_for_the_signature():
+    out = _run_in_node(_VIZ_DOM + """
+    globalThis.fetch = async () => ({json: async () => ({
+      track: 'both', tracks: ['both','visual','website'],
+      signature: 'by Lyon', tool_name: 'Google Flow'
+    })});
+    await loadTrack();
+    console.log(JSON.stringify({
+      picked: _el('#track-pick').value,
+      sig: _el('#track-sig').value,
+      sigShown: _el('#sig-wrap').style.display,
+    }));
+    """)
+    data = __import__("json").loads(out)
+    assert data["picked"] == "both"
+    assert data["sig"] == "by Lyon"
+    assert data["sigShown"] == "block"
+
+
+def test_choosing_the_website_track_stops_asking_for_a_signature():
+    """It is the ribbon on a graphic. A campaign with no graphics has nowhere
+    to put it, so asking would be asking for something unused."""
+    out = _run_in_node(_VIZ_DOM + """
+    _el('#track-pick').value = 'website';
+    trackPicked();
+    console.log(JSON.stringify({shown: _el('#sig-wrap').style.display}));
+    """)
+    assert '"shown":"none"' in out
+
+
+def test_the_rotation_tick_boxes_are_drawn_from_what_the_server_says_exists():
+    """A list written out in the page drifts from the one the server will
+    accept, and the mismatch only shows as a refused save."""
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({_viz_queue_response(
+        catalogue={"styles": ["paper-cut", "watercolour", "pop-art"],
+                   "layouts": ["rows", "road"],
+                   "chosen_styles": ["watercolour"],
+                   "chosen_layouts": []}
+    )})}});
+    await loadVisual();
+    console.log(JSON.stringify({{
+      styles: _el('#rot-styles').innerHTML,
+      layouts: _el('#rot-layouts').innerHTML,
+      shown: _el('#rotation-settings').style.display,
+    }}));
+    """)
+    data = __import__("json").loads(out)
+    assert "paper-cut" in data["styles"]
+    assert "pop-art" in data["styles"]
+    assert "road" in data["layouts"]
+    # The one already chosen comes back ticked, so saving does not silently
+    # clear a narrowing that was already in place.
+    assert data["styles"].count("checked") == 1
+    assert data["shown"] == ""
+
+
+def test_the_rotation_box_is_hidden_when_the_campaign_pitches_a_page():
+    out = _run_in_node(_VIZ_DOM + """
+    globalThis.fetch = async () => ({json: async () => ({
+      enabled: false, track: 'website', queue: [],
+      catalogue: {styles: ['paper-cut'], layouts: ['rows'],
+                  chosen_styles: [], chosen_layouts: []},
+    })});
+    await loadVisual();
+    console.log(JSON.stringify({shown: _el('#rotation-settings').style.display}));
+    """)
+    assert '"shown":"none"' in out

@@ -605,3 +605,21 @@ def test_a_broken_image_path_cannot_kill_the_draft(monkeypatch):
         cfg("visual"), lead("a"), "a", "", {"Image File": "visuals/a.png"}
     )
     assert kind == "site"
+
+
+def test_an_attached_graphic_is_not_reported_as_a_site_screenshot(
+    tmp_path, monkeypatch
+):
+    """"with a site screenshot" is true of a photographed page and a lie
+    about a graphic. One number covering both makes the summary describe work
+    that did not happen."""
+    monkeypatch.setenv("OUTREACH_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(outreach_draft, "capture_site_shot", lambda *a, **k: None)
+    sheets = FakeSheets(index([lead("a")]), index([research("a")]),
+                        visuals=confirmed(tmp_path))
+    report = outreach_draft.run(cfg("visual"), sheets, CopyWriter(), None)
+    assert report.graphics_attached == 1
+    assert report.screenshots == 0
+    summary = "\n".join(report.summary_lines())
+    assert "with an infographic" in summary
+    assert "with a site screenshot" not in summary

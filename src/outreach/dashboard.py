@@ -3924,6 +3924,32 @@ PAGE = """<!doctype html>
     </div>
   </details>
 
+  <details class="card" style="margin-bottom:14px" id="track-settings">
+    <summary class="sub"><b>What the message pitches</b></summary>
+    <p class="hint" style="margin:8px 0">One setting, not three that can
+      disagree. It decides what gets written, what the send step waits for,
+      and what the message claims.</p>
+    <label class="sub" style="display:block;margin-bottom:8px">
+      <select id="track-pick" onchange="trackPicked()" style="width:100%;margin-top:4px">
+        <option value="website">Website &mdash; build a demo page and link to it</option>
+        <option value="visual">Infographic &mdash; a picture naming the gaps, no site</option>
+        <option value="both">Both &mdash; the picture attached and the link beside it, in one message</option>
+      </select>
+    </label>
+    <label class="sub" id="sig-wrap" style="display:none">The ribbon on every
+      graphic, word for word
+      <input id="track-sig" placeholder="by Lyon, Business Growth Consultant"
+             style="width:100%;margin:4px 0 0">
+    </label>
+    <p class="hint" id="sig-help" style="display:none;margin:6px 0 0">Required
+      for a graphic. It is the one thing that makes the series read as
+      yours, so the tool will not start without it.</p>
+    <div class="row" style="margin-top:10px">
+      <button onclick="saveTrack()">Save</button>
+      <span class="hint" id="track-note"></span>
+    </div>
+  </details>
+
   <h2 id="visual-step"><span class="stepno">3b</span> Infographic
       <span class="sub" style="text-transform:none;letter-spacing:0">
       &mdash; the picture that pitches the gaps. Copy the prompt, make the
@@ -3932,6 +3958,22 @@ PAGE = """<!doctype html>
     <button data-run="visual-brief">Write image prompts</button>
     <span class="hint" id="visual-note"></span>
   </div>
+  <details class="card" style="margin-bottom:14px" id="rotation-settings">
+    <summary class="sub"><b>Which looks are in the rotation</b></summary>
+    <p class="hint" style="margin:8px 0">Each industry rotates through its own
+      pairs and never repeats the previous lead's, so ten salons in a row do
+      not all get the same graphic. Unticking here narrows every industry at
+      once &mdash; the one place to trim the series down to the looks that
+      work. Tick none and all of them stay in play.</p>
+    <div class="sub" style="margin-bottom:4px"><b>Style</b></div>
+    <div id="rot-styles" class="row" style="gap:12px;flex-wrap:wrap"></div>
+    <div class="sub" style="margin:10px 0 4px"><b>Layout</b></div>
+    <div id="rot-layouts" class="row" style="gap:12px;flex-wrap:wrap"></div>
+    <div class="row" style="margin-top:10px">
+      <button onclick="saveRotation()">Save rotation</button>
+      <span class="hint" id="rot-note"></span>
+    </div>
+  </details>
   <div id="visual"></div>
 
   <h2><span class="stepno">4</span> Send
@@ -5464,6 +5506,9 @@ async function loadVisual() {
   const step = document.querySelector('#visual-step');
   const controls = document.querySelector('#visual-controls');
   if (!el) return;
+  if (d.catalogue) drawRotation(d.catalogue);
+  const rot = document.querySelector('#rotation-settings');
+  if (rot) rot.style.display = d.enabled ? '' : 'none';
   if (!d.enabled) {
     // Hidden rather than shown empty. A campaign pitching a page has no use
     // for this step, and a panel that can never do anything reads as broken.
@@ -5713,6 +5758,93 @@ async function regenViz(leadId) {
   } finally { u.busy = false; }
 }
 
+// The track selector sits OUTSIDE the Infographic step, which is hidden when
+// the campaign pitches a page -- putting it inside would mean the one control
+// that switches graphics on was only visible once they were already on.
+function trackPicked() {
+  const pick = document.querySelector('#track-pick');
+  const needs = pick && (pick.value === 'visual' || pick.value === 'both');
+  const wrap = document.querySelector('#sig-wrap');
+  const help = document.querySelector('#sig-help');
+  if (wrap) wrap.style.display = needs ? 'block' : 'none';
+  if (help) help.style.display = needs ? 'block' : 'none';
+}
+
+async function loadTrack() {
+  let d;
+  try { d = await (await fetch('/api/track')).json(); } catch { return; }
+  if (d.error) return;
+  const pick = document.querySelector('#track-pick');
+  const sig = document.querySelector('#track-sig');
+  if (pick) pick.value = d.track || 'website';
+  if (sig) sig.value = d.signature || '';
+  trackPicked();
+}
+
+async function saveTrack() {
+  const pick = document.querySelector('#track-pick');
+  const sig = document.querySelector('#track-sig');
+  const note = document.querySelector('#track-note');
+  if (note) { note.textContent = 'Saving...'; note.className = 'hint'; }
+  const r = await fetch('/api/track', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      track: pick ? pick.value : 'website',
+      signature: sig ? sig.value : '',
+    })
+  });
+  const d = await r.json();
+  if (note) {
+    note.textContent = d.ok ? 'Saved.' : (d.error || 'Could not save that.');
+    note.className = d.ok ? 'ok' : 'err';
+  }
+  if (d.ok) { await loadVisual(); refresh(); }
+}
+
+// Tick boxes for the rotation. Drawn from what the server says exists rather
+// than a list written out here: a name typed twice drifts, and the server
+// already refuses one it does not know.
+function drawRotation(cat) {
+  const boxes = (id, all, chosen) => {
+    const el = document.querySelector(id);
+    if (!el) return;
+    el.innerHTML = (all || []).map(name => `
+      <label class="sub" style="display:flex;align-items:center;gap:6px">
+        <input type="checkbox" data-rot="${id}" value="${esc(name)}"
+               ${(chosen || []).indexOf(name) !== -1 ? 'checked' : ''}
+               style="width:auto">
+        ${esc(name)}
+      </label>`).join('');
+  };
+  boxes('#rot-styles', cat.styles, cat.chosen_styles);
+  boxes('#rot-layouts', cat.layouts, cat.chosen_layouts);
+}
+
+function rotationPicked(id) {
+  return [...document.querySelectorAll(`input[data-rot="${id}"]`)]
+    .filter(b => b.checked).map(b => b.value);
+}
+
+async function saveRotation() {
+  const note = document.querySelector('#rot-note');
+  if (note) { note.textContent = 'Saving...'; note.className = 'hint'; }
+  const r = await fetch('/api/visual/rotation', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      styles: rotationPicked('#rot-styles'),
+      layouts: rotationPicked('#rot-layouts'),
+    })
+  });
+  const d = await r.json();
+  if (note) {
+    note.textContent = d.ok
+      ? 'Saved. New prompts use it; press Different look to re-roll one you already have.'
+      : (d.error || 'Could not save that.');
+    note.className = d.ok ? 'ok' : 'err';
+  }
+  if (d.ok) await loadVisual();
+}
+
 refresh();
 loadTarget();
 loadModel();
@@ -5723,6 +5855,7 @@ loadReach();
 loadDesignLevel();
 loadServices();
 loadVisual();
+loadTrack();
 poll();
 setInterval(poll, 1200);
 setInterval(refresh, 30000);

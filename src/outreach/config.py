@@ -777,9 +777,19 @@ def load_config(
     visual_styles = _known("styles", v.get("styles"), VISUAL_STYLES)
     visual_layouts = _known("layouts", v.get("layouts"), VISUAL_LAYOUTS)
     visual_max_cards = int(v.get("max_cards", 3))
-    if visual_max_cards < 1:
+    # The floor is MIN_SPECIFIC, not 1. A cap below it means no lead can ever
+    # reach the number of evidenced gaps that earns its name on the graphic,
+    # so every single one would come out generic -- quietly, and looking
+    # exactly like the evidence being thin rather than like a setting.
+    from .gaps import MIN_SPECIFIC
+
+    if visual_max_cards < MIN_SPECIFIC:
         raise ConfigError(
-            f"visual.max_cards must be at least 1, got {visual_max_cards}"
+            f"visual.max_cards must be at least {MIN_SPECIFIC}, got "
+            f"{visual_max_cards}. Below that no graphic could ever carry the "
+            f"business's name -- {MIN_SPECIFIC} evidenced gaps is what earns "
+            "that -- so every one would silently come out generic. Remove the "
+            "line to use the default of 3."
         )
     visual_signature = str(v.get("signature", "")).strip()
     if track in ("visual", "both") and not visual_signature:
