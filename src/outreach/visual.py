@@ -442,3 +442,135 @@ def is_specific(row: dict[str, str] | None) -> bool:
     if not row:
         return False
     return (row.get("Specific") or "").strip().casefold() in {"yes", "true", "y"}
+
+
+# What the dashboard will accept for one graphic. A 16:9 infographic exports
+# well under a megabyte; eight is slack for a lossless export at 4K. The real
+# ceiling is the relay, which takes a 25MB JSON body and must carry the
+# picture base64-encoded -- a third larger again -- so a file this size still
+# sends. Refusing here, with a number, beats the relay answering 413 with an
+# HTML error page the client can only report as a transport failure.
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+
+class ImageRejected(Exception):
+    """The pasted image is not something that can be sent. Always actionable."""
+
+
+def decode_data_url(data_url: str) -> tuple[bytes, str]:
+    """Bytes and content type from a ``data:image/png;base64,...`` URL.
+
+    This is how the page hands over a pasted or dropped file: the browser
+    already has the bytes, so a data URL avoids a multipart form and the
+    file-input dance on a phone, where paste is the natural gesture.
+    """
+    import base64
+    import binascii
+
+    text = (data_url or "").strip()
+    if not text.startswith("data:"):
+        raise ImageRejected("That is not an image. Paste or drop the picture itself.")
+    header, _, payload = text.partition(",")
+    if not payload:
+        raise ImageRejected("The image came through empty. Try pasting it again.")
+    content_type = header[len("data:"):].split(";")[0].strip().casefold()
+    if content_type not in IMAGE_TYPES:
+        raise ImageRejected(
+            f"{content_type or 'That file'} cannot be sent on WhatsApp. "
+            "Export the graphic as PNG, JPEG or WebP."
+        )
+    if "base64" not in header:
+        raise ImageRejected("The image is not base64 encoded.")
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ImageRejected(f"The image data is damaged: {exc}") from exc
+    check_image_bytes(raw)
+    return raw, content_type
+
+
+def check_image_bytes(raw: bytes) -> None:
+    """Refuse an empty or oversized file, naming the number."""
+    if not raw:
+        raise ImageRejected("The image came through empty. Try pasting it again.")
+    if len(raw) > MAX_IMAGE_BYTES:
+        raise ImageRejected(
+            f"That image is {len(raw) / 1_048_576:.1f}MB, over the "
+            f"{MAX_IMAGE_BYTES // 1_048_576}MB limit. Export it smaller -- a "
+            "graphic this size will not reach WhatsApp."
+        )
+
+
+def is_fetchable_url(url: str) -> bool:
+    """Whether this address is safe for the dashboard to download from.
+
+    The dashboard runs on Lyon's machine, and on a server it runs inside a
+    private network. So a URL typed into the page is a request made from
+    *there*: an address on the local network, or a cloud metadata endpoint,
+    would be fetched with whatever access that machine has and the bytes
+    handed straight back. Only public http(s) addresses are allowed, and a
+    host that resolves anywhere private is refused.
+
+    Deliberately not a blocklist of strings. "127.0.0.1" is one spelling of
+    loopback out of many, and ``localtest.me`` resolves to it from a name
+    that looks public -- so the resolved address is what is checked.
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse((url or "").strip())
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, None)
+    except (socket.gaierror, UnicodeError, OSError):
+        return False
+    if not infos:
+        return False
+    for info in infos:
+        try:
+            address = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_reserved
+            or address.is_multicast
+            or address.is_unspecified
+        ):
+            return False
+    return True
+
+
+def save_image(business_name: str, lead_id: str, raw: bytes, content_type: str) -> str:
+    """Write one graphic into the state directory, returning its stored path.
+
+    Written under a ``.part`` name and moved into place, like the cloudflared
+    download: an interruption must not leave a half-file that looks like a
+    picture and then fails oddly at send time.
+    """
+    import os
+
+    check_image_bytes(raw)
+    if content_type not in IMAGE_TYPES:
+        raise ImageRejected(f"{content_type} cannot be sent on WhatsApp.")
+    rel = image_rel_path(business_name, lead_id, content_type)
+    target = visuals_dir().parent / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    part = target.with_suffix(target.suffix + ".part")
+    try:
+        part.write_bytes(raw)
+        os.replace(part, target)
+    except OSError as exc:
+        try:
+            part.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise ImageRejected(f"Could not save the image: {exc}") from exc
+    return rel

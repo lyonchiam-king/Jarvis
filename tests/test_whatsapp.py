@@ -1547,7 +1547,7 @@ class TestSeeingTheScreenshotBeforeSending:
         resp = client.get("/api/screenshot/lead-1")
 
         assert resp.status_code == 404
-        assert "No screenshot" in json.loads(resp.data)["error"]
+        assert "No picture" in json.loads(resp.data)["error"]
 
     def test_an_unknown_lead_is_refused(self, monkeypatch):
         client = _make_client(

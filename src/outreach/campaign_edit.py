@@ -353,6 +353,138 @@ def rewrite_angle(text: str, angle: str, offers_follow_up: bool) -> str:
     return result
 
 
+def _ensure_section(lines: list[str], name: str) -> tuple[int, int]:
+    """Bounds for a top-level section, creating an empty one if it is absent.
+
+    Every rewrite before this one edited a section the shipped campaign file
+    already has. ``visual:`` does not exist in any campaign written before
+    the infographic track, so saving a signature into one would otherwise
+    fail with "no such section" on exactly the file everybody has.
+    """
+    bounds = _section_bounds(lines, name)
+    if bounds is not None:
+        return bounds
+    if lines and lines[-1].strip():
+        lines.append("")
+    lines.append(f"{name}:")
+    return len(lines), len(lines)
+
+
+def rewrite_track(text: str, track: str, signature: str) -> str:
+    """Set ``outreach.track`` and ``visual.signature``, comments intact.
+
+    Both together, because they are one decision in the same sense that the
+    angle and its follow-up promise are: a campaign asking for graphics with
+    nothing to sign them refuses to load, so saving the track alone would
+    leave Lyon with a tool that will not start.
+    """
+    from .config import TRACKS
+
+    cleaned = track.strip().lower()
+    if cleaned not in TRACKS:
+        raise CampaignEditError(
+            f"track must be one of {sorted(TRACKS)}, got {track!r}"
+        )
+    signature = signature.strip()
+    if cleaned in ("visual", "both") and not signature:
+        raise CampaignEditError(
+            "A campaign that sends graphics needs a signature for the ribbon "
+            "along the bottom of each one, e.g. "
+            '"by Lyon, Business Growth Consultant".'
+        )
+
+    lines = text.splitlines()
+    bounds = _section_bounds(lines, "outreach")
+    if bounds is None:
+        raise CampaignEditError(
+            "This campaign file has no top-level `outreach:` section."
+        )
+    start, end = bounds
+    if not _replace_scalar(lines, start, end, "track", cleaned):
+        lines.insert(start, f"  track: {_scalar(cleaned)}")
+
+    # Written whatever the track is, and written even when empty -- a fork
+    # inherits any key it does not carry from the tracked template, so a key
+    # deleted here would come straight back on the next load. The same reason
+    # the services list is written as `[]` rather than removed.
+    v_start, v_end = _ensure_section(lines, "visual")
+    if not _replace_scalar(lines, v_start, v_end, "signature", signature):
+        lines.insert(v_start, f"  signature: {_scalar(signature)}")
+
+    result = "\n".join(lines)
+    if text.endswith("\n"):
+        result += "\n"
+    _validate(result)
+    return result
+
+
+def rewrite_visual_rotation(
+    text: str, styles: list[str], layouts: list[str]
+) -> str:
+    """Set ``visual.styles`` and ``visual.layouts``, comments intact.
+
+    The one place the series is narrowed. Both lists are replaced wholesale
+    for the same reason the services list is: they are short, they are edited
+    as one block on the page, and a merge would leave a style the user just
+    unticked still in the rotation.
+
+    An empty list means "all of them", which is the code default -- so it is
+    written as ``[]`` rather than omitted, since an omitted key would be
+    inherited from the template and could then mean something else.
+    """
+    from .visual import LAYOUTS, STYLES
+
+    def check(key: str, values: list[str], table: dict) -> list[str]:
+        cleaned = [str(v).strip() for v in values if str(v).strip()]
+        unknown = [v for v in cleaned if v not in table]
+        if unknown:
+            raise CampaignEditError(
+                f"{key} contains " + ", ".join(repr(u) for u in unknown)
+                + ". Valid names: " + ", ".join(sorted(table)) + "."
+            )
+        # De-duplicated, order preserved: the page sends tick boxes, and a
+        # duplicate would make one style twice as likely in the ring.
+        seen, out = set(), []
+        for value in cleaned:
+            if value not in seen:
+                seen.add(value)
+                out.append(value)
+        return out
+
+    chosen_styles = check("styles", styles, STYLES)
+    chosen_layouts = check("layouts", layouts, LAYOUTS)
+
+    lines = text.splitlines()
+    start, end = _ensure_section(lines, "visual")
+
+    kept, i = [], start
+    while i < end:
+        stripped = lines[i].strip()
+        if stripped.startswith("styles:") or stripped.startswith("layouts:"):
+            i += 1
+            while i < end and lines[i].strip().startswith("- "):
+                i += 1
+            continue
+        kept.append(lines[i])
+        i += 1
+    lines = lines[:start] + kept + lines[end:]
+
+    block: list[str] = []
+    for key, chosen in (("styles", chosen_styles), ("layouts", chosen_layouts)):
+        if chosen:
+            block.append(f"  {key}:")
+            block += [f"    - {_scalar(v)}" for v in chosen]
+        else:
+            block.append(f"  {key}: []")
+    lines = lines[:start] + block + lines[start:]
+
+    result = "\n".join(lines)
+    if text.endswith("\n"):
+        result += "\n"
+    _validate(result)
+    return result
+
+
 def rewrite_design_level(text: str, level: str) -> str:
     """Set ``build.design_level``, comments intact.
 

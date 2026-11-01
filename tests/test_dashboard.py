@@ -3372,3 +3372,210 @@ def test_an_error_with_steps_in_it_keeps_its_line_breaks():
     assert "white-space:pre-wrap" in PAGE, (
         "the class is applied but nothing makes it keep the breaks"
     )
+
+
+# --------------------------------------------- the infographic panel, running
+#
+# Parsing the page is not running it, and the two send bugs that cost a
+# morning were both invisible to `node --check`. So the infographic panel's
+# state machine is driven under node too, with the HTML it produces read back.
+
+
+_VIZ_DOM = """
+    const _registry = {};
+    function _el(sel) {
+      if (!_registry[sel]) _registry[sel] = {
+        innerHTML: '', textContent: '', value: '', className: '',
+        disabled: false, hidden: false, style: {},
+        classList: {add(){}, remove(){}},
+        select(){}, querySelector: () => null,
+      };
+      return _registry[sel];
+    }
+    globalThis._el = _el;
+    globalThis.document = {
+      querySelector: (sel) => _el(sel),
+      querySelectorAll: () => [],
+      getElementById: (id) => _el('#' + id),
+      addEventListener(){},
+    };
+    globalThis.refresh = async () => {};
+"""
+
+
+def _viz_queue_response(**over):
+    import json as _json
+
+    payload = {
+        "enabled": True,
+        "track": "visual",
+        "tool_name": "Google Flow",
+        "tool_url": "",
+        "signature": "by Lyon",
+        "counts": {"needs_image": 1, "needs_check": 0, "ready": 0, "skipped": 0},
+        "catalogue": {"styles": [], "layouts": [], "chosen_styles": [],
+                      "chosen_layouts": []},
+        "queue": [
+            {
+                "lead_id": "LEAD-1",
+                "name": "Your Nail Crush",
+                "category": "Nail salon",
+                "prompt": "Wide 16:9 ... for \"Your Nail Crush\".",
+                "gaps": "no_website: Google lists no website",
+                "style": "paper-cut",
+                "layout": "rows",
+                "specific": True,
+                "state": "needs_image",
+                "approval": "Approved",
+                "expected_text": ["3 quick wins for Your Nail Crush",
+                                  "Calls go unanswered  ->  Let them book online"],
+                "created_at": "2026-01-01T00:00:00Z",
+            }
+        ],
+    }
+    payload.update(over)
+    return _json.dumps(payload)
+
+
+def test_the_infographic_panel_renders_a_card_per_prompt():
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({_viz_queue_response()})}});
+    await loadVisual();
+    console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
+    """)
+    html = __import__("json").loads(out)["html"]
+    assert "Your Nail Crush" in html
+    assert "Copy prompt" in html
+    assert "paper-cut" in html
+
+
+def test_a_card_waiting_for_a_picture_offers_all_three_ways_in():
+    """He has the link and the downloadable file, and paste is the natural
+    gesture -- so none of the three is the only one."""
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({_viz_queue_response()})}});
+    await loadVisual();
+    console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
+    """)
+    html = __import__("json").loads(out)["html"]
+    assert "Ctrl+V" in html
+    assert 'type="file"' in html
+    assert "paste the link" in html
+
+
+def test_a_picture_that_nobody_checked_asks_for_the_words_to_be_read():
+    """Nothing in this tool can test that the text rendered, so the panel has
+    to put the exact words next to the picture and make the tick the gate."""
+    q = __import__("json").loads(_viz_queue_response())
+    q["queue"][0]["state"] = "needs_check"
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({__import__('json').dumps(q)})}});
+    await loadVisual();
+    console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
+    """)
+    html = __import__("json").loads(out)["html"]
+    assert "The words are right" in html
+    assert "3 quick wins for Your Nail Crush" in html
+    assert "Calls go unanswered" in html
+    assert "<img" in html and "/api/screenshot/" in html
+
+
+def test_a_checked_picture_says_so_instead_of_asking_again():
+    q = __import__("json").loads(_viz_queue_response())
+    q["queue"][0]["state"] = "ready"
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({__import__('json').dumps(q)})}});
+    await loadVisual();
+    console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
+    """)
+    html = __import__("json").loads(out)["html"]
+    assert "The words are right" not in html
+    assert "goes out with the message" in html
+
+
+def test_a_generic_graphic_says_so_on_its_own_card():
+    """He has to know which graphics carry his claims and which do not,
+    before he sends one."""
+    q = __import__("json").loads(_viz_queue_response())
+    q["queue"][0]["specific"] = False
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({__import__('json').dumps(q)})}});
+    await loadVisual();
+    console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
+    """)
+    html = __import__("json").loads(out)["html"]
+    assert "not enough evidence to name them" in html
+
+
+def test_the_step_is_hidden_when_the_campaign_pitches_a_page():
+    """A panel that can never do anything reads as broken."""
+    out = _run_in_node(_VIZ_DOM + """
+    globalThis.fetch = async () => ({json: async () => ({
+      enabled: false, track: 'website', queue: []
+    })});
+    await loadVisual();
+    console.log(JSON.stringify({
+      html: _el('#visual').innerHTML,
+      step: _el('#visual-step').style.display,
+    }));
+    """)
+    data = __import__("json").loads(out)
+    assert data["html"] == ""
+    assert data["step"] == "none"
+
+
+def test_a_lead_is_addressed_by_its_id_and_never_by_its_index():
+    """The queue is rebuilt underneath the buttons every 30 seconds."""
+    q = __import__("json").loads(_viz_queue_response())
+    q["queue"].append({**q["queue"][0], "lead_id": "LEAD-2", "name": "Second"})
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({__import__('json').dumps(q)})}});
+    await loadVisual();
+    console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
+    """)
+    html = __import__("json").loads(out)["html"]
+    assert "'LEAD-2'" in html
+    assert "(0)" not in html and "(1)" not in html
+
+
+def test_the_timer_stands_aside_while_a_link_is_being_typed():
+    """A refresh landing mid-decision is what discarded the send confirmation
+    twice over; the same mistake here would wipe a half-typed link."""
+    out = _run_in_node(_VIZ_DOM + """
+    console.log(JSON.stringify({idle: vizBusy()}));
+    vizArm('LEAD-1', true);
+    console.log(JSON.stringify({armed: vizBusy()}));
+    vizArm('LEAD-1', false);
+    console.log(JSON.stringify({done: vizBusy()}));
+    """)
+    assert '"idle":false' in out
+    assert '"armed":true' in out
+    assert '"done":false' in out
+
+
+def test_pasting_something_that_is_not_a_picture_says_so():
+    """"Copy image" and "copy the page" are one keystroke apart."""
+    out = _run_in_node(_VIZ_DOM + """
+    let posted = 0;
+    globalThis.fetch = async () => { posted += 1; return {json: async () => ({ok: true})}; };
+    onVizPaste('LEAD-1', {
+      clipboardData: {items: [{type: 'text/html', getAsFile: () => null}]},
+      preventDefault(){},
+    });
+    console.log(JSON.stringify({posted, note: vizUi['LEAD-1'].note}));
+    """)
+    data = __import__("json").loads(out)
+    assert data["posted"] == 0, "a non-image must not be uploaded"
+    assert "not a picture" in data["note"]
+
+
+def test_an_error_from_the_server_is_shown_on_the_card_not_swallowed():
+    out = _run_in_node(_VIZ_DOM + """
+    globalThis.fetch = async () => ({json: async () => ({
+      error: 'That image is 12.0MB, over the 8MB limit.'
+    })});
+    globalThis.loadVisual = async () => {};
+    await attachVizImage('LEAD-1', 'data:image/png;base64,aGk=', '');
+    console.log(JSON.stringify({note: vizUi['LEAD-1'].note}));
+    """)
+    assert "over the 8MB limit" in __import__("json").loads(out)["note"]

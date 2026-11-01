@@ -61,6 +61,7 @@ STAGE_COMMANDS = {
     "reachability": ["run", "reachability"],
     "reachability-recheck": ["run", "reachability", "--recheck"],
     "site-brief": ["run", "site-brief"],
+    "visual-brief": ["run", "visual-brief"],
     "site-brief-rewrite": ["run", "site-brief", "--rewrite"],
     "site-build": ["run", "site-build"],
     "site-generate": ["run", "site-generate"],
@@ -85,6 +86,7 @@ TAKES_LIMIT = {
     "reachability-recheck",
     "site-brief",
     "site-brief-rewrite",
+    "visual-brief",
     "site-build",
     "site-generate",
     "outreach-draft",
@@ -97,6 +99,7 @@ TAKES_LIMIT = {
 RANKS_ITS_QUEUE = {
     "research",
     "site-brief",
+    "visual-brief",
     # Rewriting picks a queue too, so the socials-first tick has to reach it.
     # A button that quietly ignores the box next to it is the exact bug that
     # was reported against "Write briefs" -- once is enough.
@@ -1879,14 +1882,28 @@ def create_app(config: Config) -> Flask:
             }
         )
 
-    def _shot_for(cfg, lead, lead_id):
-        """The lead's screenshot on disk, or None.
+    def _shot_for(cfg, lead, lead_id, visual_row=None):
+        """The one picture this lead's message carries, or None.
 
-        Both homes: beside a page this pipeline generated, and in the lead's
-        slug directory when the site exists only at a URL.
+        A confirmed graphic wins over a screenshot of the site -- it is what
+        the message is written about, and the page it displaces is still in
+        the text as a link. One picture, because the relay sends one.
+
+        Both of the screenshot's homes are still checked: beside a page this
+        pipeline generated, and in the lead's slug directory when the site
+        exists only at a URL.
         """
         from . import screenshot as shot_mod
+        from . import visual as visual_lib
         from .stages.outreach_draft import shot_dir_for, site_page_for
+
+        if visual_row is not None:
+            try:
+                found = visual_lib.confirmed_image(visual_row)
+            except Exception:  # noqa: BLE001 -- a picture is never fatal
+                found = None
+            if found is not None:
+                return found
 
         candidates = []
         page = site_page_for(cfg, lead, lead_id)
@@ -1897,6 +1914,57 @@ def create_app(config: Config) -> Flask:
             if path.exists() and path.stat().st_size:
                 return path
         return None
+
+    def _visual_rows(c, sheets=None):
+        """Every Visual Briefs row, or {} on the original track.
+
+        A campaign that pitches a page must not pay a Sheet round trip for a
+        tab it has nothing in, so the track decides whether this reads at
+        all. Never raises: the graphic is decoration over a message that
+        sends regardless, and a failed read here must not take the send
+        queue down with it.
+        """
+        from .stages.outreach_draft import needs_an_image
+
+        if not needs_an_image(c):
+            return {}
+        try:
+            return (sheets or _sheets_client(c)).read_rows(schema.VISUAL_BRIEFS)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not read the Visual Briefs tab: %s", exc)
+            return {}
+
+    def _visual_row_for(c, lead_id, sheets=None):
+        entry = _visual_rows(c, sheets).get(lead_id)
+        return entry[1] if entry else None
+
+    def _visual_confirmed(entry) -> bool:
+        """Whether this ``(row_number, row)`` entry has a usable graphic."""
+        from . import visual as visual_lib
+
+        if not entry:
+            return False
+        try:
+            return visual_lib.confirmed_image(entry[1]) is not None
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _visual_state(row) -> str:
+        """Where one graphic is up to, in one word the page can branch on.
+
+        Four states, because four things are genuinely different and each
+        needs a different button: retired by hand, waiting for the picture,
+        waiting for a person to read the words on it, and ready to send.
+        """
+        from . import visual as visual_lib
+
+        if visual_lib.is_skipped(row):
+            return "skipped"
+        if visual_lib.resolve_image((row or {}).get("Image File", "")) is None:
+            return "needs_image"
+        if not visual_lib.text_confirmed(row):
+            return "needs_check"
+        return "ready"
 
     @app.route("/api/screenshot/<lead_id>")
     def api_screenshot(lead_id: str):
@@ -1917,10 +1985,17 @@ def create_app(config: Config) -> Flask:
         if entry is None:
             return jsonify({"error": "No such lead"}), 404
 
-        path = _shot_for(c, entry[1], lead_id)
+        path = _shot_for(c, entry[1], lead_id, _visual_row_for(c, lead_id))
         if path is None:
-            return jsonify({"error": "No screenshot for this lead yet"}), 404
-        return send_file(path.resolve(), mimetype="image/png")
+            return jsonify({"error": "No picture for this lead yet"}), 404
+        # The graphic arrives as whatever the image tool exported, so the type
+        # is read off the name rather than asserted. A PNG served as a JPEG
+        # renders in a browser and then fails in the relay, which is the worst
+        # place to find out.
+        import mimetypes
+
+        guessed = mimetypes.guess_type(path.name)[0] or "image/png"
+        return send_file(path.resolve(), mimetype=guessed)
 
     @app.route("/api/leads")
     def api_leads():
@@ -2181,6 +2256,436 @@ def create_app(config: Config) -> Flask:
 
         return jsonify({"ok": True, "url": sheets.url, "title": title})
 
+    # ------------------------------------------------- the infographic track
+    #
+    # The graphic is generated outside this tool, by hand, in the image tool.
+    # So these endpoints are the hand-off in both directions: the prompt out,
+    # the picture back. Nothing here generates an image and nothing here can
+    # check that the words on one rendered correctly -- which is why the
+    # confirmation tick is a gate rather than advice.
+
+    @app.route("/api/visual/queue")
+    def api_visual_queue():
+        """Every image prompt, with where each one is up to."""
+        from . import visual as visual_lib
+        from .stages.outreach_draft import needs_an_image
+
+        c = current()
+        catalogue = {
+            "styles": sorted(visual_lib.STYLES),
+            "layouts": sorted(visual_lib.LAYOUTS),
+            "chosen_styles": list(c.visual.styles),
+            "chosen_layouts": list(c.visual.layouts),
+        }
+        base = {
+            "track": c.outreach.track,
+            "enabled": needs_an_image(c),
+            "tool_name": c.visual.image_tool_name,
+            "tool_url": c.visual.image_tool_url,
+            "signature": c.visual.signature,
+            "catalogue": catalogue,
+            "queue": [],
+            "counts": {"needs_image": 0, "needs_check": 0, "ready": 0, "skipped": 0},
+        }
+        if not base["enabled"] or not c.secrets.sheet_id:
+            return jsonify(base)
+
+        try:
+            sheets = _sheets_client(c)
+            leads = sheets.read_rows(schema.LEADS)
+            briefs = sheets.read_rows(schema.VISUAL_BRIEFS)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({**base, "error": _explain_sheets(exc, c)}), 200
+
+        queue = []
+        for lead_id, (_n, row) in briefs.items():
+            lead = leads.get(lead_id, (0, {}))[1]
+            state = _visual_state(row)
+            base["counts"][state] = base["counts"].get(state, 0) + 1
+            queue.append(
+                {
+                    "lead_id": lead_id,
+                    "name": row.get("Business Name") or lead.get("Business Name", ""),
+                    "category": lead.get("Category", ""),
+                    "prompt": row.get("Image Prompt", ""),
+                    # The evidence behind each card, so a claim can be checked
+                    # against the row that justified it before it is sent.
+                    "gaps": row.get("Gaps Used", ""),
+                    "style": row.get("Style", ""),
+                    "layout": row.get("Layout", ""),
+                    "specific": visual_lib.is_specific(row),
+                    "state": state,
+                    "approval": (row.get("Approval Status") or "").strip(),
+                    # The exact words that must appear on the picture, so they
+                    # can be read against it side by side. Nothing here can
+                    # test that they rendered; this is what makes the check
+                    # possible for the one pair of eyes that can.
+                    "expected_text": _expected_text(row),
+                    "created_at": row.get("Created At", ""),
+                }
+            )
+        base["queue"] = queue
+        return jsonify(base)
+
+    def _expected_text(row) -> list[str]:
+        """Every string that must appear on the graphic, in reading order.
+
+        Lifted back out of the prompt rather than recomputed: the prompt is
+        what was pasted into the image tool, so it is the only honest source
+        for what the picture was asked to say. Recomputing from the Sheet
+        would drift the moment a prompt was edited by hand.
+        """
+        import re
+
+        prompt = row.get("Image Prompt", "") or ""
+        out = []
+        headline = re.search(r'Top headline, large: "([^"]*)"', prompt)
+        if headline:
+            out.append(headline.group(1))
+        for problem, fix in re.findall(r'^\d+: "([^"]*)" -> "([^"]*)"', prompt, re.M):
+            out.append(f"{problem}  ->  {fix}")
+        ribbon = re.search(r'Bottom ribbon in small text: "([^"]*)"', prompt)
+        if ribbon:
+            out.append(ribbon.group(1))
+        return out
+
+    @app.route("/api/visual/attach", methods=["POST"])
+    def api_visual_attach():
+        """Take the picture back from the image tool and record it.
+
+        Accepts the bytes (pasted or dropped, as a data URL) or an address to
+        download them from -- the image tool offers both, and making Lyon
+        save a file first would be a step for no reason.
+
+        Attaching clears any previous confirmation. The words on the new
+        picture have not been read, and carrying a tick across from the
+        picture it replaced would attach an unchecked graphic to a real
+        message, which is the one failure that cannot be undone after
+        sending.
+        """
+        from . import visual as visual_lib
+
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+
+        c = current()
+        try:
+            sheets = _sheets_client(c)
+            leads = sheets.read_rows(schema.LEADS)
+            briefs = sheets.read_rows(schema.VISUAL_BRIEFS)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": _explain_sheets(exc, c)}), 200
+
+        if lead_id not in briefs:
+            return jsonify({
+                "error": "That lead has no image prompt yet. Run the "
+                         "Infographic step for it first."
+            }), 200
+        name = (
+            briefs[lead_id][1].get("Business Name")
+            or leads.get(lead_id, (0, {}))[1].get("Business Name", "")
+            or lead_id
+        )
+
+        data_url = (payload.get("data_url") or "").strip()
+        url = (payload.get("url") or "").strip()
+        try:
+            if data_url:
+                raw, content_type = visual_lib.decode_data_url(data_url)
+                source = "upload"
+            elif url:
+                if not visual_lib.is_fetchable_url(url):
+                    return jsonify({
+                        "error": "That address cannot be downloaded from here. "
+                                 "It has to be a public http(s) link -- or save "
+                                 "the picture and paste it in instead."
+                    }), 200
+                raw, content_type = _download_image(url)
+                source = f"url {url}"
+            else:
+                return jsonify({
+                    "error": "Paste the picture, or give the link the image "
+                             "tool showed you."
+                }), 200
+            stored = visual_lib.save_image(name, lead_id, raw, content_type)
+        except visual_lib.ImageRejected as exc:
+            return jsonify({"error": str(exc)}), 200
+
+        try:
+            sheets.update_column(
+                schema.VISUAL_BRIEFS, "Image File", {lead_id: stored}
+            )
+            sheets.update_column(
+                schema.VISUAL_BRIEFS, "Image Source", {lead_id: source}
+            )
+            # Cleared, not carried over. See the docstring.
+            sheets.update_column(
+                schema.VISUAL_BRIEFS, "Text Confirmed", {lead_id: ""}
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": _explain_sheets(exc, c)}), 200
+
+        return jsonify({
+            "ok": True,
+            "lead_id": lead_id,
+            "state": "needs_check",
+            "bytes": len(raw),
+        })
+
+    def _download_image(url: str) -> tuple[bytes, str]:
+        """Fetch one picture, refusing anything that is not one.
+
+        Streamed with a cap rather than read whole: an address that answers
+        with a hundred megabytes would otherwise be held in memory before
+        anything got a chance to refuse it.
+        """
+        from . import visual as visual_lib
+
+        import requests
+
+        try:
+            resp = requests.get(url, timeout=20.0, stream=True)
+        except requests.RequestException as exc:
+            raise visual_lib.ImageRejected(
+                f"Could not download that link: {exc}"
+            ) from exc
+        if resp.status_code != 200:
+            raise visual_lib.ImageRejected(
+                f"That link answered {resp.status_code}. Open it in a browser "
+                "to check it still works, or paste the picture instead."
+            )
+        content_type = (resp.headers.get("Content-Type") or "").split(";")[0]
+        content_type = content_type.strip().casefold()
+        if content_type not in visual_lib.IMAGE_TYPES:
+            raise visual_lib.ImageRejected(
+                f"That link is {content_type or 'not an image'}, not a picture. "
+                "Image tools often give a link to a *page* -- use the download "
+                "button and paste the file instead."
+            )
+        chunks, total = [], 0
+        for chunk in resp.iter_content(64 * 1024):
+            total += len(chunk)
+            if total > visual_lib.MAX_IMAGE_BYTES:
+                raise visual_lib.ImageRejected(
+                    f"That picture is over the "
+                    f"{visual_lib.MAX_IMAGE_BYTES // 1_048_576}MB limit."
+                )
+            chunks.append(chunk)
+        return b"".join(chunks), content_type
+
+    @app.route("/api/visual/confirm", methods=["POST"])
+    def api_visual_confirm():
+        """Record that a person has read the words on the picture.
+
+        The image tool is outside this pipeline, so nothing here can test
+        that the text rendered correctly -- and a garbled word on a graphic
+        carrying your name is the one failure that cannot be fixed after
+        sending. So the check goes where the only eye is, and this is what
+        makes it binding: no message attaches a graphic without it.
+        """
+        from . import visual as visual_lib
+
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+
+        c = current()
+        try:
+            sheets = _sheets_client(c)
+            briefs = sheets.read_rows(schema.VISUAL_BRIEFS)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": _explain_sheets(exc, c)}), 200
+
+        entry = briefs.get(lead_id)
+        if entry is None:
+            return jsonify({"error": "That lead has no image prompt."}), 200
+        if visual_lib.resolve_image(entry[1].get("Image File", "")) is None:
+            return jsonify({
+                "error": "There is no picture to check yet. Paste it in first."
+            }), 200
+
+        try:
+            sheets.update_column(
+                schema.VISUAL_BRIEFS, "Text Confirmed", {lead_id: "yes"}
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": _explain_sheets(exc, c)}), 200
+        return jsonify({"ok": True, "lead_id": lead_id, "state": "ready"})
+
+    @app.route("/api/visual/clear", methods=["POST"])
+    def api_visual_clear():
+        """Drop the picture so a corrected one can be pasted in.
+
+        The file itself is left on disk. It cost a generation, the Sheet no
+        longer points at it, and deleting someone's only copy of a graphic to
+        save a few kilobytes is the wrong trade.
+        """
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+
+        c = current()
+        try:
+            sheets = _sheets_client(c)
+            for column in ("Image File", "Image Source", "Text Confirmed"):
+                sheets.update_column(
+                    schema.VISUAL_BRIEFS, column, {lead_id: ""}
+                )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": _explain_sheets(exc, c)}), 200
+        return jsonify({"ok": True, "lead_id": lead_id, "state": "needs_image"})
+
+    @app.route("/api/visual/skip", methods=["POST"])
+    def api_visual_skip():
+        """Retire one graphic without stopping the lead being messaged.
+
+        Written with ``user_edit=True`` -- Approval Status is a manual
+        column, and this is the named exception: an action on a row the user
+        has just clicked. A skipped graphic is a decision rather than a wait,
+        so the draft stops holding that lead and pitches the page instead.
+        """
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+        decision = (payload.get("decision") or "Skip").strip()
+        if decision not in ("Skip", "Approved"):
+            return jsonify({"error": "decision must be Skip or Approved"}), 400
+
+        c = current()
+        try:
+            sheets = _sheets_client(c)
+            sheets.update_column(
+                schema.VISUAL_BRIEFS,
+                "Approval Status",
+                {lead_id: decision},
+                user_edit=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": _explain_sheets(exc, c)}), 200
+        return jsonify({"ok": True, "lead_id": lead_id, "approval": decision})
+
+    @app.route("/api/visual/regenerate", methods=["POST"])
+    def api_visual_regenerate():
+        """Re-roll one lead's prompt, rotating off the look it already had.
+
+        The targeted answer to "the style list changed, so every prompt
+        written before it is the old one". The picture and its confirmation
+        survive: they cost a generation and a person's attention, and the new
+        prompt has not replaced them yet.
+        """
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+
+        c = current()
+        try:
+            from .providers.llm import make_writer
+            from .stages import visual_brief as visual_brief_stage
+
+            out = visual_brief_stage.regenerate_one(
+                c, _sheets_client(c), make_writer(c), lead_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": _explain_sheets(exc, c)}), 200
+        return jsonify({"ok": True, **out})
+
+    @app.route("/api/track", methods=["GET", "POST"])
+    def api_track():
+        """Read or set which artefact this campaign's message carries.
+
+        One setting rather than two that can disagree: the track decides
+        whether a graphic is written, whether the draft waits for one, and
+        what the message claims. The signature is saved with it because a
+        campaign asking for graphics with nothing to sign them refuses to
+        load -- saving the track alone would leave a tool that will not start.
+        """
+        from .campaign_edit import CampaignEditError, rewrite_track
+        from .config import TRACKS
+
+        if request.method == "GET":
+            c = current()
+            return jsonify({
+                "track": c.outreach.track,
+                "tracks": sorted(TRACKS),
+                "signature": c.visual.signature,
+                "tool_name": c.visual.image_tool_name,
+            })
+
+        payload = request.json or {}
+        track = (payload.get("track") or "").strip().lower()
+        if track not in TRACKS:
+            return jsonify({
+                "error": f"Unknown track {track!r}. Expected one of {sorted(TRACKS)}."
+            }), 400
+        signature = (payload.get("signature") or "").strip()
+
+        try:
+            path = _writable_campaign()
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        try:
+            original = path.read_text()
+            path.write_text(rewrite_track(original, track, signature))
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        except OSError as exc:
+            return jsonify({"error": f"Could not save {path}: {exc}"}), 200
+
+        try:
+            state["config"] = load_config(path)
+        except ConfigError as exc:
+            path.write_text(original)
+            return jsonify({"error": f"Reverted -- {exc}"}), 200
+
+        return jsonify({"ok": True, "track": track, "signature": signature})
+
+    @app.route("/api/visual/rotation", methods=["POST"])
+    def api_visual_rotation():
+        """Narrow the series to the styles and layouts that actually work.
+
+        The one place this is cut. Both lists feed every industry's rotation,
+        so unticking a style here removes it everywhere -- which is the point:
+        the alternative is seven industry rings to keep in step by hand.
+        """
+        from .campaign_edit import CampaignEditError, rewrite_visual_rotation
+
+        payload = request.json or {}
+        styles = payload.get("styles") or []
+        layouts = payload.get("layouts") or []
+        if not isinstance(styles, list) or not isinstance(layouts, list):
+            return jsonify({"error": "styles and layouts must be lists"}), 400
+
+        try:
+            path = _writable_campaign()
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        try:
+            original = path.read_text()
+            path.write_text(rewrite_visual_rotation(original, styles, layouts))
+        except CampaignEditError as exc:
+            return jsonify({"error": str(exc)}), 200
+        except OSError as exc:
+            return jsonify({"error": f"Could not save {path}: {exc}"}), 200
+
+        try:
+            state["config"] = load_config(path)
+        except ConfigError as exc:
+            path.write_text(original)
+            return jsonify({"error": f"Reverted -- {exc}"}), 200
+
+        c = current()
+        return jsonify({
+            "ok": True,
+            "styles": list(c.visual.styles),
+            "layouts": list(c.visual.layouts),
+        })
+
     @app.route("/api/whatsapp/queue")
     def api_whatsapp_queue():
         """Leads waiting for WhatsApp send, with phone + message text."""
@@ -2201,6 +2706,10 @@ def create_app(config: Config) -> Flask:
             research = sheets.read_rows(schema.RESEARCH)
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+
+        # Read once for the whole queue rather than per lead. Skipped
+        # entirely on the original track.
+        visuals = _visual_rows(c, sheets)
 
         queue: list[dict[str, str]] = []
         # Every message the pipeline drafted has to end up in one of these two
@@ -2300,10 +2809,21 @@ def create_app(config: Config) -> Flask:
                         phone, _country_of(lead, c.compliance.country_code)
                     ),
                     "message": row.get("WhatsApp Message", ""),
-                    # Whether a picture of the site will be attached. Shown
-                    # in the queue because until now the only way to find
-                    # out was to send the message and look at your phone.
-                    "has_shot": _shot_for(c, lead, lead_id) is not None,
+                    # Whether a picture will be attached, and which one.
+                    # Shown in the queue because until now the only way to
+                    # find out was to send the message and look at your phone
+                    # -- and on the infographic track the picture IS the
+                    # pitch, so sending without it is worse than a plain
+                    # message: the words describe something that is not there.
+                    "has_shot": _shot_for(
+                        c, lead, lead_id,
+                        (visuals.get(lead_id) or (0, None))[1],
+                    ) is not None,
+                    "shot_kind": (
+                        "visual"
+                        if _visual_confirmed(visuals.get(lead_id))
+                        else "site"
+                    ),
                     # The relay-free way to send this. Built here because
                     # this is where the number has just been normalised with
                     # the lead's own country; the browser must never work a
@@ -2551,7 +3071,11 @@ def create_app(config: Config) -> Flask:
             # there. Looked up here rather than trusted from the browser:
             # a path from the page could point anywhere on disk.
             lead_row = leads_for_shot.get(lead_id)
-            shot = _shot_for(c, lead_row, lead_id) if lead_row is not None else None
+            shot = (
+                _shot_for(c, lead_row, lead_id, _visual_row_for(c, lead_id))
+                if lead_row is not None
+                else None
+            )
 
             result = client.send_message(phone, message, send_country, shot)
             # Carried through so the page can say "sent, not yet confirmed"
@@ -3114,6 +3638,21 @@ PAGE = """<!doctype html>
   .wa-msg-card .wa-row { display:flex; justify-content:space-between; align-items:center;
                          gap:10px; }
   .wa-msg-card .wa-state { font-size:13px; }
+  /* The infographic panel. The thumbnail is deliberately the size WhatsApp
+     shows in a chat: a graphic that reads at full width and not at this size
+     is a graphic nobody will read. */
+  .viz-shot { display:block; width:260px; max-width:100%; border-radius:6px;
+              border:1px solid #2a3a33; }
+  .viz-small { display:block; width:120px; max-width:40%; border-radius:4px;
+               border:1px solid #2a3a33; }
+  .viz-words { margin:8px 0 0; padding:8px 10px; border-radius:6px;
+               background:#11201a; border:1px solid #274034;
+               white-space:pre-wrap; font-family:ui-monospace,Consolas,monospace;
+               font-size:13px; line-height:1.5; }
+  .viz-drop { border:1px dashed #3c5a4c; border-radius:6px; padding:12px;
+              text-align:center; cursor:pointer; }
+  .viz-drop:focus-visible { outline:2px solid #49C990; outline-offset:2px; }
+  .viz-generic { color:#D6AA66; }
   .wa-shot { display:flex; align-items:center; gap:8px; margin:6px 0;
              text-decoration:none; color:var(--muted); font-size:12px; }
   .wa-shot img { width:52px; height:70px; object-fit:cover; object-position:top;
@@ -3355,6 +3894,16 @@ PAGE = """<!doctype html>
       <span class="hint" id="svc-note"></span>
     </div>
   </details>
+
+  <h2 id="visual-step"><span class="stepno">3b</span> Infographic
+      <span class="sub" style="text-transform:none;letter-spacing:0">
+      &mdash; the picture that pitches the gaps. Copy the prompt, make the
+      picture, paste it back</span></h2>
+  <div class="row" style="margin-bottom:10px" id="visual-controls">
+    <button data-run="visual-brief">Write image prompts</button>
+    <span class="hint" id="visual-note"></span>
+  </div>
+  <div id="visual"></div>
 
   <h2><span class="stepno">4</span> Send
       <a class="sub" href="/guide#4-open-gmail-drafts" target="_blank" rel="noopener">What is this?</a></h2>
@@ -4857,6 +5406,284 @@ async function saveBuilt(leadId, i) {
   if (d.ok) { loadQueue(); refresh(); }
 }
 
+// ---------------------------------------------------------- infographic
+// The picture is made outside this tool, so this panel is the hand-off in
+// both directions: the prompt out, the image back. Four states, four
+// different buttons -- waiting for a picture, waiting for someone to read
+// the words on it, ready, and retired by hand.
+let vizQueue = [];
+// Transient state lives here, keyed by Lead ID, never on the queue objects
+// -- a 30-second refresh replaces those, which is how a first press used to
+// arm a confirmation that the next tick silently threw away.
+const vizUi = {};
+
+function vizFor(leadId) {
+  if (!vizUi[leadId]) vizUi[leadId] = {};
+  return vizUi[leadId];
+}
+
+function vizBusy() {
+  // The timer stands aside while a card is mid-decision, so a link being
+  // typed or a confirmation being read is not wiped by a background load.
+  return Object.values(vizUi).some(u => u.busy || u.armed || u.confirming);
+}
+
+async function loadVisual() {
+  let d;
+  try { d = await (await fetch('/api/visual/queue')).json(); } catch { return; }
+  const el = document.querySelector('#visual');
+  const step = document.querySelector('#visual-step');
+  const controls = document.querySelector('#visual-controls');
+  if (!el) return;
+  if (!d.enabled) {
+    // Hidden rather than shown empty. A campaign pitching a page has no use
+    // for this step, and a panel that can never do anything reads as broken.
+    if (step) step.style.display = 'none';
+    if (controls) controls.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  if (step) step.style.display = '';
+  if (controls) controls.style.display = '';
+  if (d.error) { el.innerHTML = `<div class="card err">${esc(d.error)}</div>`; return; }
+  vizQueue = d.queue || [];
+  const note = document.querySelector('#visual-note');
+  if (note) {
+    const c = d.counts || {};
+    note.textContent = vizQueue.length
+      ? `${c.needs_image || 0} need a picture, ${c.needs_check || 0} need checking, ${c.ready || 0} ready`
+      : '';
+  }
+  if (!vizQueue.length) {
+    el.innerHTML = '<div class="card"><div class="what">No image prompts yet.</div>' +
+      '<div class="sub">Press Write image prompts above. It uses the research ' +
+      'you already have, so it costs one small model call per lead.</div></div>';
+    return;
+  }
+  el.innerHTML = vizQueue.map(m => vizCard(m, d)).join('');
+}
+
+function vizCard(m, d) {
+  const u = vizFor(m.lead_id);
+  const id = encodeURIComponent(m.lead_id);
+  const tool = d.tool_name || 'the image tool';
+  const open = d.tool_url
+    ? `<a href="${esc(d.tool_url)}" target="_blank" rel="noopener"><button>Open ${esc(tool)}</button></a>`
+    : '';
+  const badge = m.specific
+    ? '<span class="sub">named for this business</span>'
+    : '<span class="sub viz-generic">generic &mdash; not enough evidence to name them</span>';
+  const words = (m.expected_text || []).join('\\\\n');
+  let body = '';
+
+  if (m.state === 'skipped') {
+    body = '<div class="sub">Retired. This lead is messaged with the page ' +
+      'instead, not held waiting for a picture.</div>' +
+      `<div class="row" style="margin-top:8px"><button onclick="skipViz('${id}', 'Approved')">Put it back</button></div>`;
+  } else if (m.state === 'needs_image') {
+    body = `
+      <div class="viz-drop" tabindex="0" id="drop-${id}"
+           onpaste="onVizPaste('${id}', event)"
+           ondragover="event.preventDefault()"
+           ondrop="onVizDrop('${id}', event)"
+           onfocus="vizArm('${id}', true)" onblur="vizArm('${id}', false)"
+           title="Click here, then press Ctrl+V. Or drop the file on this box.">
+        Click here and press Ctrl+V to paste the picture, or drop the file here.
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input type="file" accept="image/png,image/jpeg,image/webp"
+               onchange="onVizFile('${id}', this)" style="width:auto">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input id="vizurl-${id}" placeholder="...or paste the link the picture is at"
+               oninput="vizArm('${id}', true)">
+        <button onclick="attachVizUrl('${id}')">Fetch it</button>
+      </div>`;
+  } else {
+    const shot = `/api/screenshot/${id}`;
+    const ready = m.state === 'ready';
+    body = `
+      <img class="viz-shot" src="${shot}" alt="">
+      <div class="sub" style="margin-top:6px">Shown at about the size WhatsApp
+        gives it in a chat. If it is not readable here, it is not readable there.</div>
+      <div class="sub" style="margin-top:10px"><b>These exact words must be on the picture</b>
+        &mdash; nothing here can check that, so this is the one thing only you can do:</div>
+      <div class="viz-words">${esc(words)}</div>
+      <div class="row" style="margin-top:10px">
+        ${ready
+          ? '<span class="ok">Checked &mdash; this picture goes out with the message.</span>'
+          : `<button onclick="confirmVizText('${id}')">The words are right</button>`}
+        <button onclick="clearVizImage('${id}')">Wrong picture</button>
+        <span class="sub" id="vizn-${id}">${esc(u.note || '')}</span>
+      </div>`;
+  }
+
+  return `
+    <div class="card q">
+      <h3>${esc(m.name)}</h3>
+      <div class="row" style="gap:10px">${badge}
+        <span class="sub">${esc(m.style)} / ${esc(m.layout)}</span></div>
+      <details style="margin-top:8px">
+        <summary class="sub">Why these cards &mdash; the evidence behind each one</summary>
+        <div class="viz-words">${esc(m.gaps || 'No evidence recorded.')}</div>
+      </details>
+      <textarea id="vizp-${id}" readonly>${(m.prompt || '').replace(/</g, '&lt;')}</textarea>
+      <div class="row" style="margin-top:10px">
+        <button onclick="copyVizPrompt('${id}')">Copy prompt</button>
+        ${open}
+        <button onclick="regenViz('${id}')">Different look</button>
+        ${m.state === 'skipped' ? '' : `<button onclick="skipViz('${id}', 'Skip')">Not this one</button>`}
+        <span class="sub" id="vizc-${id}"></span>
+      </div>
+      ${body}
+    </div>`;
+}
+
+function vizArm(leadId, on) {
+  vizFor(leadId).armed = !!on;
+}
+
+function vizSay(leadId, text, bad) {
+  const el = document.querySelector('#vizn-' + leadId) ||
+             document.querySelector('#vizc-' + leadId);
+  vizFor(leadId).note = text;
+  if (el) { el.textContent = text; el.className = bad ? 'err' : 'sub'; }
+}
+
+async function copyVizPrompt(leadId) {
+  const t = document.querySelector('#vizp-' + leadId);
+  if (!t) return;
+  t.select();
+  try { await navigator.clipboard.writeText(t.value); }
+  catch { document.execCommand('copy'); }
+  const el = document.querySelector('#vizc-' + leadId);
+  if (el) el.textContent = 'Copied.';
+}
+
+function vizReadFile(file, leadId) {
+  // FileReader rather than fetch: the browser already has the bytes, and a
+  // data URL avoids a multipart form -- which matters most on a phone, where
+  // paste is the natural gesture and a file picker is not.
+  const reader = new FileReader();
+  reader.onload = () => attachVizImage(leadId, String(reader.result), '');
+  reader.onerror = () => vizSay(leadId, 'Could not read that file.', true);
+  reader.readAsDataURL(file);
+}
+
+function onVizPaste(leadId, event) {
+  const items = (event.clipboardData && event.clipboardData.items) || [];
+  for (const item of items) {
+    if (item.type && item.type.indexOf('image/') === 0) {
+      event.preventDefault();
+      vizReadFile(item.getAsFile(), leadId);
+      return;
+    }
+  }
+  vizSay(leadId, 'That was not a picture. Copy the image itself, not the page.', true);
+}
+
+function onVizDrop(leadId, event) {
+  event.preventDefault();
+  const files = (event.dataTransfer && event.dataTransfer.files) || [];
+  if (!files.length) { vizSay(leadId, 'Nothing was dropped.', true); return; }
+  vizReadFile(files[0], leadId);
+}
+
+function onVizFile(leadId, input) {
+  if (input.files && input.files.length) vizReadFile(input.files[0], leadId);
+}
+
+function attachVizUrl(leadId) {
+  const el = document.querySelector('#vizurl-' + leadId);
+  const url = el ? el.value.trim() : '';
+  if (!url) { vizSay(leadId, 'Paste the link first.', true); return; }
+  attachVizImage(leadId, '', url);
+}
+
+async function attachVizImage(leadId, dataUrl, url) {
+  const u = vizFor(leadId);
+  u.busy = true;
+  vizSay(leadId, 'Saving the picture...');
+  try {
+    const r = await fetch('/api/visual/attach', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        lead_id: decodeURIComponent(leadId), data_url: dataUrl, url: url
+      })
+    });
+    const d = await r.json();
+    if (!d.ok) { vizSay(leadId, d.error || 'Could not save it.', true); return; }
+    u.armed = false;
+    u.note = '';
+    await loadVisual();
+  } catch (e) {
+    vizSay(leadId, 'Could not reach the dashboard: ' + e, true);
+  } finally {
+    u.busy = false;
+  }
+}
+
+async function confirmVizText(leadId) {
+  const u = vizFor(leadId);
+  u.busy = true;
+  try {
+    const r = await fetch('/api/visual/confirm', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lead_id: decodeURIComponent(leadId)})
+    });
+    const d = await r.json();
+    if (!d.ok) { vizSay(leadId, d.error || 'Could not save that.', true); return; }
+    u.note = '';
+    await loadVisual();
+    refresh();
+  } finally { u.busy = false; }
+}
+
+async function clearVizImage(leadId) {
+  const u = vizFor(leadId);
+  u.busy = true;
+  try {
+    const r = await fetch('/api/visual/clear', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lead_id: decodeURIComponent(leadId)})
+    });
+    const d = await r.json();
+    if (!d.ok) { vizSay(leadId, d.error || 'Could not clear it.', true); return; }
+    u.note = '';
+    await loadVisual();
+  } finally { u.busy = false; }
+}
+
+async function skipViz(leadId, decision) {
+  const u = vizFor(leadId);
+  u.busy = true;
+  try {
+    const r = await fetch('/api/visual/skip', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lead_id: decodeURIComponent(leadId), decision: decision})
+    });
+    const d = await r.json();
+    if (!d.ok) { vizSay(leadId, d.error || 'Could not save that.', true); return; }
+    await loadVisual();
+  } finally { u.busy = false; }
+}
+
+async function regenViz(leadId) {
+  const u = vizFor(leadId);
+  u.busy = true;
+  vizSay(leadId, 'Writing a new prompt...');
+  try {
+    const r = await fetch('/api/visual/regenerate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lead_id: decodeURIComponent(leadId)})
+    });
+    const d = await r.json();
+    if (!d.ok) { vizSay(leadId, d.error || 'Could not rewrite it.', true); return; }
+    u.note = '';
+    await loadVisual();
+  } finally { u.busy = false; }
+}
+
 refresh();
 loadTarget();
 loadModel();
@@ -4866,6 +5693,7 @@ loadQueue();
 loadReach();
 loadDesignLevel();
 loadServices();
+loadVisual();
 poll();
 setInterval(poll, 1200);
 setInterval(refresh, 30000);
@@ -4873,6 +5701,9 @@ setInterval(loadQueue, 30000);
 // Keeps the position you are at, so a background refresh never yanks the card
 // out from under a decision you are part-way through making.
 setInterval(() => loadReview(true), 30000);
+// Stands aside while a card is mid-decision -- a link half typed or a
+// confirmation being read must not be wiped by a background load.
+setInterval(() => { if (!vizBusy()) loadVisual(); }, 30000);
 </script>
 </body>
 </html>
