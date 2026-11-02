@@ -3123,6 +3123,59 @@ def create_app(config: Config) -> Flask:
         return ("Drafting produced no message for this lead and gave no "
                 "reason. Run the Draft step on its own to see the report.")
 
+    @app.route("/api/visual/write-message", methods=["POST"])
+    def api_visual_write_message():
+        """Write this one lead's message, now, from its card.
+
+        Confirming the words writes it -- but only from the press, and only
+        from then on. Every graphic confirmed before that shipped sits on a
+        card reading "its message has not been written yet" above a paragraph
+        telling the reader to run the draft step, which is prose where a
+        button belongs. Reported as "still not showing any send to queue
+        button. Are you sure you fixed it?" -- and no, not for the cards that
+        were already past the confirm.
+
+        Does exactly what confirming does: drafts when there is no Outreach
+        Log row, rewrites when the stored message sells a page this track
+        does not offer, and leaves a message already about the picture alone.
+        """
+        from . import visual as visual_lib
+
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+
+        c = current()
+        try:
+            sheets = _sheets_client(c)
+            briefs = sheets.read_rows(schema.VISUAL_BRIEFS)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": _explain_sheets(exc, c)}), 200
+
+        entry = briefs.get(lead_id)
+        if entry is None:
+            return jsonify({"error": "That lead has no image prompt."}), 200
+        # The same gate confirming enforces. A message is written *about* the
+        # picture, so writing one for a picture nobody has read would attach
+        # unchecked words to a real business.
+        if visual_lib.confirmed_image(entry[1]) is None:
+            return jsonify({
+                "error": "Check the picture first -- press The words are right."
+            }), 200
+
+        wrote = _message_for_the_picture(c, sheets, lead_id)
+        if wrote.get("message_error"):
+            return jsonify({"error": wrote["message_error"]}), 200
+        if not wrote.get("message_written"):
+            # Nothing was done because nothing needed doing: the message is
+            # already about this picture. Saying "written" would be a lie and
+            # saying nothing would read as a dead button.
+            return jsonify({
+                "ok": True, "lead_id": lead_id, "unchanged": True,
+            })
+        return jsonify({"ok": True, "lead_id": lead_id, "message_written": True})
+
     @app.route("/api/visual/clear", methods=["POST"])
     def api_visual_clear():
         """Drop the picture so a corrected one can be pasted in.
@@ -6678,12 +6731,20 @@ function vizMessage(m) {
     </div>`;
   }
   if (!m.message) {
+    // A button, not an instruction. "Press Draft messages in step 4" is
+    // prose where a press belongs, and it was the whole of what this card
+    // offered to a graphic confirmed before the confirm wrote the message.
     return `<div class="viz-next">
       <div class="sub"><b>Next: its message has not been written yet.</b></div>
-      <p class="hint" style="margin:6px 0 0">Press <b>Draft messages</b> in
-        step 4 and this business gets its own message &mdash; written from its
-        own research, like the website ones. The picture above is attached to
-        it. Then send it from step 4, the same queue as everything else.</p>
+      <p class="hint" style="margin:6px 0 0">It gets its own message &mdash;
+        written from its own research, like the website ones &mdash; with the
+        picture above attached. Then it sends from step 4, the same queue as
+        everything else.</p>
+      <div class="row" style="margin-top:8px">
+        <button id="vizw-${esc(m.lead_id)}"
+          onclick="writeVizMessage('${esc(m.lead_id)}')">Write its message now</button>
+        <span class="sub" id="vizwn-${esc(m.lead_id)}"></span>
+      </div>
     </div>`;
   }
   // Whether step 4 is actually holding it, in step 4's own words. "It isn't
@@ -6717,6 +6778,35 @@ function vizMessage(m) {
     ${where}
     <div class="row">${again}</div>
   </div>`;
+}
+
+async function writeVizMessage(leadId) {
+  const btn = document.querySelector('#vizw-' + leadId);
+  const note = document.querySelector('#vizwn-' + leadId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Writing its message...'; }
+  if (note) { note.textContent = ''; note.className = 'sub'; }
+  let d;
+  try {
+    d = await (await fetch('/api/visual/write-message', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lead_id: decodeURIComponent(leadId)}),
+    })).json();
+  } catch (e) { d = {error: 'Could not reach the dashboard: ' + e}; }
+  if (!d.ok) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Write its message now'; }
+    if (note) { note.textContent = d.error || 'Could not write it.'; note.className = 'err'; }
+    return;
+  }
+  if (d.unchanged) {
+    // Already had one. "Written" would be a lie and silence reads as a dead
+    // button, so the card says which it was.
+    if (btn) { btn.disabled = false; btn.textContent = 'Write its message now'; }
+    if (note) { note.textContent = 'It already has a message about this picture.'; }
+    return;
+  }
+  // Both panels: this card gains the message, step 4 gains the row.
+  await loadVisual();
+  if (typeof loadWhatsAppInline === 'function') await loadWhatsAppInline();
 }
 
 async function unblockViz(leadId) {

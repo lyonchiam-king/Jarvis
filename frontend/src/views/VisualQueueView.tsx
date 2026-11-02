@@ -1058,6 +1058,58 @@ const GoToSend: React.FC<{ onGoToSend?: () => void; label: string }> = ({
   ) : null;
 
 /**
+ * Write this lead's message, from the card that says it has none.
+ *
+ * Confirming the words writes it as well -- but only from that press
+ * onwards, so every graphic confirmed before that shipped sat on a card
+ * reading "its message has not been written yet" above a paragraph telling
+ * the reader to go and run the draft step. Prose where a button belongs.
+ */
+const WriteMessageButton: React.FC<{
+  item: VisualItem;
+  onGoToSend?: () => void;
+}> = ({ item, onGoToSend }) => {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+  const [done, setDone] = useState(false);
+
+  if (done) {
+    return (
+      <span className="inline-flex flex-wrap items-center gap-2">
+        <span className="text-[11px] text-emerald-300">
+          Written. It is in Review &amp; Send now.
+        </span>
+        <GoToSend onGoToSend={onGoToSend} label="Go to Review & Send" />
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <button
+        id={`visual-write-${item.lead_id}`}
+        onClick={async () => {
+          setBusy(true);
+          setNote('');
+          const res = await api.writeVisualMessage(item.lead_id);
+          setBusy(false);
+          if (res.error) setNote(res.error);
+          else if (res.data?.unchanged) {
+            // It already had one. Saying "written" would be a lie and saying
+            // nothing would read as a dead button.
+            setNote('It already has a message about this picture.');
+          } else setDone(true);
+        }}
+        disabled={busy}
+        className="px-3.5 py-2 rounded-lg bg-emerald-500 text-slate-950 text-[12px] font-semibold hover:bg-emerald-400 studio-transition disabled:opacity-50"
+      >
+        {busy ? 'Writing its message...' : 'Write its message now'}
+      </button>
+      {note && <span className="text-[11px] text-amber-300">{note}</span>}
+    </span>
+  );
+};
+
+/**
  * The one repair this dashboard has, offered where the problem is read.
  *
  * It existed in the send step's excluded list, which is a different screen
@@ -1155,11 +1207,15 @@ const VisualMessage: React.FC<{
           Next: its message has not been written yet
         </p>
         <p className="text-[11px] text-slate-500 mt-1">
-          Run the draft step and this business gets its own message, written
-          from its own research — exactly like the website ones. The picture
-          above is attached to it. It then sends from Review &amp; Send, the
-          same queue as everything else.
+          It gets its own message, written from its own research — exactly
+          like the website ones — with the picture above attached. Then it
+          sends from Review &amp; Send, the same queue as everything else.
         </p>
+        {/* A button, not an instruction. "Run the draft step" is prose where
+            a press belongs, and it is the whole of what this card offered. */}
+        <div className="mt-2">
+          <WriteMessageButton item={item} onGoToSend={onGoToSend} />
+        </div>
       </div>
     );
   }

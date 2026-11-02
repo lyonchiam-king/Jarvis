@@ -64,7 +64,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1681 tests, pytest, no CI -- the suite is the only gate
+tests/             1688 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -1516,6 +1516,27 @@ production. The fake inserts now, and its `update_column` skips a missing key
 exactly as the real client does. This is the manual-column bug again, from
 the other direction: when the real client's behaviour is the thing under
 test, the fake has to have that behaviour.
+
+**Writing it on confirm fixes nothing for a card already past the confirm.**
+"Still not showing any send to queue button. Are you sure you fixed it?" --
+and no: the previous fix fires from the press of **The words are right**, so
+every graphic ticked before it shipped still sat on a card reading "its
+message has not been written yet" above a paragraph telling the reader to go
+and run the draft step. Prose where a press belongs, and the whole of what
+that branch offered. `POST /api/visual/write-message` is the button, and it
+calls the same `_message_for_the_picture` the confirm does -- draft when
+there is no row, rewrite when the stored message sells a page this track
+does not offer, leave a good one alone. It keeps the confirm's own gate,
+because a message is written *about* the picture and writing one for a
+picture nobody has read would attach unchecked words to a real business. A
+no-op answers `unchanged` rather than `written`: claiming a write would be a
+lie and silence reads as a dead button. The same shape as the repair on the
+held card, for the same reason -- a card that states a problem has to carry
+the thing that solves it.
+
+A fix that only applies going forward is half a fix whenever rows already
+exist, which is every time: the same lesson as `_country_of` healing legacy
+rows and `ensure_tabs` needing a press.
 
 **Naming the problem is not fixing it.** The card learned to say "Not in
 step 4 yet -- its Outreach Log row does not say Drafted", and the next report

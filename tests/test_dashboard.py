@@ -4011,9 +4011,13 @@ def test_it_says_where_it_sends_from_because_there_is_no_button_here():
 
 
 def test_a_card_with_no_message_yet_says_what_to_press():
+    """It used to assert "Draft messages", which was the instruction this
+    card gave instead of a button -- see the test below for why that is now
+    a press. The rest of the sentence still has to be there: a message
+    written from that business's own research, like the website ones."""
     html = _open_ready(_checked(message=""))
     assert "has not been written yet" in html
-    assert "Draft messages" in html
+    assert "Write its message now" in html
     assert "its own research" in html
 
 
@@ -4502,3 +4506,60 @@ def test_pressing_the_repair_redraws_both_panels():
     after = calls[calls.index(next(c for c in calls if "undo-send" in c)) + 1:]
     assert any("/api/visual/queue" in c for c in after), "the card was not redrawn"
     assert any("/api/whatsapp/queue" in c for c in after), "step 4 was not refreshed"
+
+
+def test_a_card_with_no_message_offers_a_button_not_an_instruction():
+    """"Press Draft messages in step 4" is prose where a press belongs, and
+    it was the whole of what this card offered to a graphic confirmed before
+    confirming started writing the message. Reported as "still not showing
+    any send to queue button. Are you sure you fixed it?\""""
+    html = _open_ready(_checked(message=""))
+
+    assert "Write its message now" in html
+    assert "writeVizMessage(" in html
+    # The old wording told the reader to go somewhere else and do it by hand.
+    assert "Press <b>Draft messages</b>" not in html
+
+
+def test_writing_the_message_redraws_both_panels():
+    """This card gains the message and step 4 gains the row. Redrawing one
+    and not the other is how a page ends up disagreeing with itself."""
+    payload = _checked(message="")
+    out = _run_in_node(_VIZ_DOM + f"""
+    const calls = [];
+    globalThis.fetch = async (u) => {{
+      calls.push(String(u));
+      return {{json: async () => (String(u).includes('write-message')
+        ? {{ok: true, message_written: true}}
+        : {payload})}};
+    }};
+    await loadVisual();
+    vizSetFilter('ready');
+    vizToggle('LEAD-1');
+    await writeVizMessage('LEAD-1');
+    console.log(JSON.stringify({{calls}}));
+    """)
+    calls = __import__("json").loads(out)["calls"]
+    assert any("write-message" in c for c in calls)
+    after = calls[calls.index(next(c for c in calls if "write-message" in c)) + 1:]
+    assert any("/api/visual/queue" in c for c in after), "the card was not redrawn"
+    assert any("/api/whatsapp/queue" in c for c in after), "step 4 was not refreshed"
+
+
+def test_a_card_that_already_has_one_says_so_rather_than_claiming_a_write():
+    """Saying "written" would be a lie; saying nothing reads as a dead
+    button."""
+    payload = _checked(message="")
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async (u) => ({{json: async () => (
+      String(u).includes('write-message')
+        ? {{ok: true, unchanged: true}}
+        : {payload})}});
+    await loadVisual();
+    vizSetFilter('ready');
+    vizToggle('LEAD-1');
+    await writeVizMessage('LEAD-1');
+    console.log(JSON.stringify({{note: _el('#vizwn-LEAD-1').textContent}}));
+    """)
+    note = __import__("json").loads(out)["note"]
+    assert "already has a message" in note

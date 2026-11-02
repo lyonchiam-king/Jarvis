@@ -814,11 +814,12 @@ Most of those reasons have a button on the card itself:
   status and sets the row back to Drafted, and writes nothing else. It is the
   usual reason, and it happens when a lead was skipped or its Status cell was
   edited.
-- **no message yet** — pressing **The words are right** writes it. That
-  presses the Draft step for that one lead, which is the only thing that can
-  create its row; if it cannot, the card says which gate stopped it rather
-  than claiming it worked. If the picture was confirmed before this update,
-  press **Rewrite this message**.
+- **no message yet** — the card carries **Write its message now**. Pressing
+  it drafts that one lead, which is the only thing that can create its row;
+  if it cannot, the card says which gate stopped it rather than claiming it
+  worked. Pressing **The words are right** does the same thing, so a picture
+  you confirm from now on gets its message without a second press — the
+  button is there for every graphic confirmed before that.
 - **already messaged** — drafting leaves that lead alone, which is what stops
   a business being written to twice. Press **Write a new message for this
   picture**.

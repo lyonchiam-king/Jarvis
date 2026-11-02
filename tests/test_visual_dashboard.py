@@ -1378,3 +1378,85 @@ def test_a_ready_card_says_why_step_four_is_holding_it(app):
 
     assert row["in_send_queue"] is False
     assert "Gmail drafts" in row["send_hold"]
+
+
+# -------------------- writing the message from the card that says it has none
+
+
+def test_the_card_can_write_the_message_for_a_lead_that_has_none(
+    app, monkeypatch
+):
+    """Confirming writes it, but only from that press onwards -- so every
+    graphic confirmed before that shipped sat on a card reading "its message
+    has not been written yet" above a paragraph telling the reader to go and
+    run the draft step. Prose where a button belongs."""
+    from outreach.stages import outreach_draft as draft
+
+    visual.visuals_dir().mkdir(parents=True, exist_ok=True)
+    (visual.visuals_dir() / "a.png").write_bytes(b"png")
+    client, sheets = app(visuals=brief(
+        "a", **{"Image File": "visuals/a.png", "Text Confirmed": "yes"}
+    ))
+    monkeypatch.setattr("outreach.cli._gmail_or_none", lambda c: None)
+    monkeypatch.setattr(
+        "outreach.providers.llm.make_writer", lambda *a, **k: object()
+    )
+    drafted = []
+
+    def fake_run(c, s, w, gmail, *, limit=None, leads_only=None, **kw):
+        drafted.append(tuple(leads_only or ()))
+        return draft.OutreachReport(copy_written=1)
+
+    monkeypatch.setattr(draft, "run", fake_run)
+
+    d = client.post(
+        "/api/visual/write-message", json={"lead_id": "a"}
+    ).get_json()
+
+    assert d["ok"] is True
+    assert d.get("message_written") is True
+    assert drafted == [("a",)]
+
+
+def test_writing_refuses_before_the_picture_is_checked(app, monkeypatch):
+    """A message is written *about* the picture, so writing one for a picture
+    nobody has read would attach unchecked words to a real business."""
+    visual.visuals_dir().mkdir(parents=True, exist_ok=True)
+    (visual.visuals_dir() / "a.png").write_bytes(b"png")
+    client, sheets = app(visuals=brief(
+        "a", **{"Image File": "visuals/a.png", "Text Confirmed": ""}
+    ))
+
+    d = client.post(
+        "/api/visual/write-message", json={"lead_id": "a"}
+    ).get_json()
+
+    assert "ok" not in d
+    assert "Check the picture first" in d["error"]
+    assert sheets.writes == []
+
+
+def test_writing_says_so_when_there_was_nothing_to_do(app, monkeypatch):
+    """Saying "written" would be a lie; saying nothing reads as a dead
+    button."""
+    visual.visuals_dir().mkdir(parents=True, exist_ok=True)
+    (visual.visuals_dir() / "a.png").write_bytes(b"png")
+    client, sheets = app(visuals=brief(
+        "a", **{"Image File": "visuals/a.png", "Text Confirmed": "yes"}
+    ))
+    sheets._tabs[schema.OUTREACH_LOG.title] = {
+        "a": (2, {"Lead ID": "a", "WhatsApp Message": "About your picture."})
+    }
+
+    d = client.post(
+        "/api/visual/write-message", json={"lead_id": "a"}
+    ).get_json()
+
+    assert d["ok"] is True
+    assert d["unchanged"] is True
+    assert "message_written" not in d
+
+
+def test_writing_needs_a_lead(app):
+    client, _ = app()
+    assert client.post("/api/visual/write-message", json={}).status_code == 400

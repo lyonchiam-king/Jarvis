@@ -497,6 +497,19 @@ class ApiClient {
    * is what stops a business being written to twice, and also meant its
    * picture could never get a message. This is the deliberate exception.
    */
+  /**
+   * Write this lead's message now, from its card.
+   *
+   * Confirming the words does it too, but only from the press onwards --
+   * every graphic confirmed before that existed needs a button, and had
+   * only a paragraph telling the reader to run the draft step.
+   */
+  async writeVisualMessage(
+    lead_id: string
+  ): Promise<ApiResponse<{ ok: boolean; message_written?: boolean; unchanged?: boolean }>> {
+    return this.post('/api/visual/write-message', { lead_id });
+  }
+
   async redraftVisual(
     lead_id: string
   ): Promise<ApiResponse<{ ok: boolean; whatsapp_message: string }>> {

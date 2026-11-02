@@ -385,6 +385,7 @@ try {
     // up the morning a provider retired the one this campaign named.
     '/api/whatsapp/undo-send': { ok: true, cleared: ['Status (Skipped -> Drafted)'] },
     '/api/whatsapp/skip': { ok: true },
+    '/api/visual/write-message': { ok: true, message_written: true },
     '/api/design-level': { level: 'showcase', levels: ['showcase', 'standard'] },
     '/api/services': {
       intro: 'these are the other ways I get businesses in front of customers:',
@@ -453,7 +454,7 @@ try {
       // supposed to disappear rather than become a dead link.
       tool_url: 'https://example.com/flow',
       signature: 'by Lyon, Business Growth Consultant',
-      counts: { needs_image: 1, needs_check: 1, ready: 3, sent: 1,
+      counts: { needs_image: 1, needs_check: 1, ready: 4, sent: 1,
                 skipped: 0 },
       catalogue: {
         styles: ['paper-cut', 'watercolour'], layouts: ['rows', 'road'],
@@ -518,6 +519,20 @@ try {
           expected_text: ['3 quick wins for Sixth Salon'],
           message: 'Noticed people finding you and not getting in touch.',
           sent_at: '', in_send_queue: true, send_hold: '', can_unblock: false,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+        {
+          // Confirmed, and its message was never written -- a graphic ticked
+          // before confirming started writing one. The card has to offer a
+          // press rather than tell the reader to go elsewhere.
+          lead_id: 'LEAD-G', name: 'Seventh Salon', category: 'Hair salon',
+          prompt: 'Wide 16:9 landscape semi-infographic for "Seventh Salon".',
+          gaps: 'no_website: Google lists no website for this business',
+          style: 'paper-cut', layout: 'rows', specific: true,
+          state: 'ready', approval: 'Approved',
+          expected_text: ['3 quick wins for Seventh Salon'],
+          message: '', sent_at: '',
+          in_send_queue: false, send_hold: '', can_unblock: false,
           created_at: '2026-01-01T00:00:00Z',
         },
         {
@@ -762,6 +777,40 @@ try {
   );
   if (!afterFixSignpost) {
     fail('the repair reports success and offers no way to the step it landed in');
+  }
+
+  // A confirmed graphic whose message was never written. Its card read "its
+  // message has not been written yet" above a paragraph telling the reader to
+  // go and run the draft step -- prose where a press belongs, and the whole
+  // of what the card offered.
+  await dt.evaluate(`(() => {
+    const head = document.getElementById('visual-head-LEAD-G');
+    if (head && head.getAttribute('aria-expanded') !== 'true') head.click();
+  })()`);
+  await new Promise((r) => setTimeout(r, 500));
+  const undrafted = await dt.evaluate(`(() => {
+    const write = document.getElementById('visual-write-LEAD-G');
+    const block = document.getElementById('visual-undrafted-LEAD-G');
+    return {
+      has: !!write,
+      label: write ? (write.innerText || '').trim() : '',
+      words: block ? (block.innerText || '').replace(/\\s+/g, ' ') : '',
+    };
+  })()`);
+  if (!undrafted.has) {
+    fail('a confirmed card with no message offers no button to write one');
+  }
+  if (!/Write its message/.test(undrafted.label)) {
+    fail(`the write button reads ${JSON.stringify(undrafted.label)}`);
+  }
+  if (/[Rr]un the draft step/.test(undrafted.words)) {
+    fail('the card still tells the reader to go and run the draft step by hand');
+  }
+  await dt.evaluate(`document.getElementById('visual-write-LEAD-G').click()`);
+  await new Promise((r) => setTimeout(r, 600));
+  const written = await dt.pageText();
+  if (!written.includes('It is in Review & Send now')) {
+    fail('writing the message said nothing about what it did');
   }
 
   // The way out of this step. The card named "Review & Send" in bold and
