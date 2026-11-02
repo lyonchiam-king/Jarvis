@@ -623,3 +623,104 @@ def test_an_attached_graphic_is_not_reported_as_a_site_screenshot(
     summary = "\n".join(report.summary_lines())
     assert "with an infographic" in summary
     assert "with a site screenshot" not in summary
+
+
+# ------------------------------------------------ picking who a run is for
+#
+# Sixty prompts is not a batch anybody works through: each one is a visit to
+# the image tool and a picture to read. `--limit` alone bounds the cost but
+# picks whichever leads come first, which is not the same as picking the ones
+# worth starting with.
+
+
+def test_a_lead_on_whatsapp_is_grouped_by_the_channel_that_will_be_used():
+    """WhatsApp wins over an email it also has: that is where the message
+    goes, so calling it "email only" would put it in a batch picked for a
+    different reason."""
+    assert visual_brief.group_of(
+        {"WhatsApp Reachable": "yes"}, {"Email Found": "hi@x.com"}
+    ) == "whatsapp"
+
+
+def test_a_lead_with_only_an_email_is_its_own_group():
+    assert visual_brief.group_of(
+        {"WhatsApp Reachable": "no"}, {"Email Found": "hi@x.com"}
+    ) == "email"
+
+
+def test_nobody_has_asked_yet_is_not_the_same_as_no_way_to_reach_them():
+    """Missing evidence is not evidence of absence -- the whole point of the
+    reachability check being able to answer later."""
+    assert visual_brief.group_of({}, {"Email Found": ""}) == "unchecked"
+    assert visual_brief.group_of(
+        {"WhatsApp Reachable": "no"}, {"Email Found": ""}
+    ) == "none"
+
+
+def test_running_for_one_group_writes_for_that_group_only():
+    sheets = FakeSheets(
+        index([lead("w"), lead("e"), lead("u")]),
+        index([
+            research("w", whatsapp="yes"),
+            research("e", whatsapp="no", email="hi@x.com"),
+            research("u", whatsapp="unknown"),
+        ]),
+    )
+    report = visual_brief.run(cfg(), sheets, FakeWriter(), groups=("whatsapp",))
+    assert [r["Lead ID"] for r in rows_of(sheets)] == ["w"]
+    assert report.filtered_out == 1  # the email lead; the unchecked one is held
+    assert "outside what you picked" in "\n".join(report.summary_lines())
+
+
+def test_the_limit_counts_what_was_asked_for_not_what_came_first():
+    """Filtering the selected batch instead of the candidates would make
+    "write 2 for the WhatsApp group" produce however many of the first two
+    leads happened to be in it -- which looks exactly like the filter being
+    ignored."""
+    leads = [lead("e1"), lead("e2"), lead("w1"), lead("w2")]
+    sheets = FakeSheets(
+        index(leads),
+        index([
+            research("e1", whatsapp="no", email="a@x.com"),
+            research("e2", whatsapp="no", email="b@x.com"),
+            research("w1", whatsapp="yes"),
+            research("w2", whatsapp="yes"),
+        ]),
+    )
+    visual_brief.run(cfg(), sheets, FakeWriter(), limit=2, groups=("whatsapp",))
+    assert sorted(r["Lead ID"] for r in rows_of(sheets)) == ["w1", "w2"]
+
+
+def test_an_explicit_pick_writes_for_exactly_those():
+    sheets = FakeSheets(
+        index([lead(k) for k in "abc"]),
+        index([research(k) for k in "abc"]),
+    )
+    visual_brief.run(cfg(), sheets, FakeWriter(), lead_ids={"a", "c"})
+    assert sorted(r["Lead ID"] for r in rows_of(sheets)) == ["a", "c"]
+
+
+def test_a_pick_and_a_group_narrow_together():
+    sheets = FakeSheets(
+        index([lead("w"), lead("e")]),
+        index([
+            research("w", whatsapp="yes"),
+            research("e", whatsapp="no", email="hi@x.com"),
+        ]),
+    )
+    visual_brief.run(
+        cfg(), sheets, FakeWriter(), groups=("whatsapp",), lead_ids={"w", "e"}
+    )
+    assert [r["Lead ID"] for r in rows_of(sheets)] == ["w"]
+
+
+def test_no_filter_at_all_behaves_exactly_as_before():
+    """Every earlier caller passes neither, and must keep getting every
+    eligible lead."""
+    sheets = FakeSheets(
+        index([lead("a"), lead("b")]), index([research("a"), research("b")])
+    )
+    report = visual_brief.run(cfg(), sheets, FakeWriter())
+    assert report.prompts_written == 2
+    assert report.filtered_out == 0
+    assert "outside what you picked" not in "\n".join(report.summary_lines())

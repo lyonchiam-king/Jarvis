@@ -664,12 +664,30 @@ graphic, e.g. *by Lyon, Business Growth Consultant*. Without it the tool
 refuses to start, because a series of graphics with nothing identifying them
 is not a series.
 
+### Choosing who to write for
+
+**Do not write sixty.** Each prompt is a visit to Google Flow and a picture to
+read, so a batch of sixty is a week, not a morning.
+
+Step 3b opens with **Who to write for**, which splits every lead waiting on a
+prompt by how you would actually contact them:
+
+- **On WhatsApp** — the check said yes. The ones you can send to tonight.
+- **Email only** — no WhatsApp, but research found an address.
+- **Not checked yet** — nothing can be written for these until the WhatsApp
+  check has run, so there is no button on them. Run step 1b first.
+- **No way to contact them** — a dead end, shown so the numbers add up.
+
+Set **How many** (10 to start), then either press **Write for this group** on
+the group worth starting with, or open a group and tick the exact businesses
+and press **Write for the ones I ticked**. Either way it writes that many and
+stops.
+
 ### What a day looks like on this track
 
-1. **Run this morning's batch.** It now writes an image prompt per lead as
-   well, from the research it already has. One small model call each.
-2. **Step 3b, Infographic.** One card per lead. Press **Copy prompt**, paste it
-   into Google Flow, generate the picture.
+1. **Pick a group** in Who to write for and write 10 prompts.
+2. **Step 3b, Infographic.** Press **Copy prompt**, paste it into Google Flow,
+   generate the picture.
 3. **Paste the picture back.** Click the box and press Ctrl+V, drop the file on
    it, or paste the link and press **Fetch it** — whichever you have.
 4. **Read the words.** The card shows the picture at about the size WhatsApp
@@ -748,11 +766,25 @@ industry at once.
 rotation. The picture and your confirmation are kept; it is the prompt that
 changes.
 
-### Two other buttons
+### Keeping the list short
 
-**Not this one** retires a graphic without stranding the lead — it stops being
-held for a picture and is messaged with the page instead. **Put it back**
-undoes that.
+Cards start **closed** — one line each, with the name, what it is waiting for,
+and whether it claims anything about that business. Click one to open it.
+
+Above them are five lists. It opens on **Need a picture**, because that is the
+only one that needs anything from you:
+
+| List | What is in it |
+|---|---|
+| Need a picture | Prompt written, nothing pasted back yet |
+| Need checking | Picture is in, nobody has read the words on it |
+| Ready to send | Checked — it goes out with the message |
+| All | The three above |
+| Removed | Ones you took off the list |
+
+**Remove**, on an open card, takes it off the list for good — it stops being
+held for a picture and is messaged with the page instead. It is not destroyed:
+it moves to **Removed**, and **Put it back** undoes it.
 
 **Wrong picture** forgets the image so you can paste a corrected one. The file
 stays on disk; it cost a generation, and nothing here deletes your only copy of

@@ -11,8 +11,12 @@ import {
   Undo2,
   Loader2,
   Wrench,
+  ChevronRight,
+  ChevronDown,
+  Trash2,
+  Play,
 } from 'lucide-react';
-import { VisualItem, VisualQueue } from '../types';
+import { VisualItem, VisualQueue, VisualCandidates, VisualState } from '../types';
 import { api } from '../api/client';
 
 /**
@@ -49,6 +53,13 @@ export const VisualQueueView: React.FC<{ onRefresh?: () => void }> = ({
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState<string | null>(null);
+  // Collapsed by default, and opening one does not open the rest: sixty
+  // expanded cards is not a list anybody reads.
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  // Three of the four states need nothing from him, so the list opens on
+  // the one that does. "Removed" is never part of All -- remove has to mean
+  // gone from the list, or the button has not done what it says.
+  const [filter, setFilter] = useState<VisualState | 'all'>('needs_image');
 
   const load = async () => {
     const res = await api.getVisualQueue();
@@ -182,6 +193,9 @@ export const VisualQueueView: React.FC<{ onRefresh?: () => void }> = ({
   }
 
   const counts = data.counts || ({} as Record<string, number>);
+  const shown = data.queue.filter((m) =>
+    filter === 'all' ? m.state !== 'skipped' : m.state === filter
+  );
 
   return (
     <div id="visual-queue-view" className="space-y-4">
@@ -209,15 +223,33 @@ export const VisualQueueView: React.FC<{ onRefresh?: () => void }> = ({
         ) : null}
       </div>
 
+      <CandidatePicker onStarted={() => onRefresh?.()} />
+
       <RotationPicker
         catalogue={data.catalogue}
         onSaved={() => load()}
       />
 
-      {data.queue.map((item) => (
+      <FilterBar
+        counts={counts}
+        active={filter}
+        onPick={setFilter}
+      />
+
+      {shown.length === 0 && (
+        <p id="visual-none-in-list" className="text-[12px] text-slate-500 px-1">
+          Nothing in this list.
+        </p>
+      )}
+
+      {shown.map((item) => (
         <VisualCard
           key={item.lead_id}
           item={item}
+          open={!!open[item.lead_id]}
+          onToggle={() =>
+            setOpen((prev) => ({ ...prev, [item.lead_id]: !prev[item.lead_id] }))
+          }
           toolName={data.tool_name}
           busy={busy[item.lead_id] || ''}
           note={notes[item.lead_id] || ''}
@@ -265,8 +297,17 @@ export const VisualQueueView: React.FC<{ onRefresh?: () => void }> = ({
   );
 };
 
+const STATE_WORDS: Record<string, string> = {
+  needs_image: 'needs a picture',
+  needs_check: 'needs checking',
+  ready: 'ready to send',
+  skipped: 'removed',
+};
+
 interface CardProps {
   item: VisualItem;
+  open: boolean;
+  onToggle: () => void;
   toolName: string;
   busy: string;
   note: string;
@@ -284,6 +325,8 @@ interface CardProps {
 
 const VisualCard: React.FC<CardProps> = ({
   item,
+  open,
+  onToggle,
   toolName,
   busy,
   note,
@@ -313,29 +356,51 @@ const VisualCard: React.FC<CardProps> = ({
   return (
     <div
       id={`visual-item-${item.lead_id}`}
-      className="rounded-2xl border border-slate-800 bg-slate-900 p-5 space-y-4"
+      className={`rounded-2xl border border-slate-800 bg-slate-900 ${
+        open ? 'p-5 space-y-4' : 'px-4 py-3'
+      }`}
     >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-[15px] font-semibold text-slate-100 truncate">
-            {item.business_name}
-          </h2>
-          <p className="text-[11px] text-slate-500 mt-0.5">
-            {item.style} / {item.layout}
-            {item.category ? ` · ${item.category}` : ''}
-          </p>
-        </div>
+      {/* The header carries everything needed to decide whether to open one:
+          who it is, what it is waiting for, and whether it claims anything
+          about them. */}
+      <button
+        id={`visual-head-${item.lead_id}`}
+        onClick={onToggle}
+        aria-expanded={open}
+        className="w-full flex flex-wrap items-center gap-2 text-left"
+      >
+        <span className="shrink-0 text-emerald-400">
+          {open ? (
+            <ChevronDown className="w-4 h-4" />
+          ) : (
+            <ChevronRight className="w-4 h-4" />
+          )}
+        </span>
+        <span className="text-[14px] font-semibold text-slate-100 truncate min-w-0">
+          {item.business_name}
+        </span>
+        <span className="text-[11px] text-slate-500">
+          {STATE_WORDS[item.state] || item.state}
+        </span>
         {item.specific ? (
-          <span className="shrink-0 text-[11px] px-2 py-1 rounded-full bg-emerald-500/15 text-emerald-300">
-            Named for this business
+          <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300">
+            Named
           </span>
         ) : (
-          <span className="shrink-0 text-[11px] px-2 py-1 rounded-full bg-amber-500/15 text-amber-300 inline-flex items-center gap-1">
+          <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 inline-flex items-center gap-1">
             <AlertTriangle className="w-3 h-3" />
-            Generic — not enough evidence to name them
+            Generic
           </span>
         )}
-      </div>
+      </button>
+
+      {!open ? null : (
+      <>
+      <p className="text-[11px] text-slate-500">
+        {item.style} / {item.layout}
+        {item.category ? ` · ${item.category}` : ''}
+        {item.specific ? '' : ' · not enough evidence to name them'}
+      </p>
 
       <details>
         <summary className="text-[12px] text-slate-400 cursor-pointer">
@@ -383,16 +448,17 @@ const VisualCard: React.FC<CardProps> = ({
           <button
             onClick={() => onDecide('Skip')}
             disabled={!!busy}
-            className="px-3 py-2 rounded-lg border border-slate-700 text-slate-400 text-[12px] hover:bg-slate-800/60 studio-transition disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-700 text-slate-400 text-[12px] hover:bg-slate-800/60 studio-transition disabled:opacity-50"
           >
-            Not this one
+            <Trash2 className="w-3.5 h-3.5" />
+            Remove
           </button>
         )}
       </div>
 
       {item.state === 'skipped' && (
         <p className="text-[12px] text-slate-500">
-          Retired. This lead is messaged with the page instead, not held
+          Removed. This lead is messaged with the page instead, not held
           waiting for a picture.
         </p>
       )}
@@ -537,6 +603,8 @@ const VisualCard: React.FC<CardProps> = ({
           {note || `${busy}...`}
         </p>
       )}
+      </>
+      )}
     </div>
   );
 };
@@ -660,6 +728,201 @@ const RotationPicker: React.FC<{
           <span
             className={`text-[12px] ${bad ? 'text-amber-300' : 'text-emerald-300'}`}
           >
+            {note}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+
+/**
+ * Which list is showing.
+ *
+ * Three of the four states need nothing from him, so the default is the one
+ * that does. "Removed" is never part of All: remove has to mean gone from
+ * the list, or the button has not done what it says.
+ */
+const FilterBar: React.FC<{
+  counts: Record<string, number>;
+  active: VisualState | 'all';
+  onPick: (f: VisualState | 'all') => void;
+}> = ({ counts, active, onPick }) => {
+  const live =
+    (counts.needs_image || 0) + (counts.needs_check || 0) + (counts.ready || 0);
+  const tabs: [VisualState | 'all', string, number][] = [
+    ['needs_image', 'Need a picture', counts.needs_image || 0],
+    ['needs_check', 'Need checking', counts.needs_check || 0],
+    ['ready', 'Ready to send', counts.ready || 0],
+    ['all', 'All', live],
+    ['skipped', 'Removed', counts.skipped || 0],
+  ];
+  return (
+    <div id="visual-filters" className="flex flex-wrap gap-2">
+      {tabs.map(([key, label, n]) => (
+        <button
+          key={key}
+          id={`visual-filter-${key}`}
+          onClick={() => onPick(key)}
+          disabled={!n}
+          className={`px-3 py-1.5 rounded-lg text-[12px] border studio-transition disabled:opacity-40 disabled:cursor-not-allowed ${
+            active === key
+              ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200'
+              : 'border-slate-700 text-slate-400 hover:bg-slate-800/60'
+          }`}
+        >
+          {label} ({n})
+        </button>
+      ))}
+    </div>
+  );
+};
+
+/**
+ * Who a run would write for, split by how they can be contacted.
+ *
+ * Each prompt is a visit to the image tool and a picture to read, so a batch
+ * of sixty is a week rather than a morning. A limit alone bounds the cost
+ * but picks whichever leads come first, which is not the same as picking the
+ * ones worth starting with -- so the groups come first, and ticking exact
+ * businesses is the precise version of the same thing.
+ */
+const CandidatePicker: React.FC<{ onStarted: () => void }> = ({ onStarted }) => {
+  const [data, setData] = useState<VisualCandidates | null>(null);
+  const [limit, setLimit] = useState(10);
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const [note, setNote] = useState('');
+  const [bad, setBad] = useState(false);
+  const [starting, setStarting] = useState(false);
+
+  const load = async () => {
+    const res = await api.getVisualCandidates();
+    if (res.data) setData(res.data);
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const start = async (groups: string[], leadIds: string[]) => {
+    setStarting(true);
+    setNote('');
+    const res = await api.runVisual(groups, leadIds, limit || null);
+    setStarting(false);
+    setBad(!!res.error);
+    setNote(res.error || `${res.data?.running || 'Started'} running...`);
+    if (!res.error) {
+      setPicked({});
+      onStarted();
+    }
+  };
+
+  if (!data?.enabled) return null;
+  if (!data.total) {
+    return (
+      <p id="visual-no-candidates" className="text-[12px] text-slate-500 px-1">
+        Every researched lead already has a prompt.
+      </p>
+    );
+  }
+
+  const tickedCount = Object.keys(picked).length;
+
+  return (
+    <div
+      id="visual-candidates"
+      className="rounded-2xl border border-slate-800 bg-slate-900 p-5 space-y-3"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-[13px] font-semibold text-slate-100">Who to write for</h2>
+        <label className="flex items-center gap-2 text-[12px] text-slate-400">
+          How many
+          <input
+            id="visual-limit"
+            type="number"
+            min={1}
+            max={500}
+            value={limit}
+            onChange={(e) => setLimit(Number(e.target.value))}
+            className="w-20 px-2 py-1 rounded-lg bg-slate-950 border border-slate-700 text-[13px] text-slate-100"
+          />
+        </label>
+      </div>
+      <p className="text-[11px] text-slate-500">
+        Each prompt is a visit to the image tool and a picture to read, so a
+        batch of sixty is a week, not a morning. Pick the group worth starting
+        with — or tick the exact businesses — and it writes that many and stops.
+      </p>
+
+      {data.groups
+        .filter((g) => g.count > 0)
+        .map((g) => (
+          <details key={g.key} id={`visual-group-${g.key}`} className="rounded-lg">
+            <summary className="flex flex-wrap items-center gap-2 cursor-pointer text-[13px] text-slate-200">
+              <span className="font-medium">{g.label}</span>
+              <span className="text-slate-500">— {g.count}</span>
+              {g.contactable ? (
+                <button
+                  id={`visual-run-${g.key}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    start([g.key], []);
+                  }}
+                  disabled={starting}
+                  className="inline-flex items-center gap-1.5 ml-auto px-3 py-1.5 rounded-lg bg-emerald-500 text-slate-950 text-[12px] font-semibold hover:bg-emerald-400 studio-transition disabled:opacity-50"
+                >
+                  <Play className="w-3 h-3" />
+                  Write for this group
+                </button>
+              ) : (
+                <span className="ml-auto text-[11px] text-slate-500">
+                  nothing can be written for these yet
+                </span>
+              )}
+            </summary>
+            <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-2 ml-5">
+              {g.leads.map((l) => (
+                <label
+                  key={l.lead_id}
+                  className="flex items-center gap-1.5 text-[12px] text-slate-400"
+                >
+                  <input
+                    type="checkbox"
+                    data-pick
+                    value={l.lead_id}
+                    checked={!!picked[l.lead_id]}
+                    onChange={(e) =>
+                      setPicked((prev) => {
+                        const next = { ...prev };
+                        if (e.target.checked) next[l.lead_id] = true;
+                        else delete next[l.lead_id];
+                        return next;
+                      })
+                    }
+                  />
+                  {l.name}
+                </label>
+              ))}
+              {g.capped && <span className="text-[11px] text-slate-600">...and more</span>}
+            </div>
+          </details>
+        ))}
+
+      <div className="flex flex-wrap items-center gap-3 pt-1">
+        <button
+          id="visual-run-picked"
+          onClick={() => start([], Object.keys(picked))}
+          disabled={starting || !tickedCount}
+          className="px-3.5 py-2 rounded-lg border border-slate-700 text-slate-200 text-[12px] hover:bg-slate-800/60 studio-transition disabled:opacity-40"
+        >
+          Write for the ones I ticked
+        </button>
+        <span id="visual-picked-note" className="text-[12px] text-slate-500">
+          {tickedCount ? `${tickedCount} ticked` : 'Nothing ticked yet'}
+        </span>
+        {note && (
+          <span className={`text-[12px] ${bad ? 'text-amber-300' : 'text-emerald-300'}`}>
             {note}
           </span>
         )}

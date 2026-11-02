@@ -171,12 +171,24 @@ _create_sheet_lock = threading.Lock()
 
 
 def stage_args(
-    stage: str, limit: int | None = None, *, social_first: bool | None = None
+    stage: str,
+    limit: int | None = None,
+    *,
+    social_first: bool | None = None,
+    extra: dict[str, list[str]] | None = None,
 ) -> list[str]:
-    """CLI arguments for a stage, with the per-run options applied."""
+    """CLI arguments for a stage, with the per-run options applied.
+
+    ``extra`` is keyed by stage name rather than being one flat list, so a
+    flag meant for one stage cannot land on another when the Full pipeline
+    runs several. Its values are built server-side from validated choices --
+    nothing a browser sends reaches an argv unchecked.
+    """
     args = list(STAGE_COMMANDS[stage])
     if limit and stage in TAKES_LIMIT:
         args += ["--limit", str(limit)]
+    if extra:
+        args += list(extra.get(stage, ()))
     # Every stage that picks a queue honours it. Ranking research alone left
     # leads researched before the setting existed sitting at the front of
     # site-brief -- which looks exactly like the checkbox being ignored.
@@ -439,6 +451,7 @@ class Runner:
         stages: list[str],
         limit: int | None = None,
         social_first: bool | None = None,
+        extra: dict[str, list[str]] | None = None,
     ) -> bool:
         with self._lock:
             if self.running:
@@ -446,7 +459,7 @@ class Runner:
             self.running = label
             self.lines.clear()
         threading.Thread(
-            target=self._run, args=(stages, limit, social_first), daemon=True
+            target=self._run, args=(stages, limit, social_first, extra), daemon=True
         ).start()
         return True
 
@@ -455,10 +468,13 @@ class Runner:
         stages: list[str],
         limit: int | None = None,
         social_first: bool | None = None,
+        extra: dict[str, list[str]] | None = None,
     ) -> None:
         try:
             for stage in stages:
-                args = stage_args(stage, limit, social_first=social_first)
+                args = stage_args(
+                    stage, limit, social_first=social_first, extra=extra
+                )
                 self.lines.append(f"$ outreach {' '.join(args)}")
                 process = subprocess.Popen(
                     [sys.executable, "-m", "outreach", *args],
@@ -2449,6 +2465,169 @@ def create_app(config: Config) -> Flask:
             out.append(ribbon.group(1))
         return out
 
+    @app.route("/api/visual/candidates")
+    def api_visual_candidates():
+        """Who a run would write for, split by how they can be contacted.
+
+        Sixty prompts is not a batch anybody works through: each one is a
+        visit to the image tool and a picture to read. `--limit` alone bounds
+        the cost but picks whichever leads come first, which is not the same
+        as picking the ones worth starting with.
+
+        The split is by the channel a message would actually use, because
+        that is the question Lyon asked to work from -- which have WhatsApp
+        and which do not -- and it is what decides whether a batch is worth
+        an evening.
+        """
+        from .stages.reachability import is_contactable
+        from .stages.visual_brief import GROUP_LABELS, GROUPS, group_of
+        from .stages.outreach_draft import needs_an_image
+        from .stage import Stage, parse as parse_stage
+
+        c = current()
+        empty = {
+            "enabled": needs_an_image(c),
+            "groups": [
+                {"key": k, "label": GROUP_LABELS[k], "count": 0, "leads": [],
+                 "contactable": k in ("whatsapp", "email")}
+                for k in GROUPS
+            ],
+            "total": 0,
+        }
+        if not empty["enabled"] or not c.secrets.sheet_id:
+            return jsonify(empty)
+
+        try:
+            sheets = _sheets_client(c)
+            leads = sheets.read_rows(schema.LEADS)
+            research = sheets.read_rows(schema.RESEARCH)
+            briefs = sheets.read_rows(schema.VISUAL_BRIEFS)
+        except Exception as exc:  # noqa: BLE001
+            from .sheets import TabMissing
+
+            return jsonify({
+                **empty,
+                "error": _explain_sheets(exc, c),
+                "missing_tab": isinstance(exc, TabMissing),
+            }), 200
+
+        buckets: dict[str, list[dict[str, str]]] = {k: [] for k in GROUPS}
+        for lead_id, (_n, lead) in leads.items():
+            # Exactly what the stage itself would skip, so the counts here and
+            # the number the run produces cannot disagree. A count that says
+            # one thing and a run that does another makes every run look like
+            # it under-delivered -- the reason the research count learned the
+            # same rule.
+            if lead_id in briefs:
+                continue
+            current_stage = parse_stage(lead.get("Stage")) or Stage.DISCOVERED
+            if current_stage is Stage.DISQUALIFIED:
+                continue
+            from .stage import rank
+
+            if rank(current_stage) < rank(Stage.RESEARCHED):
+                continue
+            research_row = (research.get(lead_id) or (0, None))[1]
+            buckets[group_of(lead, research_row)].append({
+                "lead_id": lead_id,
+                "name": lead.get("Business Name", "") or lead_id,
+                "category": lead.get("Category", ""),
+            })
+
+        return jsonify({
+            "enabled": True,
+            "total": sum(len(v) for v in buckets.values()),
+            "groups": [
+                {
+                    "key": key,
+                    "label": GROUP_LABELS[key],
+                    "count": len(buckets[key]),
+                    # Capped: sixty names is a wall, not a list. The count is
+                    # the whole truth; the names are there to recognise who
+                    # is in a group before spending on it.
+                    "leads": buckets[key][:PREVIEW_CAP],
+                    "capped": len(buckets[key]) > PREVIEW_CAP,
+                    # Whether this group can be briefed at all. "Not checked
+                    # yet" and "no way to contact" are held by the same gate
+                    # the site brief uses, so offering a button for them
+                    # would promise work that cannot happen.
+                    "contactable": key in ("whatsapp", "email"),
+                }
+                for key in GROUPS
+            ],
+        })
+
+    @app.route("/api/visual/run", methods=["POST"])
+    def api_visual_run():
+        """Write prompts for one group, or for an explicit pick.
+
+        Its own endpoint rather than options on /api/run: the group and the
+        lead list are validated here, against what the Sheet actually holds,
+        and only then turned into arguments. Nothing a browser sends reaches
+        an argv unchecked.
+        """
+        from .stages.visual_brief import GROUPS
+
+        payload = request.json or {}
+        groups = payload.get("groups") or []
+        lead_ids = payload.get("lead_ids") or []
+        if not isinstance(groups, list) or not isinstance(lead_ids, list):
+            return jsonify({"error": "groups and lead_ids must be lists"}), 400
+
+        unknown = [g for g in groups if g not in GROUPS]
+        if unknown:
+            return jsonify({
+                "error": f"Unknown group {unknown[0]!r}."
+            }), 400
+
+        raw = payload.get("limit")
+        limit: int | None = None
+        if raw not in (None, ""):
+            try:
+                limit = int(raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "How many must be a whole number"}), 400
+            if limit < 1:
+                return jsonify({"error": "How many must be at least 1"}), 400
+            if limit > MAX_LIMIT:
+                return jsonify({"error": f"How many cannot exceed {MAX_LIMIT}"}), 400
+
+        c = current()
+        picked: list[str] = []
+        if lead_ids:
+            # Checked against the Sheet rather than trusted: these become
+            # command-line arguments, and a Lead ID is whatever the page
+            # chose to send.
+            try:
+                known = set(_sheets_client(c).read_rows(schema.LEADS))
+            except Exception as exc:  # noqa: BLE001
+                return jsonify({"error": _explain_sheets(exc, c)}), 200
+            picked = [str(x) for x in lead_ids if str(x) in known]
+            if not picked:
+                return jsonify({
+                    "error": "None of those leads are on the Sheet any more. "
+                             "Refresh the page and pick again."
+                }), 200
+
+        extra: list[str] = []
+        for group in groups:
+            extra += ["--group", group]
+        if picked:
+            extra += ["--leads", ",".join(picked)]
+
+        label = "Image prompts"
+        if picked:
+            label = f"Image prompts ({len(picked)} picked)"
+        elif groups:
+            label = "Image prompts (" + ", ".join(groups) + ")"
+
+        started = runner.start(
+            label, ["visual-brief"], limit, None, {"visual-brief": extra}
+        )
+        if not started:
+            return jsonify({"error": f"{runner.running} is already running"}), 409
+        return jsonify({"ok": True, "running": label})
+
     @app.route("/api/visual/attach", methods=["POST"])
     def api_visual_attach():
         """Take the picture back from the image tool and record it.
@@ -3790,6 +3969,17 @@ PAGE = """<!doctype html>
   /* The infographic panel. The thumbnail is deliberately the size WhatsApp
      shows in a chat: a graphic that reads at full width and not at this size
      is a graphic nobody will read. */
+  /* Collapsed by default: sixty cards is not a list anybody reads, and the
+     header carries everything needed to decide whether to open one. */
+  .viz-head { display:flex; align-items:center; gap:10px; cursor:pointer;
+              user-select:none; }
+  .viz-caret { color:#49C990; width:1em; }
+  .viz-row { padding:10px 14px; }
+  .viz-group { margin:6px 0; }
+  .viz-group > summary { cursor:pointer; }
+  .viz-picks { display:flex; flex-wrap:wrap; gap:4px 14px; margin:8px 0 0 14px; }
+  .viz-pick { display:flex; align-items:center; gap:6px; }
+  button.ghost { background:transparent; border:1px solid #2a3a33; color:#8fa39a; }
   .viz-shot { display:block; width:260px; max-width:100%; border-radius:6px;
               border:1px solid #2a3a33; }
   .viz-small { display:block; width:120px; max-width:40%; border-radius:4px;
@@ -4091,8 +4281,22 @@ PAGE = """<!doctype html>
       <a class="sub" href="/guide#the-second-pitch-a-picture-instead-of-a-page"
          target="_blank" rel="noopener">What is this?</a></h2>
   <div class="row" style="margin-bottom:10px" id="visual-controls">
-    <button data-run="visual-brief">Write image prompts</button>
     <span class="hint" id="visual-note"></span>
+  </div>
+  <div class="card" id="visual-pick" style="margin-bottom:14px">
+    <div class="row" style="align-items:center;gap:10px;flex-wrap:wrap">
+      <b class="sub">Who to write for</b>
+      <label class="sub" style="display:flex;align-items:center;gap:6px;margin-left:auto">
+        How many
+        <input id="viz-limit" type="number" min="1" max="500" value="10"
+               style="width:5.5em">
+      </label>
+    </div>
+    <p class="hint" style="margin:8px 0">Each prompt is a visit to the image
+      tool and a picture to read, so a batch of sixty is a week, not a
+      morning. Pick the group worth starting with &mdash; or tick the exact
+      businesses &mdash; and it writes that many and stops.</p>
+    <div id="visual-groups"></div>
   </div>
   <details class="card" style="margin-bottom:14px" id="rotation-settings">
     <summary class="sub"><b>Which looks are in the rotation</b></summary>
@@ -5635,6 +5839,23 @@ function vizBusy() {
   return Object.values(vizUi).some(u => u.busy || u.armed || u.confirming);
 }
 
+// Which states the list is showing. Sixty cards is not a list anybody reads,
+// and three of the four states need nothing from him -- so the default is
+// the one that does.
+let vizFilter = 'needs_image';
+let vizData = null;
+
+function vizSetFilter(name) {
+  vizFilter = name;
+  if (vizData) vizDraw(vizData);
+}
+
+function vizToggle(leadId) {
+  const u = vizFor(leadId);
+  u.open = !u.open;
+  if (vizData) vizDraw(vizData);
+}
+
 async function loadVisual() {
   let d;
   try { d = await (await fetch('/api/visual/queue')).json(); } catch { return; }
@@ -5645,6 +5866,8 @@ async function loadVisual() {
   if (d.catalogue) drawRotation(d.catalogue);
   const rot = document.querySelector('#rotation-settings');
   if (rot) rot.style.display = d.enabled ? '' : 'none';
+  const pick = document.querySelector('#visual-pick');
+  if (pick) pick.style.display = d.enabled ? '' : 'none';
   if (!d.enabled) {
     // Hidden rather than shown empty. A campaign pitching a page has no use
     // for this step, and a panel that can never do anything reads as broken.
@@ -5664,38 +5887,87 @@ async function loadVisual() {
       ${d.missing_tab ? repairTabsHtml() : ''}</div>`;
     return;
   }
+  vizData = d;
   vizQueue = d.queue || [];
+  loadVisualCandidates();
+  vizDraw(d);
+}
+
+function vizDraw(d) {
+  const el = document.querySelector('#visual');
+  if (!el) return;
+  const c = d.counts || {};
   const note = document.querySelector('#visual-note');
   if (note) {
-    const c = d.counts || {};
-    note.textContent = vizQueue.length
+    note.textContent = (d.queue || []).length
       ? `${c.needs_image || 0} need a picture, ${c.needs_check || 0} need checking, ${c.ready || 0} ready`
       : '';
   }
-  if (!vizQueue.length) {
+  if (!(d.queue || []).length) {
     el.innerHTML = '<div class="card"><div class="what">No image prompts yet.</div>' +
-      '<div class="sub">Press Write image prompts above. It uses the research ' +
-      'you already have, so it costs one small model call per lead.</div></div>';
+      '<div class="sub">Pick a group above and press Write image prompts. It uses ' +
+      'the research you already have, so it costs one small model call per lead.</div></div>';
     return;
   }
-  el.innerHTML = vizQueue.map(m => vizCard(m, d)).join('');
+  // Removed is last and never part of All: "remove" has to mean gone from
+  // the list, or the button has not done what it says.
+  const tabs = [
+    ['needs_image', 'Need a picture', c.needs_image || 0],
+    ['needs_check', 'Need checking', c.needs_check || 0],
+    ['ready', 'Ready to send', c.ready || 0],
+    ['all', 'All', (c.needs_image || 0) + (c.needs_check || 0) + (c.ready || 0)],
+    ['skipped', 'Removed', c.skipped || 0],
+  ];
+  const bar = tabs.map(t => `<button onclick="vizSetFilter('${t[0]}')"
+      class="${vizFilter === t[0] ? '' : 'ghost'}"
+      ${t[2] ? '' : 'disabled'}>${t[1]} (${t[2]})</button>`).join(' ');
+
+  const shown = vizQueue.filter(m =>
+    vizFilter === 'all' ? m.state !== 'skipped' : m.state === vizFilter);
+
+  el.innerHTML = `<div class="row" style="margin-bottom:10px;flex-wrap:wrap">${bar}</div>` +
+    (shown.length
+      ? shown.map(m => vizCard(m, d)).join('')
+      : `<div class="card"><div class="sub">Nothing in this list.</div></div>`);
 }
 
 function vizCard(m, d) {
   const u = vizFor(m.lead_id);
   const id = encodeURIComponent(m.lead_id);
-  const tool = d.tool_name || 'the image tool';
-  const open = d.tool_url
-    ? `<a href="${esc(d.tool_url)}" target="_blank" rel="noopener"><button>Open ${esc(tool)}</button></a>`
-    : '';
+  const open = !!u.open;
+  const states = {
+    needs_image: 'needs a picture',
+    needs_check: 'needs checking',
+    ready: 'ready to send',
+    skipped: 'removed',
+  };
   const badge = m.specific
-    ? '<span class="sub">named for this business</span>'
-    : '<span class="sub viz-generic">generic &mdash; not enough evidence to name them</span>';
-  const words = (m.expected_text || []).join('\\\\n');
+    ? '<span class="sub">named</span>'
+    : '<span class="sub viz-generic">generic</span>';
+  // Collapsed by default. The header carries everything needed to decide
+  // whether to open one -- who it is, what it is waiting for, and whether it
+  // claims anything about them.
+  const head = `<div class="viz-head" onclick="vizToggle('${id}')"
+       title="${open ? 'Hide' : 'Show'} this one">
+      <span class="viz-caret">${open ? '&#9662;' : '&#9656;'}</span>
+      <b>${esc(m.name)}</b>
+      <span class="sub">${esc(states[m.state] || m.state)}</span>
+      ${badge}
+    </div>`;
+  if (!open) return `<div class="card q viz-row">${head}</div>`;
+  return `<div class="card q viz-row">${head}${vizBody(m, d, id, u)}</div>`;
+}
+
+function vizBody(m, d, id, u) {
+  const tool = d.tool_name || 'the image tool';
+  const openBtn = d.tool_url
+    ? `<a href="${esc(d.tool_url)}" target="_blank" rel="noopener" id="visual-open-tool"><button>Open ${esc(tool)}</button></a>`
+    : '';
+  const words = (m.expected_text || []).join('\\n');
   let body = '';
 
   if (m.state === 'skipped') {
-    body = '<div class="sub">Retired. This lead is messaged with the page ' +
+    body = '<div class="sub">Removed. This lead is messaged with the page ' +
       'instead, not held waiting for a picture.</div>' +
       `<div class="row" style="margin-top:8px"><button onclick="skipViz('${id}', 'Approved')">Put it back</button></div>`;
   } else if (m.state === 'needs_image') {
@@ -5742,10 +6014,10 @@ function vizCard(m, d) {
   }
 
   return `
-    <div class="card q">
-      <h3>${esc(m.name)}</h3>
-      <div class="row" style="gap:10px">${badge}
-        <span class="sub">${esc(m.style)} / ${esc(m.layout)}</span></div>
+      <div class="row" style="gap:10px;margin-top:8px">
+        <span class="sub">${esc(m.style)} / ${esc(m.layout)}</span>
+        ${m.specific ? '' : '<span class="sub viz-generic">not enough evidence to name them</span>'}
+      </div>
       <details style="margin-top:8px">
         <summary class="sub">Why these cards &mdash; the evidence behind each one</summary>
         <div class="viz-words">${esc(m.gaps || 'No evidence recorded.')}</div>
@@ -5753,18 +6025,99 @@ function vizCard(m, d) {
       <textarea id="vizp-${id}" readonly>${(m.prompt || '').replace(/</g, '&lt;')}</textarea>
       <div class="row" style="margin-top:10px">
         <button onclick="copyVizPrompt('${id}')">Copy prompt</button>
-        ${open}
+        ${openBtn}
         <button onclick="regenViz('${id}')">Different look</button>
-        ${m.state === 'skipped' ? '' : `<button onclick="skipViz('${id}', 'Skip')">Not this one</button>`}
+        ${m.state === 'skipped' ? '' : `<button onclick="skipViz('${id}', 'Skip')">Remove</button>`}
         <span class="sub" id="vizc-${id}"></span>
       </div>
-      ${body}
-    </div>`;
+      ${body}`;
 }
 
-// Offered beside the error that needs it, because the message says "press
-// the button below" -- guidance that names a button nowhere near it is the
-// same as no guidance.
+// --- who a run would write for -----------------------------------------
+// Sixty prompts is not a batch anybody works through: each one is a visit to
+// the image tool and a picture to read. A limit alone bounds the cost but
+// picks whichever leads come first, which is not the same as picking the
+// ones worth starting with.
+let vizPicked = {};
+
+async function loadVisualCandidates() {
+  let d;
+  try { d = await (await fetch('/api/visual/candidates')).json(); } catch { return; }
+  const el = document.querySelector('#visual-groups');
+  if (!el) return;
+  if (!d.enabled) { el.innerHTML = ''; return; }
+  if (d.error) { el.innerHTML = `<div class="long-err">${esc(d.error)}</div>`; return; }
+  if (!d.total) {
+    el.innerHTML = '<div class="sub">Every researched lead already has a prompt.</div>';
+    return;
+  }
+  el.innerHTML = (d.groups || []).map(g => {
+    if (!g.count) return '';
+    const names = (g.leads || []).map(l => `
+      <label class="sub viz-pick">
+        <input type="checkbox" data-pick value="${esc(l.lead_id)}"
+               ${vizPicked[l.lead_id] ? 'checked' : ''}
+               onchange="vizPick('${esc(l.lead_id)}', this.checked)" style="width:auto">
+        ${esc(l.name)}
+      </label>`).join('');
+    return `<details class="viz-group">
+      <summary><b>${esc(g.label)}</b> &mdash; ${g.count}
+        ${g.contactable
+          ? `<button onclick="runVisualFor('${g.key}', event)">Write for this group</button>`
+          : '<span class="sub">nothing can be written for these yet</span>'}
+      </summary>
+      <div class="viz-picks">${names}${g.capped ? '<span class="sub">...and more</span>' : ''}</div>
+    </details>`;
+  }).join('') +
+    `<div class="row" style="margin-top:10px">
+       <span class="sub" id="viz-picked-note"></span>
+       <button onclick="runVisualFor('', event)" id="viz-run-picked">Write for the ones I ticked</button>
+     </div>`;
+  vizPickedNote();
+}
+
+function vizPick(leadId, on) {
+  if (on) vizPicked[leadId] = true; else delete vizPicked[leadId];
+  vizPickedNote();
+}
+
+function vizPickedNote() {
+  const n = Object.keys(vizPicked).length;
+  const note = document.querySelector('#viz-picked-note');
+  if (note) note.textContent = n ? `${n} ticked` : 'Nothing ticked yet';
+  const btn = document.querySelector('#viz-run-picked');
+  if (btn) btn.disabled = !n;
+}
+
+async function runVisualFor(group, ev) {
+  if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+  const howMany = document.querySelector('#viz-limit');
+  const note = document.querySelector('#visual-note');
+  const body = {
+    groups: group ? [group] : [],
+    lead_ids: group ? [] : Object.keys(vizPicked),
+    limit: howMany && howMany.value ? howMany.value : null,
+  };
+  if (note) { note.textContent = 'Starting...'; note.className = 'hint'; }
+  let d;
+  try {
+    d = await (await fetch('/api/visual/run', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    })).json();
+  } catch (e) {
+    if (note) { note.textContent = 'Could not reach the dashboard: ' + e; note.className = 'err'; }
+    return;
+  }
+  if (!d.ok) {
+    if (note) { note.textContent = d.error || 'Could not start.'; note.className = 'err'; }
+    return;
+  }
+  if (note) { note.textContent = d.running + ' running...'; note.className = 'hint'; }
+  vizPicked = {};
+  vizPickedNote();
+}
+
 function repairTabsHtml() {
   return `<div class="row" style="margin-top:10px">
     <button onclick="repairTabs(this)">Add the missing tabs</button>

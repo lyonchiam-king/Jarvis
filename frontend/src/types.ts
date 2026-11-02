@@ -298,3 +298,25 @@ export interface VisualQueue {
     chosen_layouts: string[];
   };
 }
+
+/** One group of leads a run could be written for, by contact channel. */
+export interface VisualGroup {
+  key: string;
+  label: string;
+  count: number;
+  /**
+   * False for groups the brief cannot write for yet -- unchecked leads are
+   * held at the same gate the site brief uses, so a button there would
+   * promise work that cannot happen.
+   */
+  contactable: boolean;
+  /** Capped: a count is the whole truth, sixty names is a wall. */
+  capped: boolean;
+  leads: { lead_id: string; name: string; category: string }[];
+}
+
+export interface VisualCandidates {
+  enabled: boolean;
+  total: number;
+  groups: VisualGroup[];
+}

@@ -64,7 +64,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1562 tests, pytest, no CI -- the suite is the only gate
+tests/             1591 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -1291,6 +1291,49 @@ is not -- telling someone to add a tab that is already there is a wasted hour.
 collapsed any body with an `error` key into `{ error }`, which threw away the
 flag sitting beside it, so no view could act on it. `ApiResponse.raw` keeps
 the body.
+
+**A bounded run is not the same as a chosen one.** `--limit` has always kept
+a run cheap, and the first real use of the infographic track still produced
+sixty prompts -- because the limit picks *whichever* leads come first. Each
+one is a visit to the image tool and a picture to read, so sixty is a week
+rather than a morning. `visual-brief` takes `--group` (by the channel a
+message would use) and `--leads`, and the dashboard's picker is built on
+them. The filter is applied to the **candidates**, before selection: filtering
+the selected batch instead would make "write 10 for the WhatsApp group"
+produce however many of the first ten happened to be in it, which looks
+exactly like the filter being ignored.
+
+**The group is the channel, not the column.** `group_of` answers with where a
+message would actually go: WhatsApp wins over an email the lead also has,
+because that is the channel that gets used -- calling it "email only" would
+put it in a batch picked for a different reason. And *unchecked* is its own
+group, never folded into unreachable: missing evidence is not evidence of
+absence, which is the whole reason the reachability check can answer later.
+
+**The candidate count must be computed by the stage's own rules.** The picker
+re-applies exactly what `visual-brief` skips -- already briefed, not yet
+researched, disqualified. A count that says one thing while the run does
+another makes every run look like it under-delivered, which is why the
+research count learned the same rule.
+
+**A group nothing can be written for gets no button.** Unchecked and
+unreachable leads are held by the same contact gate the site brief uses, so a
+run button there would promise work that cannot happen.
+
+**Extra CLI arguments are keyed by stage.** The Full pipeline runs several
+stages from one call, so one flat list would put a `visual-brief` flag on
+`discovery`. `stage_args` takes `extra: dict[stage, list[str]]`, and every
+value is built server-side from a validated choice -- a group is checked
+against `GROUPS` and a Lead ID against the Sheet before either reaches an
+argv.
+
+**Sixty expanded cards is a wall, not a list.** Reported after the first real
+run. Cards collapse to one line carrying what is needed to decide whether to
+open one -- who, what it waits on, and whether it claims anything about them
+-- and the list opens on the single state that needs a person. "Removed" is
+never part of *All*: remove has to mean gone from the list, or the button has
+not done what it says. Nothing is destroyed; it is the existing `Skip`, and
+**Put it back** reverses it.
 
 ## Conventions
 

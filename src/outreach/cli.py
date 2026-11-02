@@ -1487,9 +1487,31 @@ def run_site_brief(
         "before those with no web presence. Defaults to research.social_first."
     ),
 )
+@click.option(
+    "--group",
+    "groups",
+    multiple=True,
+    type=click.Choice(["whatsapp", "email", "unchecked", "none"]),
+    help=(
+        "Only write for leads in this group, by the channel a message would "
+        "use. Repeatable. Leave it off for every group. Sixty prompts is not "
+        "a batch anybody works through -- each one is a visit to the image "
+        "tool and a picture to read -- so picking the group worth starting "
+        "with is the point."
+    ),
+)
+@click.option(
+    "--leads",
+    default="",
+    help="Only these Lead IDs, comma separated. Combines with --group.",
+)
 @click.pass_context
 def run_visual_brief(
-    ctx: click.Context, limit: int | None, social_first: bool | None
+    ctx: click.Context,
+    limit: int | None,
+    social_first: bool | None,
+    groups: tuple[str, ...],
+    leads: str,
 ) -> None:
     """Write one image prompt per researched lead, for the infographic track."""
     config = _load(ctx.obj["config_path"])
@@ -1504,9 +1526,16 @@ def run_visual_brief(
         )
         raise SystemExit(2)
 
+    picked = {part.strip() for part in leads.split(",") if part.strip()}
     sheets = _sheets_client(config)
     report = visual_brief_stage.run(
-        config, sheets, _writer(config), limit=limit, social_first=social_first
+        config,
+        sheets,
+        _writer(config),
+        limit=limit,
+        social_first=social_first,
+        groups=tuple(groups),
+        lead_ids=picked or None,
     )
 
     click.echo("")

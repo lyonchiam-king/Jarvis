@@ -808,3 +808,165 @@ def test_the_repair_refuses_before_there_is_a_sheet_at_all(tmp_path, monkeypatch
     client = dash.create_app(cfg_no_sheet).test_client()
     d = client.post("/api/repair-tabs").get_json()
     assert "Create my Google Sheet" in d["error"]
+
+
+# ------------------------------------------------- the picker, server side
+
+
+def researched(lead_id, *, whatsapp="yes", email="", name=None):
+    return {
+        "Lead ID": lead_id,
+        "Stage": "Researched",
+        "Business Name": name or f"Salon {lead_id}",
+        "Category": "Nail salon",
+        "WhatsApp Reachable": whatsapp,
+    }, {"Lead ID": lead_id, "Email Found": email,
+        "Email Source": "website" if email else "not found"}
+
+
+def picker_app(app, rows, briefs=None):
+    leads, research = {}, {}
+    for lead_row, research_row in rows:
+        key = lead_row["Lead ID"]
+        leads[key] = (len(leads) + 2, lead_row)
+        research[key] = (len(research) + 2, research_row)
+    client, sheets = app(visuals=briefs or {})
+    sheets._tabs[schema.LEADS.title] = leads
+    sheets._tabs[schema.RESEARCH.title] = research
+    return client, sheets
+
+
+def test_the_candidates_are_split_by_how_they_can_be_contacted(app):
+    client, _ = picker_app(app, [
+        researched("w1"), researched("w2"),
+        researched("e1", whatsapp="no", email="hi@x.com"),
+        researched("u1", whatsapp=""),
+        researched("n1", whatsapp="no"),
+    ])
+    d = client.get("/api/visual/candidates").get_json()
+    by_key = {g["key"]: g for g in d["groups"]}
+    assert by_key["whatsapp"]["count"] == 2
+    assert by_key["email"]["count"] == 1
+    assert by_key["unchecked"]["count"] == 1
+    assert by_key["none"]["count"] == 1
+    assert d["total"] == 5
+    assert by_key["whatsapp"]["contactable"] is True
+    assert by_key["unchecked"]["contactable"] is False
+
+
+def test_a_lead_that_already_has_a_prompt_is_not_a_candidate(app):
+    """The count and the number a run produces must not disagree -- a count
+    that says one thing while the stage does another makes every run look
+    like it under-delivered."""
+    client, _ = picker_app(app, [researched("a"), researched("b")],
+                           briefs=brief("a"))
+    d = client.get("/api/visual/candidates").get_json()
+    names = [l["lead_id"] for g in d["groups"] for l in g["leads"]]
+    assert names == ["b"]
+    assert d["total"] == 1
+
+
+def test_an_unresearched_or_disqualified_lead_is_not_a_candidate(app):
+    rows = [researched("ok")]
+    early, early_r = researched("early")
+    early["Stage"] = "Discovered"
+    dead, dead_r = researched("dead")
+    dead["Stage"] = "Disqualified"
+    client, _ = picker_app(app, rows + [(early, early_r), (dead, dead_r)])
+    d = client.get("/api/visual/candidates").get_json()
+    assert d["total"] == 1
+
+
+def test_the_names_are_capped_but_the_count_is_the_whole_truth(app):
+    from outreach.dashboard import PREVIEW_CAP
+
+    client, _ = picker_app(app, [researched(f"w{i}") for i in range(PREVIEW_CAP + 5)])
+    group = {g["key"]: g for g in client.get("/api/visual/candidates").get_json()["groups"]}
+    assert group["whatsapp"]["count"] == PREVIEW_CAP + 5
+    assert len(group["whatsapp"]["leads"]) == PREVIEW_CAP
+    assert group["whatsapp"]["capped"] is True
+
+
+def test_running_for_a_group_passes_it_through_to_the_stage(app, monkeypatch):
+    from outreach import dashboard as dash_mod
+
+    client, _ = picker_app(app, [researched("w1")])
+    started = {}
+    monkeypatch.setattr(
+        dash_mod.Runner, "start",
+        lambda self, label, stages, limit=None, social=None, extra=None: (
+            started.update(label=label, stages=stages, limit=limit, extra=extra) or True
+        ),
+    )
+    d = client.post("/api/visual/run",
+                    json={"groups": ["whatsapp"], "limit": 10}).get_json()
+    assert d["ok"] is True
+    assert started["stages"] == ["visual-brief"]
+    assert started["limit"] == 10
+    assert started["extra"] == {"visual-brief": ["--group", "whatsapp"]}
+
+
+def test_an_explicit_pick_is_checked_against_the_sheet_before_it_becomes_argv(
+    app, monkeypatch
+):
+    """These become command-line arguments, and a Lead ID is whatever the
+    page chose to send."""
+    from outreach import dashboard as dash_mod
+
+    client, _ = picker_app(app, [researched("real")])
+    started = {}
+    monkeypatch.setattr(
+        dash_mod.Runner, "start",
+        lambda self, label, stages, limit=None, social=None, extra=None: (
+            started.update(extra=extra) or True
+        ),
+    )
+    d = client.post("/api/visual/run", json={
+        "lead_ids": ["real", "--rm -rf", "not-on-the-sheet"]
+    }).get_json()
+    assert d["ok"] is True
+    assert started["extra"] == {"visual-brief": ["--leads", "real"]}
+
+
+def test_a_pick_of_nothing_real_says_so_rather_than_running_everything(app):
+    client, _ = picker_app(app, [researched("real")])
+    d = client.post("/api/visual/run", json={"lead_ids": ["ghost"]}).get_json()
+    assert "ok" not in d
+    assert "are on the Sheet any more" in d["error"]
+
+
+def test_an_unknown_group_is_refused(app):
+    client, _ = picker_app(app, [researched("a")])
+    r = client.post("/api/visual/run", json={"groups": ["everyone"]})
+    assert r.status_code == 400
+
+
+def test_a_silly_limit_is_refused(app):
+    client, _ = picker_app(app, [researched("a")])
+    assert client.post("/api/visual/run", json={"limit": 0}).status_code == 400
+    assert client.post("/api/visual/run", json={"limit": "ten"}).status_code == 400
+
+
+def test_the_candidates_offer_the_repair_when_the_tab_is_missing(app, monkeypatch):
+    from outreach.sheets import TabMissing
+
+    client, sheets = app()
+
+    def refuse(_tab):
+        raise TabMissing("no such tab", "Visual Briefs")
+
+    monkeypatch.setattr(sheets, "read_rows", refuse)
+    d = client.get("/api/visual/candidates").get_json()
+    assert d["missing_tab"] is True
+
+
+def test_an_extra_argument_cannot_land_on_another_stage():
+    """The Full pipeline runs several stages from one call, so a flat list
+    of extra arguments would put a visual-brief flag on discovery."""
+    from outreach.dashboard import stage_args
+
+    extra = {"visual-brief": ["--group", "whatsapp"]}
+    assert stage_args("discovery", 5, extra=extra) == ["run", "discovery", "--limit", "5"]
+    assert stage_args("visual-brief", 5, extra=extra) == [
+        "run", "visual-brief", "--limit", "5", "--group", "whatsapp",
+    ]

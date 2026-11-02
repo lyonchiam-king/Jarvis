@@ -75,6 +75,13 @@ const OVERFLOW_PROBE = `(() => {
     return { scrollWidth: doc.scrollWidth, innerWidth: window.innerWidth, clipped };
   })()`;
 
+const OPEN_FIRST_CARD = `(() => {
+  const head = document.querySelector('[id^="visual-head-"]');
+  if (!head) return false;
+  if (head.getAttribute('aria-expanded') !== 'true') head.click();
+  return true;
+})()`;
+
 const problems = [];
 const fail = (message) => problems.push(message);
 
@@ -307,6 +314,25 @@ try {
       tool_url: 'https://example.com/flow',
       tool_url_suggestion: 'https://example.com/suggested',
     },
+    // Who a run would write for. Without this the picker renders its
+    // "every lead already has a prompt" state and none of it is exercised.
+    '/api/visual/candidates': {
+      enabled: true,
+      total: 63,
+      groups: [
+        { key: 'whatsapp', label: 'On WhatsApp', count: 41, contactable: true,
+          capped: true, leads: [
+            { lead_id: 'W1', name: 'Salon One', category: 'Nail salon' },
+            { lead_id: 'W2', name: 'Salon Two', category: 'Hair salon' }] },
+        { key: 'email', label: 'Email only', count: 7, contactable: true,
+          capped: false, leads: [
+            { lead_id: 'E1', name: 'Clinic One', category: 'Clinic' }] },
+        { key: 'unchecked', label: 'Not checked yet', count: 15,
+          contactable: false, capped: false, leads: [] },
+        { key: 'none', label: 'No way to contact them', count: 0,
+          contactable: false, capped: false, leads: [] },
+      ],
+    },
     // The infographic branch. Two rows on purpose: one named for the
     // business and one generic, because telling them apart on the card is
     // the whole safeguard -- a generic graphic sent as though it were
@@ -418,25 +444,93 @@ try {
   await dt.evaluate(`document.getElementById('stage-visual').click()`);
   await new Promise((r) => setTimeout(r, 500));
   const vizText = await dt.evaluate('document.body.innerText || ""');
-  for (const phrase of [
-    'Your Nail Crush',
-    'Named for this business',
-    // The safeguard, rendered. A generic graphic has to say so on its own
-    // card, before anyone sends it.
-    'Generic',
-    // The one thing only a person can do, and the words to do it with.
-    'These exact words must be on the picture',
-    '3 quick wins for your business',
-    // All three ways the picture comes back.
-    'Ctrl+V',
-  ]) {
+  // The picker, which is what keeps sixty prompts from being written in one
+  // press. Groups first, because that is the split he asked to work from.
+  for (const phrase of ['Who to write for', 'On WhatsApp', 'Email only',
+                        'Not checked yet']) {
     if (!vizText.includes(phrase)) {
       fail(`the Infographic step did not render ${JSON.stringify(phrase)}`);
     }
   }
-  // All three ways in. The link field is a placeholder, so it is not in
+  const whoFor = await dt.evaluate(`(() => {
+    const run = document.getElementById('visual-run-whatsapp');
+    const held = document.getElementById('visual-run-unchecked');
+    const limit = document.getElementById('visual-limit');
+    return {
+      group: !!run, heldHasButton: !!held,
+      limit: limit ? limit.value : null,
+      ticked: document.getElementById('visual-picked-note')?.textContent || '',
+    };
+  })()`);
+  if (!whoFor.group) fail('no way to run for the WhatsApp group');
+  if (whoFor.heldHasButton) {
+    // These are held at the same gate the site brief uses, so a button
+    // would promise work that cannot happen.
+    fail('a group nothing can be written for is offering a run button');
+  }
+  if (whoFor.limit !== '10') {
+    fail(`the How many box defaults to ${JSON.stringify(whoFor.limit)}, not 10`);
+  }
+  if (!/Nothing ticked/.test(whoFor.ticked)) {
+    fail(`the tick count reads ${JSON.stringify(whoFor.ticked)}`);
+  }
+
+  // Cards are collapsed until asked for. Sixty expanded cards is the thing
+  // this list was reported for.
+  const collapsed = await dt.evaluate(`(() => {
+    const body = document.body.innerText || '';
+    return {
+      rows: document.querySelectorAll('[id^="visual-head-"]').length,
+      expanded: /Copy prompt for/.test(body),
+      // The default list is the only state that needs him.
+      active: document.getElementById('visual-filter-needs_image')
+        ?.className.includes('emerald') || false,
+    };
+  })()`);
+  if (!collapsed.rows) fail('the Infographic step rendered no cards at all');
+  if (collapsed.expanded) {
+    fail('cards are expanded before anyone asked -- the list is a wall again');
+  }
+  if (!collapsed.active) fail('the list does not open on "Need a picture"');
+
+  // The default list holds the lead waiting for a picture. Opening it shows
+  // the three ways the picture comes back, and the way to get it off the list.
+  await dt.evaluate(OPEN_FIRST_CARD);
+  await new Promise((r) => setTimeout(r, 300));
+  const openedWaiting = await dt.evaluate('document.body.innerText || ""');
+  for (const phrase of ['Your Nail Crush', 'Named', 'Ctrl+V', 'Remove']) {
+    if (!openedWaiting.includes(phrase)) {
+      fail(`the opened waiting card did not render ${JSON.stringify(phrase)}`);
+    }
+  }
+
+  // The other list: a picture back, unchecked, and generic. Both safeguards
+  // live on that one -- the words to read against it, and the badge saying it
+  // claims nothing about this business.
+  await dt.evaluate(`document.getElementById('visual-filter-needs_check').click()`);
+  await new Promise((r) => setTimeout(r, 300));
+  await dt.evaluate(OPEN_FIRST_CARD);
+  await new Promise((r) => setTimeout(r, 400));
+  const vizText2 = await dt.evaluate('document.body.innerText || ""');
+  for (const phrase of [
+    'Second Salon',
+    'Generic',
+    'not enough evidence to name them',
+    'These exact words must be on the picture',
+    '3 quick wins for your business',
+  ]) {
+    if (!vizText2.includes(phrase)) {
+      fail(`an opened card did not render ${JSON.stringify(phrase)}`);
+    }
+  }
+  // All three ways in. Read off the waiting card, which is the only state
+  // that offers them. The link field is a placeholder, so it is not in
   // innerText -- asserted off the DOM instead, which is also what proves the
   // field exists rather than that some sentence mentions a link.
+  await dt.evaluate(`document.getElementById('visual-filter-needs_image').click()`);
+  await new Promise((r) => setTimeout(r, 250));
+  await dt.evaluate(OPEN_FIRST_CARD);
+  await new Promise((r) => setTimeout(r, 300));
   const vizWaysIn = await dt.evaluate(`(() => {
     const drop = document.querySelector('[id^="visual-drop-"]');
     const url = document.querySelector('[id^="visual-item-"] input[type="url"]');
@@ -462,6 +556,11 @@ try {
   // src pointing at the server, or -- in this container, where that route
   // cannot answer without a Sheet -- the named note saying so. What must
   // never happen is a tick offered beside nothing, or base64 printed as text.
+  // Back to the checked card for the thumbnail.
+  await dt.evaluate(`document.getElementById('visual-filter-needs_check').click()`);
+  await new Promise((r) => setTimeout(r, 250));
+  await dt.evaluate(OPEN_FIRST_CARD);
+  await new Promise((r) => setTimeout(r, 400));
   const vizShot = await dt.evaluate(`(() => {
     const img = document.querySelector('[id^="visual-item-"] img');
     const note = document.querySelector('[id^="visual-noimage-"]');

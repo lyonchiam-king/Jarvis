@@ -3441,6 +3441,7 @@ def test_the_infographic_panel_renders_a_card_per_prompt():
     out = _run_in_node(_VIZ_DOM + f"""
     globalThis.fetch = async () => ({{json: async () => ({_viz_queue_response()})}});
     await loadVisual();
+    vizToggle('LEAD-1');
     console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
     """)
     html = __import__("json").loads(out)["html"]
@@ -3455,6 +3456,7 @@ def test_a_card_waiting_for_a_picture_offers_all_three_ways_in():
     out = _run_in_node(_VIZ_DOM + f"""
     globalThis.fetch = async () => ({{json: async () => ({_viz_queue_response()})}});
     await loadVisual();
+    vizToggle('LEAD-1');
     console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
     """)
     html = __import__("json").loads(out)["html"]
@@ -3471,6 +3473,8 @@ def test_a_picture_that_nobody_checked_asks_for_the_words_to_be_read():
     out = _run_in_node(_VIZ_DOM + f"""
     globalThis.fetch = async () => ({{json: async () => ({__import__('json').dumps(q)})}});
     await loadVisual();
+    vizSetFilter('needs_check');
+    vizToggle('LEAD-1');
     console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
     """)
     html = __import__("json").loads(out)["html"]
@@ -3486,6 +3490,8 @@ def test_a_checked_picture_says_so_instead_of_asking_again():
     out = _run_in_node(_VIZ_DOM + f"""
     globalThis.fetch = async () => ({{json: async () => ({__import__('json').dumps(q)})}});
     await loadVisual();
+    vizSetFilter('ready');
+    vizToggle('LEAD-1');
     console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
     """)
     html = __import__("json").loads(out)["html"]
@@ -3501,6 +3507,7 @@ def test_a_generic_graphic_says_so_on_its_own_card():
     out = _run_in_node(_VIZ_DOM + f"""
     globalThis.fetch = async () => ({{json: async () => ({__import__('json').dumps(q)})}});
     await loadVisual();
+    vizToggle('LEAD-1');
     console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
     """)
     html = __import__("json").loads(out)["html"]
@@ -3531,11 +3538,16 @@ def test_a_lead_is_addressed_by_its_id_and_never_by_its_index():
     out = _run_in_node(_VIZ_DOM + f"""
     globalThis.fetch = async () => ({{json: async () => ({__import__('json').dumps(q)})}});
     await loadVisual();
+    vizToggle('LEAD-1');
     console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
     """)
     html = __import__("json").loads(out)["html"]
+    import re as _re
+
     assert "'LEAD-2'" in html
-    assert "(0)" not in html and "(1)" not in html
+    handlers = _re.findall(r"on\w+=\"(\w+)\(([^)]*)\)", html)
+    numeric = [h for h in handlers if _re.fullmatch(r"\d+", h[1].strip())]
+    assert not numeric, f"a handler is addressed by index: {numeric}"
 
 
 def test_the_timer_stands_aside_while_a_link_is_being_typed():
@@ -3722,3 +3734,212 @@ def test_pressing_the_repair_reloads_the_panel_that_was_broken():
     assert data["posted"] == 1
     assert data["reloaded"] == 1
     assert "Added: Visual Briefs" in data["note"]
+
+
+# ------------------------------------------- a list short enough to work from
+#
+# Reported after the first real run: sixty cards, every one expanded, with no
+# way to narrow them or get one off the screen.
+
+
+def _many(n, state="needs_image"):
+    import json as _json
+
+    base = _json.loads(_viz_queue_response())
+    row = base["queue"][0]
+    base["queue"] = [
+        {**row, "lead_id": f"LEAD-{i}", "name": f"Business {i}", "state": state}
+        for i in range(n)
+    ]
+    base["counts"] = {"needs_image": n, "needs_check": 0, "ready": 0, "skipped": 0}
+    return _json.dumps(base)
+
+
+def test_every_card_starts_collapsed():
+    """Sixty expanded cards is not a list anybody reads. The header carries
+    what is needed to decide whether to open one."""
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({_many(12)})}});
+    await loadVisual();
+    const html = _el('#visual').innerHTML;
+    console.log(JSON.stringify({{
+      rows: (html.match(/viz-head/g) || []).length,
+      // The body's own controls must not be in the page at all until opened.
+      bodies: (html.match(/Copy prompt/g) || []).length,
+      named: html.includes('Business 7'),
+    }}));
+    """)
+    data = __import__("json").loads(out)
+    assert data["rows"] == 12, "every prompt should still have a row"
+    assert data["bodies"] == 0, "cards are expanded before anyone asked"
+    assert data["named"] is True, "a collapsed row must still say who it is"
+
+
+def test_opening_one_card_does_not_open_the_rest():
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({_many(5)})}});
+    await loadVisual();
+    vizToggle('LEAD-3');
+    const html = _el('#visual').innerHTML;
+    console.log(JSON.stringify({{bodies: (html.match(/Copy prompt/g) || []).length}}));
+    """)
+    assert __import__("json").loads(out)["bodies"] == 1
+
+
+def test_the_list_opens_on_the_only_state_that_needs_him():
+    """Three of the four states need nothing from him. Showing all of them
+    by default is the same wall of cards in a different order."""
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({_many(3)})}});
+    await loadVisual();
+    console.log(JSON.stringify({{filter: vizFilter, html: _el('#visual').innerHTML}}));
+    """)
+    data = __import__("json").loads(out)
+    assert data["filter"] == "needs_image"
+    assert "Need a picture (3)" in data["html"]
+    assert "Ready to send (0)" in data["html"]
+
+
+def test_removed_ones_are_not_in_the_list_at_all():
+    """"Remove" has to mean gone from the list, or the button has not done
+    what it says. Reversible, so nothing is actually destroyed."""
+    import json as _json
+
+    q = _json.loads(_many(2))
+    q["queue"][0]["state"] = "skipped"
+    q["counts"] = {"needs_image": 1, "needs_check": 0, "ready": 0, "skipped": 1}
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({_json.dumps(q)})}});
+    await loadVisual();
+    const all = (() => {{ vizSetFilter('all'); return _el('#visual').innerHTML; }})();
+    const removed = (() => {{ vizSetFilter('skipped'); return _el('#visual').innerHTML; }})();
+    console.log(JSON.stringify({{
+      inAll: all.includes('Business 0'),
+      inRemoved: removed.includes('Business 0'),
+    }}));
+    """)
+    data = __import__("json").loads(out)
+    assert data["inAll"] is False, "a removed one is still cluttering the list"
+    assert data["inRemoved"] is True, "a removed one cannot be found again"
+
+
+def test_an_open_card_offers_remove():
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({_many(2)})}});
+    await loadVisual();
+    vizToggle('LEAD-0');
+    console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
+    """)
+    html = __import__("json").loads(out)["html"]
+    assert ">Remove<" in html
+    assert "skipViz('LEAD-0', 'Skip')" in html
+
+
+# ------------------------------------------------------- picking who to run
+
+
+def _candidates():
+    import json as _json
+
+    return _json.dumps({
+        "enabled": True,
+        "total": 63,
+        "groups": [
+            {"key": "whatsapp", "label": "On WhatsApp", "count": 41,
+             "contactable": True, "capped": True,
+             "leads": [{"lead_id": "W1", "name": "Salon One", "category": "Nail salon"},
+                       {"lead_id": "W2", "name": "Salon Two", "category": "Hair salon"}]},
+            {"key": "email", "label": "Email only", "count": 7,
+             "contactable": True, "capped": False,
+             "leads": [{"lead_id": "E1", "name": "Clinic One", "category": "Clinic"}]},
+            {"key": "unchecked", "label": "Not checked yet", "count": 15,
+             "contactable": False, "capped": False, "leads": []},
+            {"key": "none", "label": "No way to contact them", "count": 0,
+             "contactable": False, "capped": False, "leads": []},
+        ],
+    })
+
+
+def test_the_picker_splits_them_by_whether_they_have_whatsapp():
+    """The split Lyon asked to work from: it is what decides how a lead gets
+    contacted, and so which batch is worth an evening in the image tool."""
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({_candidates()})}});
+    await loadVisualCandidates();
+    console.log(JSON.stringify({{html: _el('#visual-groups').innerHTML}}));
+    """)
+    html = __import__("json").loads(out)["html"]
+    assert "On WhatsApp" in html and "41" in html
+    assert "Email only" in html and "7" in html
+    assert "Not checked yet" in html and "15" in html
+    # A group with nobody in it is not a choice.
+    assert "No way to contact them" not in html
+
+
+def test_a_group_nothing_can_be_written_for_offers_no_button():
+    """The brief holds an unchecked lead at the same gate the site brief
+    does, so a button there would promise work that cannot happen."""
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({_candidates()})}});
+    await loadVisualCandidates();
+    console.log(JSON.stringify({{html: _el('#visual-groups').innerHTML}}));
+    """)
+    html = __import__("json").loads(out)["html"]
+    assert "runVisualFor('whatsapp'" in html
+    assert "runVisualFor('email'" in html
+    assert "runVisualFor('unchecked'" not in html
+    assert "nothing can be written for these yet" in html
+
+
+def test_running_for_a_group_sends_that_group_and_the_number_asked_for():
+    out = _run_in_node(_VIZ_DOM + f"""
+    let sent = null;
+    globalThis.fetch = async (url, opts) => {{
+      if (url === '/api/visual/run') sent = JSON.parse(opts.body);
+      return {{json: async () => ({_candidates()})}};
+    }};
+    await loadVisualCandidates();
+    _el('#viz-limit').value = '10';
+    await runVisualFor('whatsapp', null);
+    console.log(JSON.stringify({{sent}}));
+    """)
+    sent = __import__("json").loads(out)["sent"]
+    assert sent["groups"] == ["whatsapp"]
+    assert sent["limit"] == "10"
+    assert sent["lead_ids"] == []
+
+
+def test_ticking_individual_businesses_sends_exactly_those():
+    """"Which ones we are able to use" -- a group is the fast path, a tick is
+    the precise one."""
+    out = _run_in_node(_VIZ_DOM + f"""
+    let sent = null;
+    globalThis.fetch = async (url, opts) => {{
+      if (url === '/api/visual/run') sent = JSON.parse(opts.body);
+      return {{json: async () => ({_candidates()})}};
+    }};
+    await loadVisualCandidates();
+    vizPick('W1', true);
+    vizPick('E1', true);
+    vizPick('W2', true);
+    vizPick('W2', false);
+    await runVisualFor('', null);
+    console.log(JSON.stringify({{sent, note: _el('#viz-picked-note').textContent}}));
+    """)
+    data = __import__("json").loads(out)
+    assert sorted(data["sent"]["lead_ids"]) == ["E1", "W1"]
+    assert data["sent"]["groups"] == []
+
+
+def test_the_tick_count_is_shown_so_nobody_runs_a_batch_they_did_not_mean():
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({_candidates()})}});
+    await loadVisualCandidates();
+    const before = _el('#viz-picked-note').textContent;
+    vizPick('W1', true);
+    vizPick('E1', true);
+    console.log(JSON.stringify({{before, after: _el('#viz-picked-note').textContent}}));
+    """)
+    data = __import__("json").loads(out)
+    assert data["before"] == "Nothing ticked yet"
+    assert data["after"] == "2 ticked"

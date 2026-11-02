@@ -41,9 +41,50 @@ from ..providers.llm import (
 from ..selection import ORDERS, select_pending
 from ..sheets import SheetsClient
 from ..stage import Stage
-from .reachability import is_contactable, is_waiting_on_a_check
+from .reachability import (
+    has_email,
+    is_contactable,
+    is_waiting_on_a_check,
+    stored_verdict,
+)
 
 log = logging.getLogger("outreach")
+
+
+# Which group a lead belongs to, by the channel a message would actually use.
+#
+# This is the split Lyon asked to work from -- "which one have WhatsApp and
+# which one doesn't" -- because it is the one that decides how a lead gets
+# contacted, and therefore which batch is worth spending an evening in the
+# image tool on. The names are the user's words, not the column's.
+GROUPS: tuple[str, ...] = ("whatsapp", "email", "unchecked", "none")
+
+GROUP_LABELS: dict[str, str] = {
+    "whatsapp": "On WhatsApp",
+    "email": "Email only",
+    "unchecked": "Not checked yet",
+    "none": "No way to contact them",
+}
+
+
+def group_of(lead: dict[str, str], research_row: dict[str, str] | None) -> str:
+    """Which group this lead is in, named by the channel that would be used.
+
+    WhatsApp wins where the check said yes, even when there is also an email:
+    that is the channel the message goes out on, so grouping it as "email
+    only" would put it in a batch Lyon picked for a different reason.
+
+    A lead nobody has checked and that has no email is **unchecked**, not
+    unreachable -- missing evidence is not evidence of absence, and the whole
+    point of the reachability check is that it answers later.
+    """
+    if stored_verdict(lead, research_row) == "yes":
+        return "whatsapp"
+    if has_email(research_row or {}):
+        return "email"
+    if stored_verdict(lead, research_row) == "no":
+        return "none"
+    return "unchecked"
 
 
 @dataclass
@@ -54,6 +95,10 @@ class VisualBriefReport:
     unreachable: int = 0
     waiting_on_check: int = 0
     selected: int = 0
+    # Dropped by a group or an explicit pick rather than by the contact gate.
+    # Reported separately because "skipped" and "not what you asked for" are
+    # different facts, and a run that says neither looks under-delivered.
+    filtered_out: int = 0
     prompts_written: int = 0
     # Graphics that will carry the business's own name, and ones that will
     # not. Reported separately because the split is the honesty of the whole
@@ -79,6 +124,10 @@ class VisualBriefReport:
         if self.waiting_on_check:
             lines.append(
                 f"  waiting on a WhatsApp check {self.waiting_on_check}  (held)"
+            )
+        if self.filtered_out:
+            lines.append(
+                f"  outside what you picked {self.filtered_out}  (skipped)"
             )
         lines += [
             f"  selected this run       {self.selected}",
@@ -305,7 +354,21 @@ def run(
     *,
     limit: int | None = None,
     social_first: bool | None = None,
+    groups: tuple[str, ...] = (),
+    lead_ids: set[str] | None = None,
 ) -> VisualBriefReport:
+    """Write an image prompt per lead, optionally for one group or one pick.
+
+    ``groups`` narrows the run to leads whose contact channel is one of
+    ``GROUPS``. Empty means every group, which is what every earlier caller
+    gets. ``lead_ids`` narrows it to an explicit set -- the two combine, so a
+    pick inside a group is a pick inside a group.
+
+    Both exist because sixty prompts is not a batch anybody works through:
+    each one is a visit to the image tool and a picture to read. The point of
+    the stage was always a bounded run, and ``--limit`` alone picks *whichever*
+    sixty come first rather than the ones worth starting with.
+    """
     report = VisualBriefReport()
     errors = ErrorLog("visual-brief")
 
@@ -332,6 +395,25 @@ def run(
     report.waiting_on_check = waiting
     report.unreachable = len(leads) - len(contactable) - waiting
     leads_gated = contactable
+
+    # Narrowed before selection, not after, so --limit counts what was asked
+    # for. Filtering the selected batch instead would make "write 10 for the
+    # WhatsApp group" produce however many of the first 10 leads happened to
+    # be in it -- which looks exactly like the filter being ignored.
+    if lead_ids is not None:
+        leads_gated = {k: v for k, v in leads_gated.items() if k in lead_ids}
+    if groups:
+        wanted = set(groups)
+        leads_gated = {
+            lead_id: entry
+            for lead_id, entry in leads_gated.items()
+            if group_of(
+                entry[1],
+                (research.get(lead_id) or (0, None))[1],
+            )
+            in wanted
+        }
+    report.filtered_out = len(contactable) - len(leads_gated)
 
     batch_size = min(limit or config.batch_size, config.batch_size)
     prioritise = (

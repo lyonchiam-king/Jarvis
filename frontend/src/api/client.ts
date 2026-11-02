@@ -35,6 +35,7 @@ import {
   VisualItem,
   VisualQueue,
   VisualState,
+  VisualCandidates,
 } from '../types';
 
 /** Everything the Python side may answer with, before translation. */
@@ -395,6 +396,38 @@ class ApiClient {
         })
       ),
     }));
+  }
+
+  /**
+   * Who a run would write for, split by how they can be contacted.
+   *
+   * Sixty prompts is not a batch anybody works through -- each one is a
+   * visit to the image tool and a picture to read -- and a limit alone picks
+   * whichever leads come first rather than the ones worth starting with.
+   */
+  async getVisualCandidates(): Promise<ApiResponse<VisualCandidates>> {
+    const res = await this.request<Raw>('/api/visual/candidates');
+    return this.map(res, (d) => ({
+      enabled: !!d.enabled,
+      total: ApiClient.num(d.total),
+      groups: (d.groups || []).map((g: Raw) => ({
+        key: g.key,
+        label: g.label || g.key,
+        count: ApiClient.num(g.count),
+        contactable: !!g.contactable,
+        capped: !!g.capped,
+        leads: g.leads || [],
+      })),
+    }));
+  }
+
+  /** Write prompts for one group, or for an explicit pick. */
+  async runVisual(
+    groups: string[],
+    lead_ids: string[],
+    limit: number | null
+  ): Promise<ApiResponse<{ ok: boolean; running: string }>> {
+    return this.post('/api/visual/run', { groups, lead_ids, limit });
   }
 
   /** Hand the picture back: the bytes as a data URL, or an address. */
