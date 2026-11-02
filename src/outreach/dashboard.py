@@ -1995,6 +1995,41 @@ def create_app(config: Config) -> Flask:
         entry = _visual_rows(c, sheets).get(lead_id)
         return entry[1] if entry else None
 
+    def _pages_offered(c, sheets=None):
+        """Each lead's Preview URL, or {} where no message could mention one.
+
+        Only read on the `visual` track, and only to answer whether a message
+        already on the Sheet was written for the *other* pitch. Changing the
+        track changes what is drafted next; it cannot reach back into
+        messages already written, and those are what step 4 actually sends --
+        so a campaign switched to graphics still had a queue full of
+        "Website: https://..." with a picture attached. The setting looked
+        like it had done nothing.
+        """
+        if c.outreach.track != "visual":
+            return {}
+        try:
+            rows = (sheets or _sheets_client(c)).read_rows(schema.SITE_BRIEFS)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not read the Site Briefs tab: %s", exc)
+            return {}
+        return {
+            lead_id: url
+            for lead_id, (_n, row) in rows.items()
+            if (url := (row.get("Preview URL") or "").strip())
+        }
+
+    def _written_for_a_page(message: str, preview_url: str) -> bool:
+        """Whether this queued message is the website pitch, still.
+
+        Matched on the lead's own Preview URL rather than on the presence of
+        any link: a compliance footer or a services block may legitimately
+        carry one, and flagging those would train the reader to ignore the
+        flag. The site this pipeline built for them is the one thing that
+        cannot be in a message that offers only a picture.
+        """
+        return bool(preview_url) and preview_url in (message or "")
+
     def _visual_confirmed(entry) -> bool:
         """Whether this ``(row_number, row)`` entry has a usable graphic."""
         from . import visual as visual_lib
@@ -2933,20 +2968,44 @@ def create_app(config: Config) -> Flask:
                          "what the graphic says, so it needs a confirmed one."
             }), 200
 
+        # What the row says now, so a failed rewrite can be undone. Clearing
+        # the status is what returns a lead to the send queue, and the
+        # message is not rewritten until after that -- so a rewrite that
+        # fails would leave the *old* message queued with the new picture
+        # attached. That is not "visible and fixable", which is what this
+        # comment used to claim: it is a website pitch a business has
+        # already received, sitting at the top of the queue with a graphic
+        # on it, one press from going out a second time. Put it back.
+        try:
+            logged = sheets.read_rows(schema.OUTREACH_LOG)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": _explain_sheets(exc, c)}), 200
+        before = {
+            column: (logged.get(lead_id, (0, {}))[1].get(column) or "")
+            for column in ("WhatsApp Status", "WhatsApp Sent At")
+        }
+
+        def restore() -> None:
+            """Undo the clear. Never allowed to mask the real failure."""
+            for column, value in before.items():
+                try:
+                    sheets.update_column(
+                        schema.OUTREACH_LOG, column, {lead_id: value}
+                    )
+                except Exception:  # noqa: BLE001
+                    log.exception("could not restore %s for %s", column, lead_id)
+
         try:
             from .providers.llm import make_writer
             from .stages import outreach_draft as draft
 
-            # Cleared first. If the rewrite then fails, the lead is back in
-            # the queue with its old message -- visible and fixable. The
-            # other order would leave a new message filed as already sent,
-            # which is the state nothing on the page can explain.
-            for column in ("WhatsApp Status", "WhatsApp Sent At"):
+            for column in before:
                 sheets.update_column(schema.OUTREACH_LOG, column, {lead_id: ""})
             out = draft.regenerate_one(
                 c, sheets, make_writer(c, model=c.outreach.model or None), lead_id
             )
         except Exception as exc:  # noqa: BLE001
+            restore()
             return jsonify({"error": _explain_sheets(exc, c)}), 200
 
         return jsonify({"ok": True, "lead_id": lead_id, **out})
@@ -3115,6 +3174,7 @@ def create_app(config: Config) -> Flask:
         # Read once for the whole queue rather than per lead. Skipped
         # entirely on the original track.
         visuals = _visual_rows(c, sheets)
+        pages = _pages_offered(c, sheets)
 
         queue: list[dict[str, str]] = []
         # Every message the pipeline drafted has to end up in one of these two
@@ -3228,6 +3288,14 @@ def create_app(config: Config) -> Flask:
                         "visual"
                         if _visual_confirmed(visuals.get(lead_id))
                         else "site"
+                    ),
+                    # Written before this campaign moved to graphics, and
+                    # still offering the page. Flagged rather than hidden:
+                    # the message is true, it is just the wrong pitch, and
+                    # dropping it from the queue would look like the lead
+                    # had vanished.
+                    "stale_pitch": _written_for_a_page(
+                        row.get("WhatsApp Message", ""), pages.get(lead_id, "")
                     ),
                     # The relay-free way to send this. Built here because
                     # this is where the number has just been normalised with
@@ -4764,10 +4832,21 @@ async function loadWhatsAppInline() {
         : '<div class="sub" style="margin:6px 0">No picture &mdash; the text '
           + 'will send on its own.</div>';
 
+      // Written for the page pitch and never rewritten. The campaign now
+      // sends a picture and nothing else, so the link in this text offers
+      // something this message is not about -- and to a business that has
+      // very likely already read it once.
+      const stale = m.stale_pitch
+        ? `<div class="long-err" style="margin:6px 0">This message was written
+             for the website pitch and still links to the demo site. The
+             campaign sends the picture on its own now. Press
+             <b>Rewrite</b> before sending it.</div>`
+        : '';
       return `<div class="wa-msg-card" id="wa-msg-${k}">
         <div class="wa-name">${esc(m.name)}</div>
         <div class="wa-phone">${esc(m.phone)}</div>
         ${shot}
+        ${stale}
         <textarea class="wa-edit" id="wa-text-${k}" rows="4"
           oninput="noteEdit('${esc(m.lead_id)}', this.value)">${msgText}</textarea>
         <div class="wa-row">${actions}</div>

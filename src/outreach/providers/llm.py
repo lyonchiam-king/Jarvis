@@ -2284,7 +2284,11 @@ class OpenAICompatibleWriter(_Writer):
             raise LLMError(f"Could not reach {url}: {type(exc).__name__}: {exc}") from exc
 
         if response.status_code != 200:
-            raise LLMError(_explain_http(response.status_code, response.text, url))
+            raise LLMError(
+                _explain_http(
+                    response.status_code, response.text, url, self.model
+                )
+            )
 
         try:
             payload = response.json()
@@ -2467,23 +2471,83 @@ def _validated(text: str, schema: dict[str, Any]) -> dict:
     return payload
 
 
-def _explain_http(status: int, body: str, url: str) -> str:
-    snippet = (body or "")[:300]
+# A model that has been withdrawn says so in prose, and the status code it
+# arrives under is not reliable -- Ollama answered 410, others answer 400 or
+# 404 for the same fact. Matched on the provider's own sentence as well as on
+# 410, because the difference between "retry later" and "this will never work
+# again" is the whole of what the reader needs.
+_RETIRED_MARKERS = (
+    "was retired",
+    "is retired",
+    "has been retired",
+    "no longer available",
+    "no longer supported",
+    "decommissioned",
+    "has been removed",
+)
+
+
+def _provider_message(body: str) -> str:
+    """The provider's own sentence, lifted out of whatever JSON wrapped it.
+
+    An OpenAI-compatible error nests the one useful sentence under
+    ``error.message`` and packs it in with ``type``, ``param``, ``code`` and a
+    reference id -- a hundred characters of punctuation around the twenty that
+    say what to do, printed raw on the dashboard where it reads as a crash.
+    Same lesson as Google's ``SERVICE_DISABLED`` body, which repeated one
+    sentence four times and buried the only link in the middle.
+    """
+    text = (body or "").strip()
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        return text[:300]
+    candidates = [payload]
+    if isinstance(payload, dict):
+        candidates.insert(0, payload.get("error"))
+    for value in candidates:
+        if isinstance(value, str) and value.strip():
+            return value.strip()[:300]
+        if isinstance(value, dict):
+            message = value.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()[:300]
+    return text[:300]
+
+
+def _explain_http(status: int, body: str, url: str, model: str = "") -> str:
+    detail = _provider_message(body)
+    lowered = detail.casefold()
+    retired = status == 410 or any(mark in lowered for mark in _RETIRED_MARKERS)
+    if retired:
+        named = f"{model} " if model else "The model this campaign names "
+        # The provider's sentence is relayed, never rewritten, and the
+        # replacement it suggests is never copied into config by this code:
+        # a model name has a shelf life and nothing in here can check one.
+        # Asking the API is the rule; this is the API answering.
+        return (
+            f"{named}has been withdrawn by the provider, so nothing here can "
+            "use it again. The provider says:\n\n"
+            f"{detail}\n\n"
+            "Open Settings, press Change beside the model, enter one that is "
+            "still offered, and press Test it. Running this again without "
+            "changing it will fail in exactly the same way."
+        )
     if status in (401, 403):
         return (
             f"{url} rejected the API key (HTTP {status}). Check the key in .env "
             "matches the provider in your campaign file -- OLLAMA_API_KEY for "
             "ollama-cloud, OPENROUTER_API_KEY for openrouter, GEMINI_API_KEY "
-            "for gemini.\n" + snippet
+            "for gemini.\n" + detail
         )
     if status == 404:
         return (
             f"{url} returned 404. Usually the model name is wrong or not pulled "
-            f"yet. For local Ollama try `ollama pull <model>` first.\n{snippet}"
+            f"yet. For local Ollama try `ollama pull <model>` first.\n{detail}"
         )
     if status == 429:
-        return f"Rate limited by {url} (HTTP 429).\n{snippet}"
-    return f"{url} returned HTTP {status}.\n{snippet}"
+        return f"Rate limited by {url} (HTTP 429).\n{detail}"
+    return f"{url} returned HTTP {status}.\n{detail}"
 
 
 def make_writer(config: Any, *, model: str | None = None) -> _Writer:

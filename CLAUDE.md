@@ -64,7 +64,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1619 tests, pytest, no CI -- the suite is the only gate
+tests/             1635 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -1429,6 +1429,46 @@ the owner, so `picture_points` lifts them out of the stored prompt and
 first. Out of the prompt rather than recomputed from the Sheet, for the same
 reason `_expected_text` is: the prompt is what was actually pasted into the
 image tool, so it is the only source that matches the picture.
+
+**Clearing a gate before doing the work leaves the worst state on failure.**
+`/api/visual/redraft` cleared the send status and *then* rewrote the message,
+with a comment claiming a failed rewrite left the lead "visible and fixable".
+What it actually left was a website pitch the business had already read,
+sitting at the top of the send queue with a new graphic attached, one press
+from going out again -- and it happened on the first real press, because the
+model the campaign named had been withdrawn. The row's previous values are
+read first and restored on any exception. The order stays as it was, because
+the LLM call precedes every write in `regenerate_one`: a failure there means
+no message changed, so putting the status back is exact rather than
+approximate.
+
+**A withdrawn model is permanent, and arrives dressed as a bad minute.**
+Ollama answered HTTP 410 with the sentence "deepseek-v4-flash:0731 was
+retired on September 25, 2026" nested inside an `error` object with `type`,
+`param`, `code` and a reference id -- printed raw on the dashboard, where it
+reads as a crash. `_explain_http` matches 410 *and* the provider's own
+wording, since providers disagree on the status code for the same fact, and
+says plainly that running it again will fail identically. `_provider_message`
+lifts the one useful sentence out of the JSON, the same job
+`api_disabled_message` does for Google. The replacement the provider suggests
+is **relayed, never written into this code**: a model name has a shelf life
+and nothing in this container can check one, which is the oldest rule here. A
+test greps the module to hold that line, and a control keeps an ordinary 429
+from being relabelled.
+
+**A setting cannot reach backwards into work already done.** Switching the
+track to graphics changes what the next draft says; the Outreach Log is full
+of messages written under the old pitch, and those are what the send queue
+actually sends. So a campaign moved to the picture still queued "Website:
+https://..." under an infographic, and the setting looked inert -- the same
+shape as the `*.local.yaml` fork that inherits no key added after it was
+copied, and the Sheet that predates a tab. `stale_pitch` flags it on the
+card, rather than hiding the lead, because a message that silently vanished
+would read as the lead being lost. It is matched on *that lead's own Preview
+URL*, never on the presence of a link: a compliance footer carries one
+legitimately, and a flag that fires on everything is read by nobody. `both`
+is never flagged, since there the link is the whole point, and the `website`
+track pays no Sheet read for a flag it cannot raise.
 
 **`Runtime.evaluate`'s `exceptionDetails.text` is always "Uncaught".** Which
 is the entire error a failing render check reported -- and the throw was a

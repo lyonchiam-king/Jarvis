@@ -2565,9 +2565,10 @@ class _GuardedSheets:
 
     url = "https://sheet"
 
-    def __init__(self, outreach=None, leads=None):
+    def __init__(self, outreach=None, leads=None, briefs=None):
         self._outreach = outreach or {}
         self._leads = leads or {}
+        self._briefs = briefs or {}
         self.writes = []
 
     def read_rows(self, tab):
@@ -2575,6 +2576,8 @@ class _GuardedSheets:
             return self._outreach
         if tab is schema.LEADS:
             return self._leads
+        if tab is schema.SITE_BRIEFS:
+            return self._briefs
         return {}
 
     def update_column(self, tab, column, values, *, user_edit=False):
@@ -4093,3 +4096,142 @@ def test_the_send_queue_names_which_picture_it_is_carrying():
     html = __import__("json").loads(out)["html"]
     assert "Infographic attached" in html
     assert "Site screenshot attached" in html
+
+
+def test_the_send_queue_warns_when_a_message_is_the_old_website_pitch():
+    """Changing the track changes what is drafted next; it cannot reach back
+    into messages already on the Sheet, and those are what step 4 sends. So a
+    campaign switched to graphics still had a queue full of "Website:
+    https://..." with a picture attached, and the setting looked inert."""
+    out = _run_in_node(_VIZ_DOM + """
+    const base = {lead_id: 'a', name: 'Salon', phone: '+60123',
+                  phone_e164: '+60123', has_shot: true, shot_kind: 'visual',
+                  wa_link: 'https://wa.me/60123'};
+    globalThis.fetch = async () => ({json: async () => ({
+      queue: [{...base, message: 'Website: https://x.y', stale_pitch: true},
+              {...base, lead_id: 'b', name: 'Shop', message: 'About your picture.'}],
+      excluded: [],
+    })});
+    await loadWhatsAppInline();
+    console.log(JSON.stringify({html: _el('#wa-inline').innerHTML}));
+    """)
+    html = " ".join(__import__("json").loads(out)["html"].split())
+    assert "written for the website pitch" in html
+    # Exactly once: the flagged card, not the one beside it.
+    assert html.count("written for the website pitch") == 1
+
+
+# ---------------- a message written for the pitch the campaign no longer makes
+
+
+def _queue_row(**over):
+    """One drafted, unsent WhatsApp lead."""
+    row = {
+        "Lead ID": "a",
+        "Business Name": "NS Aesthetics",
+        "Channel": "WhatsApp",
+        "Status": "Drafted",
+        "WhatsApp Message": "We built you a site. Website: https://ns.ai.studio",
+        "Drafted At": "2026-09-01T00:00:00Z",
+    }
+    row.update(over)
+    return {"a": (2, row)}
+
+
+_QUEUE_LEADS = {
+    "a": (2, {"Lead ID": "a", "Business Name": "NS Aesthetics",
+              "Phone": "+60123456789", "WhatsApp Reachable": "yes"})
+}
+_QUEUE_BRIEFS = {"a": (2, {"Lead ID": "a", "Preview URL": "https://ns.ai.studio"})}
+
+
+def _tracked_client(monkeypatch, sheets, track):
+    monkeypatch.setattr(dash, "_sheets_client", lambda config: sheets)
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    # Pinned, not inherited: the template's own track would make this
+    # assertion mean whatever that file says next.
+    config = replace(
+        config,
+        secrets=replace(config.secrets, sheet_id="s"),
+        outreach=replace(config.outreach, track=track),
+    )
+    return create_app(config).test_client()
+
+
+def test_a_queued_message_still_selling_the_page_is_flagged(monkeypatch):
+    """Switching the track changes what is drafted next. It cannot reach back
+    into messages already on the Sheet -- and those are what step 4 sends, so
+    a campaign moved to graphics still queued "Website: https://..." with a
+    picture attached, and the setting looked like it had done nothing."""
+    sheets = _GuardedSheets(
+        outreach=_queue_row(), leads=_QUEUE_LEADS, briefs=_QUEUE_BRIEFS
+    )
+    client = _tracked_client(monkeypatch, sheets, "visual")
+
+    body = client.get("/api/whatsapp/queue").get_json()
+
+    assert [m["stale_pitch"] for m in body["queue"]] == [True]
+
+
+def test_a_message_rewritten_for_the_picture_is_not_flagged(monkeypatch):
+    """The control. A flag that fires on everything is one nobody reads."""
+    sheets = _GuardedSheets(
+        outreach=_queue_row(**{
+            "WhatsApp Message": "Noticed people finding you and not calling.",
+        }),
+        leads=_QUEUE_LEADS,
+        briefs=_QUEUE_BRIEFS,
+    )
+    client = _tracked_client(monkeypatch, sheets, "visual")
+
+    assert client.get("/api/whatsapp/queue").get_json()["queue"][0][
+        "stale_pitch"
+    ] is False
+
+
+def test_the_both_track_is_never_flagged_for_linking_the_page(monkeypatch):
+    """`both` promises the picture *and* the link. Flagging it would be
+    telling someone to undo the thing the setting does."""
+    sheets = _GuardedSheets(
+        outreach=_queue_row(), leads=_QUEUE_LEADS, briefs=_QUEUE_BRIEFS
+    )
+    client = _tracked_client(monkeypatch, sheets, "both")
+
+    assert client.get("/api/whatsapp/queue").get_json()["queue"][0][
+        "stale_pitch"
+    ] is False
+
+
+def test_the_website_track_pays_no_read_for_a_flag_it_cannot_raise(monkeypatch):
+    """A campaign pitching a page must not buy a Sheet round trip to be told
+    its message mentions the page. Same rule as the Visual Briefs read."""
+    reads = []
+
+    class _Counting(_GuardedSheets):
+        def read_rows(self, tab):
+            reads.append(tab.title)
+            return super().read_rows(tab)
+
+    sheets = _Counting(
+        outreach=_queue_row(), leads=_QUEUE_LEADS, briefs=_QUEUE_BRIEFS
+    )
+    client = _tracked_client(monkeypatch, sheets, "website")
+
+    body = client.get("/api/whatsapp/queue").get_json()
+
+    assert schema.SITE_BRIEFS.title not in reads
+    assert body["queue"][0]["stale_pitch"] is False
+
+
+def test_a_lead_with_no_page_built_is_never_flagged(monkeypatch):
+    """Nothing to have been written about. Matching on a blank Preview URL
+    would flag every message on the track."""
+    sheets = _GuardedSheets(
+        outreach=_queue_row(), leads=_QUEUE_LEADS,
+        briefs={"a": (2, {"Lead ID": "a", "Preview URL": ""})},
+    )
+    client = _tracked_client(monkeypatch, sheets, "visual")
+
+    assert client.get("/api/whatsapp/queue").get_json()["queue"][0][
+        "stale_pitch"
+    ] is False

@@ -103,6 +103,13 @@ export interface SendItem {
    * describes the thing being sent as something else.
    */
   shot_kind?: 'visual' | 'site';
+  /**
+   * This message was written for the website pitch and still links to the
+   * demo site, on a campaign that now sends a picture on its own. Changing
+   * the track changes what is drafted next; it cannot reach back into
+   * messages already on the Sheet, and those are what this queue sends.
+   */
+  stale_pitch?: boolean;
   category: string;
   recipient_phone: string;
   e164_phone: string;

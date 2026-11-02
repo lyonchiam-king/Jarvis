@@ -247,10 +247,10 @@ def offers_a_page(config, preview_url: str) -> bool:
     Raising it reads as a second attempt at the same sale, and Lyon asked
     outright for it to stop.
     """
-    return (
-        getattr(config.outreach, "track", "website") != "visual"
-        and bool(preview_url.strip())
-    )
+    # Read directly, never through getattr with a default: a defensive
+    # getattr on config is how `outreach.whatsapp` silently returned None on
+    # a campaign that had WhatsApp switched on. A wrong name must raise.
+    return config.outreach.track != "visual" and bool(preview_url.strip())
 
 
 def needs_an_image(config) -> bool:

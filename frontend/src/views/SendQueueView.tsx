@@ -305,6 +305,20 @@ export const SendQueueView: React.FC<SendQueueViewProps> = ({
                     : 'Site screenshot attached'}
                 </p>
 
+                {/* Written for the page pitch and never rewritten. The link
+                    in this text offers something the message is not about,
+                    to a business that has very likely already read it. */}
+                {item.stale_pitch && (
+                  <p
+                    id={`send-stale-pitch-${item.lead_id}`}
+                    className="text-[11px] text-amber-700 dark:text-amber-300 p-2 rounded-lg border border-amber-500/40 bg-amber-500/10 whitespace-pre-wrap"
+                  >
+                    This message was written for the website pitch and still
+                    links to the demo site. The campaign sends the picture on
+                    its own now &mdash; rewrite it before sending.
+                  </p>
+                )}
+
                 <div className="text-[11px] font-mono text-slate-500">
                   Recipient Dial: <strong className="text-teal-600 dark:text-teal-400">{item.e164_phone}</strong>
                 </div>

@@ -1023,6 +1023,40 @@ Worth knowing: that error names whatever model provider your campaign uses, so
 if it keeps timing out, research and the message drafts will be slow too — it
 is not something about the infographics.
 
+### "...was retired on..." when a message is written
+
+The model your campaign names has been withdrawn by whoever hosts it. It is
+not a bad minute and it will not clear by waiting — that model is gone.
+
+The error now says so, and passes on the provider's own sentence, which
+usually names a replacement. Open **Settings**, press **Change** beside the
+model, type the one it suggested, and press **Test it**.
+
+Nothing in Jarvis guesses a model name for you: a name that is right today
+404s in a month, and this tool cannot check one. The provider is the only
+thing that knows, so what you see is what it said.
+
+Pressing **Write a new message for this picture** again before changing the
+model will fail in exactly the same way.
+
+### A message still has the website link in it
+
+The message in step 4 is the one written when that lead was drafted. Changing
+the campaign to **Infographic** changes what gets written *next* — it cannot
+reach back and rewrite messages already on the Sheet, and those are the ones
+step 4 sends.
+
+So a card can show an infographic with a message underneath that offers a
+demo site. Step 4 now flags exactly those: *"This message was written for the
+website pitch and still links to the demo site."* Press **Rewrite** on that
+card and the new message is about the picture, with no link.
+
+Two things it does not flag, on purpose:
+
+- a message with no link to the site built for that business — a compliance
+  footer with an address in it is not the website pitch; and
+- anything at all on the **Both** track, where the link is the point.
+
 ### "Your Sheet has no Visual Briefs tab yet"
 
 Press **Add the missing tabs**, right under that message. That is the whole

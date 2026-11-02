@@ -553,6 +553,9 @@ class ApiClient {
           // Which picture rides with it. The queue has always said; nothing
           // read it, so an infographic was labelled a site screenshot.
           shot_kind: s.shot_kind === 'visual' ? 'visual' : 'site',
+          // Flagged by the server, never guessed from the text here:
+          // only Python knows which page was built for this lead.
+          stale_pitch: s.stale_pitch === true,
           // Only offered when a picture actually exists on disk: the queue
           // says so per lead, and a broken image is worse than none.
           screenshot_url: s.has_shot ? `/api/screenshot/${encodeURIComponent(s.lead_id)}` : '',

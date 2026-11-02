@@ -981,3 +981,118 @@ def test_the_model_is_still_forbidden_from_naming_the_services():
     assert "Never list, name or number the sender's other services" in (
         OUTREACH_COPY_SYSTEM
     )
+
+
+# --- A withdrawn model ------------------------------------------------------
+#
+# Reported from a real run: pressing the redraft button answered with 160
+# characters of nested JSON, inside which one sentence said the model had been
+# retired three weeks earlier. Read on the dashboard it looked like a crash.
+
+
+RETIRED_BODY = _json.dumps(
+    {
+        "error": {
+            "message": (
+                "deepseek-v4-flash:0731 was retired on September 25, 2026. "
+                "Try glm-5.3-flash:cloud. (ref: 3eeb3daf-2147-47d9-9d16)"
+            ),
+            "type": "api_error",
+            "param": None,
+            "code": None,
+        }
+    }
+)
+
+
+def test_a_withdrawn_model_is_named_as_permanent_not_as_a_bad_minute():
+    """410 is not a rate limit. Saying only "returned HTTP 410" sends someone
+    retrying a model that will never answer again."""
+    from outreach.providers.llm import _explain_http
+
+    message = _explain_http(
+        410, RETIRED_BODY, "https://ollama.com/v1/chat/completions",
+        "deepseek-v4-flash:0731",
+    )
+
+    assert "deepseek-v4-flash:0731" in message
+    assert "withdrawn" in message
+    assert "fail in exactly the same way" in message
+
+
+def test_the_withdrawn_message_relays_the_providers_own_replacement():
+    """The provider is the only thing in this session that can name a model
+    that works -- egress is blocked and a name written here has a shelf life.
+    So its sentence is passed through, not summarised."""
+    from outreach.providers.llm import _explain_http
+
+    message = _explain_http(410, RETIRED_BODY, "https://x/y", "old-model")
+
+    assert "Try glm-5.3-flash:cloud." in message
+
+
+def test_no_replacement_model_name_is_written_into_the_code():
+    """Relayed from the API, never hardcoded. A name that is correct today
+    404s in a month, and nothing here can check one."""
+    from pathlib import Path
+
+    import outreach.providers.llm as llm_module
+
+    source = Path(llm_module.__file__).read_text(encoding="utf-8")
+
+    assert "glm-5.3-flash" not in source
+    assert "deepseek-v4-flash" not in source
+
+
+def test_the_fix_names_a_button_rather_than_a_terminal():
+    """The owner of this tool does not use a CLI. An instruction he cannot
+    follow is not an instruction."""
+    from outreach.providers.llm import _explain_http
+
+    message = _explain_http(410, RETIRED_BODY, "https://x/y", "old-model")
+
+    assert "Settings" in message and "Change" in message
+    assert "Test it" in message
+
+
+def test_a_withdrawn_model_is_recognised_without_the_410():
+    """Providers disagree on the status code for the same fact -- 400 and 404
+    are both used. The sentence is the reliable part."""
+    from outreach.providers.llm import _explain_http
+
+    body = _json.dumps({"error": {"message": "model x is no longer available"}})
+
+    assert "withdrawn" in _explain_http(400, body, "https://x/y", "x")
+
+
+def test_an_ordinary_failure_is_not_relabelled_as_withdrawn():
+    """The control. Telling someone to replace a model that is perfectly fine
+    costs an evening and fixes nothing."""
+    from outreach.providers.llm import _explain_http
+
+    busy = _json.dumps({"error": {"message": "Rate limit exceeded, retry soon"}})
+    message = _explain_http(429, busy, "https://x/y", "good-model")
+
+    assert "withdrawn" not in message
+    assert "Rate limited" in message
+
+
+def test_the_providers_sentence_is_lifted_out_of_its_json():
+    """1,300 characters of nested JSON on the dashboard is the Google
+    SERVICE_DISABLED failure again."""
+    from outreach.providers.llm import _explain_http
+
+    message = _explain_http(500, RETIRED_BODY, "https://x/y", "m")
+
+    assert '"type"' not in message
+    assert '"param"' not in message
+
+
+def test_a_body_that_is_not_json_still_reaches_the_reader():
+    """Some gateways answer with HTML or plain text. Dropping it would leave
+    a status code and nothing else."""
+    from outreach.providers.llm import _explain_http
+
+    message = _explain_http(502, "upstream connect error", "https://x/y", "m")
+
+    assert "upstream connect error" in message

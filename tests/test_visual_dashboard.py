@@ -1026,6 +1026,84 @@ def test_redrafting_clears_the_send_status_and_rewrites_the_message(
     assert ("WhatsApp Sent At", ("a",)) in cleared
 
 
+def _confirmed_and_sent(app):
+    """A lead holding a checked picture that was messaged months ago."""
+    visual.visuals_dir().mkdir(parents=True, exist_ok=True)
+    (visual.visuals_dir() / "a.png").write_bytes(b"png")
+    client, sheets = app(visuals=brief(
+        "a", **{"Image File": "visuals/a.png", "Text Confirmed": "yes"}
+    ))
+    sheets._tabs[schema.OUTREACH_LOG.title] = {
+        "a": (2, {
+            "Lead ID": "a",
+            "WhatsApp Status": "sent",
+            "WhatsApp Sent At": "2026-08-28T17:48:30Z",
+            "WhatsApp Message": "We built you a site. Website: https://x.y",
+        })
+    }
+    return client, sheets
+
+
+def test_a_failed_rewrite_leaves_no_stale_message_in_the_send_queue(
+    app, monkeypatch
+):
+    """Clearing the status is what puts a lead back in the queue, and the
+    message is not rewritten until afterwards -- so a rewrite that throws
+    used to leave the *old* website pitch queued with the new graphic
+    attached, one press from going to a business that had already read it.
+
+    Reported from a real run, where the rewrite failed because the model the
+    campaign named had been withdrawn.
+    """
+    from outreach.stages import outreach_draft as draft
+
+    client, sheets = _confirmed_and_sent(app)
+
+    def boom(*_a, **_k):
+        from outreach.providers.llm import LLMError
+
+        raise LLMError("that model has been withdrawn by the provider")
+
+    monkeypatch.setattr(draft, "regenerate_one", boom)
+    monkeypatch.setattr(
+        "outreach.providers.llm.make_writer", lambda *a, **k: object()
+    )
+
+    d = client.post("/api/visual/redraft", json={"lead_id": "a"}).get_json()
+
+    assert "ok" not in d
+    assert "withdrawn" in d["error"]
+    row = sheets._tabs[schema.OUTREACH_LOG.title]["a"][1]
+    assert row["WhatsApp Status"] == "sent"
+    assert row["WhatsApp Sent At"] == "2026-08-28T17:48:30Z"
+    # The one thing a failed redraft must never do is change the words.
+    assert row["WhatsApp Message"] == "We built you a site. Website: https://x.y"
+
+
+def test_a_rewrite_that_works_still_returns_the_lead_to_the_queue(
+    app, monkeypatch
+):
+    """The control. Restoring on failure must not restore on success -- that
+    would put the lead straight back out of the queue it was cleared into."""
+    from outreach.stages import outreach_draft as draft
+
+    client, sheets = _confirmed_and_sent(app)
+    monkeypatch.setattr(
+        draft, "regenerate_one",
+        lambda *_a, **_k: {"whatsapp_message": "About your picture."},
+    )
+    monkeypatch.setattr(
+        "outreach.providers.llm.make_writer", lambda *a, **k: object()
+    )
+
+    d = client.post("/api/visual/redraft", json={"lead_id": "a"}).get_json()
+
+    assert d["ok"] is True
+    row = sheets._tabs[schema.OUTREACH_LOG.title]["a"][1]
+    assert row["WhatsApp Status"] == ""
+    assert row["WhatsApp Sent At"] == ""
+
+
 def test_redrafting_refuses_before_the_picture_is_checked(app, monkeypatch):
     """The gate exists so a garbled graphic cannot reach a business. A
     redraft must not route around it."""

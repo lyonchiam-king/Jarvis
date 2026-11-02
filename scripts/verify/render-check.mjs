@@ -305,6 +305,30 @@ try {
       qr: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ'
         + 'AAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
     },
+    // The send queue, with one message written for the pitch this campaign
+    // no longer makes. Changing the track changes what is drafted next and
+    // cannot reach back into the Sheet, so these are the messages that
+    // actually go out -- a card carrying a demo-site link under an
+    // infographic needs to say so before anyone presses Send.
+    '/api/whatsapp/queue': {
+      queue: [
+        {
+          lead_id: 'SEND-A', name: 'NS Aesthetics', phone: '+44 7356 003023',
+          phone_e164: '+447356003023', has_shot: true, shot_kind: 'visual',
+          message: 'We built a simple site. Website: https://example.com/ns',
+          wa_link: 'https://wa.me/447356003023',
+          stale_pitch: true,
+        },
+        {
+          lead_id: 'SEND-B', name: 'Second Salon', phone: '+44 7356 003024',
+          phone_e164: '+447356003024', has_shot: true, shot_kind: 'visual',
+          message: 'Noticed people finding you and not getting in touch.',
+          wa_link: 'https://wa.me/447356003024',
+          stale_pitch: false,
+        },
+      ],
+      excluded: [],
+    },
     '/api/campaign': {
       category: 'beauty salon', location: 'London, UK',
       areas: ['Soho', 'Shoreditch'], sender_name: 'Lyon',
@@ -816,6 +840,33 @@ try {
   }
   await dt.evaluate(`document.getElementById('campaign-settings-toggle').click()`);
   await new Promise((r) => setTimeout(r, 250));
+
+  // Review & Send, where both tracks end. The warning on a message still
+  // selling the page is the last thing between a business that has already
+  // read that pitch and reading it a second time.
+  await dt.evaluate(`document.getElementById('stage-send').click()`);
+  await new Promise((r) => setTimeout(r, 700));
+  const sendStep = await dt.evaluate(`(() => {
+    const warn = document.getElementById('send-stale-pitch-SEND-A');
+    return {
+      body: (document.body.innerText || '').replace(/\\s+/g, ' '),
+      warned: warn ? (warn.innerText || '').replace(/\\s+/g, ' ') : '',
+      // The control: the card beside it was rewritten and must stay quiet.
+      quiet: !document.getElementById('send-stale-pitch-SEND-B'),
+    };
+  })()`);
+  if (!sendStep.body.includes('NS Aesthetics')) {
+    fail('Review & Send rendered no queue at all');
+  }
+  if (!/written for the website pitch/.test(sendStep.warned)) {
+    fail(`the stale-pitch card did not warn: ${JSON.stringify(sendStep.warned)}`);
+  }
+  if (!sendStep.quiet) {
+    fail('a rewritten message was flagged too -- a warning on everything is read by nobody');
+  }
+  if (!sendStep.body.includes('Infographic attached')) {
+    fail('Review & Send did not name which picture it is carrying');
+  }
 
   // The missing-tab repair. Every schema addition breaks every existing
   // Sheet the same way, so the button beside that error is the difference
