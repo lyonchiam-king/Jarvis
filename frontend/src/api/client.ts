@@ -408,6 +408,10 @@ class ApiClient {
           layout: v.layout || '',
           specific: !!v.specific,
           state: (v.state || 'needs_image') as VisualState,
+          // Flagged by Python, never worked out here: only the server
+          // knows step 4's rules, and a second answer would drift.
+          in_send_queue: v.in_send_queue === true,
+          send_hold: v.send_hold || '',
           approval: v.approval || '',
           expected_text: v.expected_text || [],
           message: v.message || '',

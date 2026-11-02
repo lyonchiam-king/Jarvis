@@ -701,7 +701,14 @@ stops.
 4. **Proofread the picture.** The card shows it at about the size WhatsApp
    gives it in a chat, with the words that are supposed to be *on it* right
    underneath. Check the spelling, then press **The words are right**.
+   
+   Pressing that also writes the message, if it still needs writing — a lead
+   held with no message, or one whose message was written for the website
+   pitch before the picture existed. The card then shows the real message
+   underneath, and says whether step 4 has it.
 5. **Step 4, Send.** The picture is attached to the message. Press Send.
+6. **It moves to Sent.** The card leaves the working lists and goes into
+   **Sent**, so the three lists above it are always work still to do.
 
 ### The proofreading box is not the message
 
@@ -719,17 +726,25 @@ proofreading box.
 ### What the picture's message says
 
 It is not the website message with the link taken out. It is written from the
-picture itself.
+picture itself, and it leads with what the owner gets.
 
-Whatever the three cards claim about that business is what the message opens
-on — the people who found them rate them highly and the people who have not
-cannot find them at all, say. The first card is the hook, the rest sit behind
-it, and the picture is offered as the thing that lays it out. You are arriving
-with something useful in hand, not asking for anything.
+1. **The hook** — the thing the first card on the picture says about them.
+2. **What is attached** — the few things costing them enquiries, and what the
+   businesses doing well do instead, on one page they can read at a glance.
+3. **The value** — the picture is theirs, it costs them nothing, and the
+   fixes on it are ones they could do themselves. No request in this part at
+   all: arriving with something useful and asking for nothing is the reason
+   it gets read.
+4. **The invitation** — if any of it is useful, or they want to know how one
+   of them is done, they can message back and you will explain. No meeting,
+   no call, no form, nothing to decide.
 
 It says nothing about a website, because on this track there isn't one. No
-link, no demo, no "I built you a page". On **Both** the site link comes back,
-in the text beside the picture.
+link, no demo, no "I built you a page", and no offer to build anything. On
+**Both** the site link comes back, in the text beside the picture.
+
+It does **not** ask them which of the three items is wrong. That was the old
+wording, and it is a request dressed as an offer.
 
 ### A business you have already messaged
 
@@ -759,13 +774,22 @@ Step 4 holds a lead until step 4 of that list is done. That is deliberate:
 until someone has read the words, there is no message, because the message is
 written about a picture nobody has checked.
 
-**If a picture you have confirmed is not in step 4**, it is one of two things,
-and the card on step 3b says which:
+**If a picture you have confirmed is not in step 4**, the card now says so
+outright, and says why in step 4's own words — "Not in step 4 yet — it was
+drafted as an email, so it is in Gmail drafts", say. That line comes from the
+same code that builds step 4's lists, so the two cannot disagree.
 
-- its message has not been written yet — press **Run this morning's batch**,
-  or run the Draft step on its own; or
-- you messaged that business before, so drafting left it alone. Press **Write
-  a new message for this picture** on its card.
+Two of those reasons have a fix on the card itself:
+
+- **no message yet** — pressing **The words are right** writes it. If it was
+  already confirmed before this update, press **Write a new message for this
+  picture**.
+- **already messaged** — drafting leaves that lead alone, which is what stops
+  a business being written to twice. Press **Write a new message for this
+  picture**.
+
+The rest are real: no phone number, no Leads row, drafted as an email. Those
+need the lead fixing, not the card.
 
 ### Why you have to read the words yourself
 
@@ -833,6 +857,15 @@ industry at once.
 **Different look** on a card re-rolls that one prompt onto the next pair in the
 rotation. The picture and your confirmation are kept; it is the prompt that
 changes.
+
+### Where a sent one goes
+
+Once a graphic's message has gone from step 4, its card leaves **Ready to
+send** and moves to **Sent**. It is not in **All** either — All is work still
+to do, the same reason **Removed** is not in it.
+
+So the three counts at the top are always the work in front of you, not a
+running total of everything the campaign has ever produced.
 
 ### Keeping the list short
 

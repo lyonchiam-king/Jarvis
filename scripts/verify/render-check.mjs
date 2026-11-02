@@ -395,7 +395,8 @@ try {
       // supposed to disappear rather than become a dead link.
       tool_url: 'https://example.com/flow',
       signature: 'by Lyon, Business Growth Consultant',
-      counts: { needs_image: 1, needs_check: 1, ready: 2, skipped: 0 },
+      counts: { needs_image: 1, needs_check: 1, ready: 2, sent: 1,
+                skipped: 0 },
       catalogue: {
         styles: ['paper-cut', 'watercolour'], layouts: ['rows', 'road'],
         chosen_styles: [], chosen_layouts: [],
@@ -437,6 +438,23 @@ try {
           // sent?" renders rather than taking its empty branch.
           message: 'Hi, Lyon here. Noticed people asking how to book.',
           sent_at: '',
+          // Confirmed, drafted, and step 4 is still not offering it. The
+          // card is the only screen that can say why.
+          in_send_queue: false,
+          send_hold: 'it was drafted as an email, so it is in Gmail drafts',
+          created_at: '2026-01-01T00:00:00Z',
+        },
+        {
+          // Gone. Finished work, so it is out of every working list.
+          lead_id: 'LEAD-E', name: 'Fifth Salon', category: 'Hair salon',
+          prompt: 'Wide 16:9 landscape semi-infographic for "Fifth Salon".',
+          gaps: 'no_website: Google lists no website for this business',
+          style: 'paper-cut', layout: 'rows', specific: true,
+          state: 'sent', approval: 'Approved',
+          expected_text: ['3 quick wins for Fifth Salon'],
+          message: 'Noticed people finding you and not getting in touch.',
+          sent_at: '2026-09-02 10:00',
+          in_send_queue: false, send_hold: 'already sent from step 4',
           created_at: '2026-01-01T00:00:00Z',
         },
         {
@@ -452,6 +470,7 @@ try {
           expected_text: ['3 quick wins for Fourth Salon'],
           message: 'Hi, Lyon here. I built you a page to look at.',
           sent_at: '2026-08-28 09:14',
+          in_send_queue: false, send_hold: 'already sent from step 4',
           created_at: '2026-01-01T00:00:00Z',
         },
       ],
@@ -626,12 +645,36 @@ try {
     'Third Salon',
     'The message this picture goes out with',
     'Hi, Lyon here. Noticed people asking how to book.',
-    'no separate send button here',
+    // Confirmed and drafted, and Review & Send is still not offering it.
+    // "It isn't brought over" was the only report a person could make.
+    'Not in Review & Send yet',
+    'in Gmail drafts',
   ]) {
     if (!checked.includes(phrase)) {
       fail(`the checked card did not render ${JSON.stringify(phrase)}`);
     }
   }
+  if (checked.includes('Waiting in')) {
+    fail('a card step 4 is holding claims to be waiting in it');
+  }
+
+  // Sent is finished work: out of every working list, in its own.
+  const sentList = await dt.evaluate(`(() => {
+    const tab = document.getElementById('visual-filter-sent');
+    return { exists: !!tab, label: tab ? (tab.innerText || '') : '' };
+  })()`);
+  if (!sentList.exists) fail('there is no Sent list on the Infographic step');
+  if (!sentList.label.includes('Sent (1)')) {
+    fail(`the Sent tab reads ${JSON.stringify(sentList.label)}`);
+  }
+  await dt.evaluate(`document.getElementById('visual-filter-all').click()`);
+  await new Promise((r) => setTimeout(r, 300));
+  const inAll = await dt.evaluate('document.body.innerText || ""');
+  if (inAll.includes('Fifth Salon')) {
+    fail('a sent graphic is still counted among the work left to do');
+  }
+  await dt.evaluate(`document.getElementById('visual-filter-ready').click()`);
+  await new Promise((r) => setTimeout(r, 300));
 
   // The lead already messaged with the website pitch. Reported from a real
   // run: a card saying "Already sent" over a message about a website, and no

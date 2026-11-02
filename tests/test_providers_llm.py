@@ -1240,3 +1240,76 @@ def test_local_ollama_is_asked_without_a_key(monkeypatch):
 
     assert llm_module.available_models(config) == ["local"]
     assert "Authorization" not in seen["headers"]
+
+
+# --- what the picture's message is for --------------------------------------
+#
+# Asked for after a real run: the message should hand the owner something
+# useful and invite a reply, not ask them to critique the picture.
+
+
+def test_the_picture_message_gives_before_it_asks():
+    """Arriving with something useful and no request is the reason this one
+    gets read. Spending that on a question makes it another pitch."""
+    from outreach.providers.llm import _BEATS_VISUAL
+
+    value = _BEATS_VISUAL.split("3. VALUE", 1)[1].split("4. INVITATION", 1)[0]
+
+    assert "theirs" in value
+    assert "costs them nothing" in value
+    assert "do not ask for anything at all" in value.casefold()
+
+
+def test_the_picture_message_no_longer_asks_which_item_is_wrong():
+    """It was the whole offer and it is a request, not a gift."""
+    from outreach.providers.llm import _BEATS_VISUAL
+
+    assert "say which of them is wrong" not in _BEATS_VISUAL
+
+
+def test_the_invitation_is_a_reply_not_a_meeting():
+    """A small business owner asked for a call has to decide something. Asked
+    whether a thing is useful, they can answer in one line."""
+    from outreach.providers.llm import _BEATS_VISUAL
+
+    invitation = _BEATS_VISUAL.split("4. INVITATION", 1)[1]
+
+    assert "message back" in invitation
+    assert "No meeting, no call" in invitation
+
+
+def test_the_picture_message_never_offers_to_build_anything():
+    """It offers a picture and the thinking behind it. "I put together a
+    simple site" is the other track's sentence."""
+    from outreach.providers.llm import _BEATS_VISUAL
+
+    # Collapsed, because the prompt is a wrapped string literal and where it
+    # wrapped is the formatter's business, not this assertion's.
+    flat = " ".join(_BEATS_VISUAL.split())
+
+    assert "never offer to build anything here" in flat
+    assert "say nothing about a website, a page, or a link" in flat
+
+
+def test_the_page_link_still_lands_in_the_renamed_paragraph():
+    """`both` is one message, and the block naming where the link goes has to
+    name a paragraph the beats still have -- a prompt pointing at a beat that
+    was renamed is a prompt arguing with itself."""
+    from outreach.providers.llm import _BEATS_VISUAL, _VISUAL_PLUS_PAGE
+
+    named = [
+        word for word in ("HOOK", "VALUE", "INVITATION")
+        if word in _VISUAL_PLUS_PAGE
+    ]
+    assert named, "the page block names no paragraph at all"
+    for word in named:
+        assert word in _BEATS_VISUAL, f"{word} is not a beat any more"
+
+
+def test_the_other_tracks_beats_are_untouched_by_this():
+    """Adding or reworking one track must not change the prompt another
+    produces -- the promise `design_level` and the angle both make."""
+    from outreach.providers.llm import _BEATS_NO_WEBSITE
+
+    assert "3. OFFER" in _BEATS_NO_WEBSITE
+    assert "VALUE" not in _BEATS_NO_WEBSITE

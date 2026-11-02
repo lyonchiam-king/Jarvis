@@ -3962,8 +3962,13 @@ def _checked(**over):
     q = _json.loads(_viz_queue_response())
     row = q["queue"][0]
     row["state"] = "ready"
+    # The ordinary case: confirmed, drafted, and step 4 is offering it. The
+    # cards that override this are the ones step 4 is holding.
+    row["in_send_queue"] = True
+    row["send_hold"] = ""
     row.update(over)
-    q["counts"] = {"needs_image": 0, "needs_check": 0, "ready": 1, "skipped": 0}
+    q["counts"] = {"needs_image": 0, "needs_check": 0, "ready": 1,
+                   "sent": 0, "skipped": 0}
     return _json.dumps(q)
 
 
@@ -4359,3 +4364,78 @@ def test_the_message_model_says_it_writes_both_kinds_of_message():
     """)
     html = " ".join(__import__("json").loads(out)["html"].split())
     assert "the website ones and the infographic ones alike" in html
+
+
+def test_the_infographic_card_says_whether_step_four_has_it():
+    """"It isn't brought over" was the only report a person could make about
+    a card saying "ready to send" beside a queue that never offered it."""
+    import json as _json
+
+    q = _json.loads(_viz_queue_response())
+    q["queue"][0].update(
+        state="ready", message="About your picture.",
+        in_send_queue=False, send_hold="it was drafted as an email, so it is "
+                                       "in Gmail drafts",
+    )
+    q["counts"] = {"needs_image": 0, "needs_check": 0, "ready": 1,
+                   "sent": 0, "skipped": 0}
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({_json.dumps(q)})}});
+    await loadVisual();
+    vizSetFilter('ready');
+    vizToggle('LEAD-1');
+    console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
+    """)
+    html = " ".join(__import__("json").loads(out)["html"].split())
+    assert "Not in step 4 yet" in html
+    assert "in Gmail drafts" in html
+    assert "Waiting in" not in html
+
+
+def test_the_infographic_card_confirms_when_step_four_does_have_it():
+    """The control: the reassuring half has to render too, or every card
+    reads as a problem."""
+    import json as _json
+
+    q = _json.loads(_viz_queue_response())
+    q["queue"][0].update(state="ready", message="About your picture.",
+                         in_send_queue=True, send_hold="")
+    q["counts"] = {"needs_image": 0, "needs_check": 0, "ready": 1,
+                   "sent": 0, "skipped": 0}
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({_json.dumps(q)})}});
+    await loadVisual();
+    vizSetFilter('ready');
+    vizToggle('LEAD-1');
+    console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
+    """)
+    html = " ".join(__import__("json").loads(out)["html"].split())
+    assert "Waiting in" in html
+    assert "Not in step 4 yet" not in html
+
+
+def test_a_sent_graphic_is_not_in_the_working_lists():
+    """Sent is finished work. Leaving it under Ready made that list grow by
+    one every time a message went out."""
+    import json as _json
+
+    q = _json.loads(_viz_queue_response())
+    q["queue"][0].update(state="sent", message="About your picture.",
+                         sent_at="2026-09-02T00:00:00Z")
+    q["counts"] = {"needs_image": 0, "needs_check": 0, "ready": 0,
+                   "sent": 1, "skipped": 0}
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({_json.dumps(q)})}});
+    await loadVisual();
+    const tabs = _el('#visual').innerHTML;
+    vizSetFilter('all');
+    const inAll = _el('#visual').innerHTML;
+    vizSetFilter('sent');
+    console.log(JSON.stringify({{
+      tabs, inAll, inSent: _el('#visual').innerHTML,
+    }}));
+    """)
+    d = __import__("json").loads(out)
+    assert "Sent (1)" in d["tabs"]
+    assert "Nothing in this list" in d["inAll"]
+    assert "Your Nail Crush" in d["inSent"]

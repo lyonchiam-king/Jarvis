@@ -2071,12 +2071,18 @@ def create_app(config: Config) -> Flask:
         except Exception:  # noqa: BLE001
             return False
 
-    def _visual_state(row) -> str:
+    def _visual_state(row, sent: bool = False) -> str:
         """Where one graphic is up to, in one word the page can branch on.
 
-        Four states, because four things are genuinely different and each
+        Five states, because five things are genuinely different and each
         needs a different button: retired by hand, waiting for the picture,
-        waiting for a person to read the words on it, and ready to send.
+        waiting for a person to read the words on it, ready to send, and
+        gone. `sent` is read off the Outreach Log rather than this tab,
+        because the Sheet records a send there and the visual track writes no
+        Stage at all -- and a graphic that has reached a business is finished
+        work, not a queue item. Leaving it under Ready made that list grow by
+        one every time a message went out, which is the opposite of what a
+        queue is for.
         """
         from . import visual as visual_lib
 
@@ -2086,6 +2092,8 @@ def create_app(config: Config) -> Flask:
             return "needs_image"
         if not visual_lib.text_confirmed(row):
             return "needs_check"
+        if sent:
+            return "sent"
         return "ready"
 
     @app.route("/api/screenshot/<lead_id>")
@@ -2456,7 +2464,8 @@ def create_app(config: Config) -> Flask:
             "signature": c.visual.signature,
             "catalogue": catalogue,
             "queue": [],
-            "counts": {"needs_image": 0, "needs_check": 0, "ready": 0, "skipped": 0},
+            "counts": {"needs_image": 0, "needs_check": 0, "ready": 0,
+                       "sent": 0, "skipped": 0},
         }
         if not base["enabled"] or not c.secrets.sheet_id:
             return jsonify(base)
@@ -2483,10 +2492,18 @@ def create_app(config: Config) -> Flask:
                 "missing_tab": isinstance(exc, TabMissing),
             }), 200
 
+        # Where step 4 actually stands on each of these, by step 4's own
+        # rules. Asked rather than recomputed: a card claiming "ready" beside
+        # a queue that does not offer the lead is the one failure a person
+        # cannot diagnose from the outside.
+        position = _send_position(c, sheets)
+
         queue = []
         for lead_id, (_n, row) in briefs.items():
             lead = leads.get(lead_id, (0, {}))[1]
-            state = _visual_state(row)
+            logged = (drafted.get(lead_id) or (0, {}))[1]
+            where = position.get(lead_id, {})
+            state = _visual_state(row, sent=bool(_sent_already(logged)))
             base["counts"][state] = base["counts"].get(state, 0) + 1
             queue.append(
                 {
@@ -2510,17 +2527,74 @@ def create_app(config: Config) -> Flask:
                     # The real WhatsApp text, written per business by the
                     # draft stage. Not the words above, which belong on the
                     # picture and are never sent anywhere.
-                    "message": (drafted.get(lead_id) or (0, {}))[1].get(
-                        "WhatsApp Message", ""
-                    ),
-                    "sent_at": (drafted.get(lead_id) or (0, {}))[1].get(
-                        "WhatsApp Sent At", ""
-                    ),
+                    "message": logged.get("WhatsApp Message", ""),
+                    "sent_at": logged.get("WhatsApp Sent At", ""),
+                    # Whether step 4 is holding this lead, and why -- in step
+                    # 4's own words. A confirmed picture whose message never
+                    # appears there is the thing he reported, and the card
+                    # was the one screen that could not say so.
+                    "in_send_queue": bool(where.get("queued")),
+                    "send_hold": "" if where.get("queued") else where.get("reason", ""),
                     "created_at": row.get("Created At", ""),
                 }
             )
         base["queue"] = queue
         return jsonify(base)
+
+    # Why a lead with a confirmed picture is not in step 4, in words rather
+    # than a code. Keyed by the reason step 4 itself records, so the two
+    # cannot describe the same lead differently.
+    _SEND_HOLD_WORDS: dict[str, str] = {
+        "already_sent": "already sent from step 4",
+        "status_not_drafted": "its Outreach Log row does not say Drafted",
+        "phone_empty": "there is no phone number on its Leads row",
+        "no_lead_row": "it has no row on the Leads tab",
+        "phone_not_mobile": "its number cannot receive WhatsApp",
+        "unreachable": "it has no email and its number cannot take WhatsApp",
+        "email_channel": "it was drafted as an email, so it is in Gmail drafts",
+        "unknown_channel": "its Channel cell is not WhatsApp",
+    }
+
+    def _sent_already(logged) -> bool:
+        """Whether this lead's message has left, by step 4's own test.
+
+        Keyed on `WhatsApp Status` first, because that is what step 4
+        excludes on -- `unconfirmed` means the message left and was missing
+        from that set once already, which kept a sent lead at the top of the
+        queue. The timestamp is a fallback for a row stamped by hand.
+        """
+        from .providers.whatsapp import WA_SENT_STATUSES
+
+        status = (logged.get("WhatsApp Status") or "").strip().casefold()
+        if status in WA_SENT_STATUSES:
+            return True
+        return bool((logged.get("WhatsApp Sent At") or "").strip())
+
+    def _send_position(c, sheets):
+        """Where each lead stands in step 4: queued, or held and why.
+
+        Reported here because the question is asked here. A card saying
+        "ready to send" while step 4 does not offer that lead is the shape
+        this tool keeps producing -- right code, invisible outcome -- and
+        from the outside it is indistinguishable from the confirm button
+        having done nothing.
+        """
+        try:
+            queue, excluded = _send_lists(c, sheets)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not work out the send position: %s", exc)
+            return {}
+        position = {m["lead_id"]: {"queued": True, "reason": ""} for m in queue}
+        for row in excluded:
+            # A lead cannot be in both, but if step 4 ever offered one it
+            # also excluded, being in the queue is the fact that matters.
+            position.setdefault(row.get("lead_id", ""), {
+                "queued": False,
+                "reason": _SEND_HOLD_WORDS.get(
+                    row.get("reason", ""), row.get("reason", "")
+                ),
+            })
+        return position
 
     def _expected_text(row) -> list[str]:
         """Every string that must appear on the graphic, in reading order.
@@ -2898,7 +2972,67 @@ def create_app(config: Config) -> Flask:
             )
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": _explain_sheets(exc, c)}), 200
-        return jsonify({"ok": True, "lead_id": lead_id, "state": "ready"})
+
+        # The tick is what lets a message carry this graphic, so this is the
+        # moment the message has to be about the graphic. Two ways it is not,
+        # and both were reported from real runs:
+        #
+        #   * the lead was held with no message at all, because the picture
+        #     had not come back when drafting ran -- so confirming produced a
+        #     "ready" card that step 4 never offered; and
+        #   * the lead was drafted as a website lead before the prompt even
+        #     existed, so its message offers a page this message is not
+        #     about, to a business that may already have read it.
+        #
+        # Writing it here rather than asking for another press: the confirm
+        # IS the decision, and a second button to make the message match the
+        # thing just confirmed is a step nobody would know to take.
+        wrote = _message_for_the_picture(c, sheets, lead_id)
+        return jsonify({
+            "ok": True, "lead_id": lead_id, "state": "ready", **wrote,
+        })
+
+    def _message_for_the_picture(c, sheets, lead_id) -> dict:
+        """Make the stored message one written about this graphic.
+
+        Never fatal. The tick is the gate and it is already saved: losing it
+        because a model was slow, or retired, would throw away the one check
+        only a person can do and send them round the loop again. A failure is
+        reported as a sentence on the card instead, with the message left
+        exactly as it was -- which `stale_pitch` in step 4 then flags.
+        """
+        from .stages.outreach_draft import offers_a_page
+
+        try:
+            logged = sheets.read_rows(schema.OUTREACH_LOG).get(lead_id)
+            row = (logged or (0, {}))[1]
+            message = row.get("WhatsApp Message", "")
+            briefs = sheets.read_rows(schema.SITE_BRIEFS).get(lead_id)
+            preview_url = (briefs or (0, {}))[1].get("Preview URL", "")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Could not check %s's message: %s", lead_id, exc)
+            return {}
+
+        # Already sent: not ours to rewrite. Step 4 offers "Write a new
+        # message for this picture" there, which clears the send status too.
+        if _sent_already(row):
+            return {}
+        stale = not offers_a_page(c, preview_url) and _written_for_a_page(
+            message, preview_url
+        )
+        if message.strip() and not stale:
+            return {}
+
+        try:
+            from .providers.llm import make_writer
+            from .stages import outreach_draft as draft
+
+            draft.regenerate_one(
+                c, sheets, make_writer(c, model=c.outreach.model or None), lead_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"message_error": _explain_sheets(exc, c)}
+        return {"message_written": True}
 
     @app.route("/api/visual/clear", methods=["POST"])
     def api_visual_clear():
@@ -3180,26 +3314,26 @@ def create_app(config: Config) -> Flask:
             "layouts": list(c.visual.layouts),
         })
 
-    @app.route("/api/whatsapp/queue")
-    def api_whatsapp_queue():
-        """Leads waiting for WhatsApp send, with phone + message text."""
+    def _send_lists(c, sheets):
+        """Step 4's two lists: what is waiting to send, and what is not.
+
+        A function rather than only a route because the infographic step has
+        to answer "is this lead in step 4, and if not why" -- and the one
+        thing worse than not answering is answering differently. A second
+        implementation of these rules would drift, and a page saying a lead
+        is ready beside a queue that does not offer it is unexplainable from
+        the outside.
+        """
         from . import phone as phone_lib
         from .providers.whatsapp import WA_SENT_STATUSES, chat_link as wa_chat_link
         from .stages.reachability import _country_of, can_whatsapp
 
-        c = current()
-        if not c.secrets.sheet_id:
-            return jsonify({"queue": [], "excluded": []})
-        try:
-            sheets = _sheets_client(c)
-            outreach = sheets.read_rows(schema.OUTREACH_LOG)
-            leads = sheets.read_rows(schema.LEADS)
-            # For the cached WhatsApp verdict. Worth the extra read: without
-            # it a US number falls back to the numbering-plan guess, which
-            # cannot tell mobile from landline there and hides the lead.
-            research = sheets.read_rows(schema.RESEARCH)
-        except Exception as exc:  # noqa: BLE001
-            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+        outreach = sheets.read_rows(schema.OUTREACH_LOG)
+        leads = sheets.read_rows(schema.LEADS)
+        # For the cached WhatsApp verdict. Worth the extra read: without
+        # it a US number falls back to the numbering-plan guess, which
+        # cannot tell mobile from landline there and hides the lead.
+        research = sheets.read_rows(schema.RESEARCH)
 
         # Read once for the whole queue rather than per lead. Skipped
         # entirely on the original track.
@@ -3340,6 +3474,18 @@ def create_app(config: Config) -> Flask:
                 }
             )
 
+        return queue, excluded
+
+    @app.route("/api/whatsapp/queue")
+    def api_whatsapp_queue():
+        """Leads waiting for WhatsApp send, with phone + message text."""
+        c = current()
+        if not c.secrets.sheet_id:
+            return jsonify({"queue": [], "excluded": []})
+        try:
+            queue, excluded = _send_lists(c, _sheets_client(c))
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
         return jsonify({"queue": queue, "excluded": excluded})
 
     @app.route("/api/whatsapp/mark-sent", methods=["POST"])
@@ -6160,11 +6306,15 @@ function vizDraw(d) {
   }
   // Removed is last and never part of All: "remove" has to mean gone from
   // the list, or the button has not done what it says.
+  // Sent is its own list and, like Removed, is not part of All: a graphic
+  // that has reached a business is finished work, and leaving it under
+  // Ready made that list grow by one every time a message went out.
   const tabs = [
     ['needs_image', 'Need a picture', c.needs_image || 0],
     ['needs_check', 'Need checking', c.needs_check || 0],
     ['ready', 'Ready to send', c.ready || 0],
     ['all', 'All', (c.needs_image || 0) + (c.needs_check || 0) + (c.ready || 0)],
+    ['sent', 'Sent', c.sent || 0],
     ['skipped', 'Removed', c.skipped || 0],
   ];
   const bar = tabs.map(t => `<button onclick="vizSetFilter('${t[0]}')"
@@ -6172,7 +6322,9 @@ function vizDraw(d) {
       ${t[2] ? '' : 'disabled'}>${t[1]} (${t[2]})</button>`).join(' ');
 
   const shown = vizQueue.filter(m =>
-    vizFilter === 'all' ? m.state !== 'skipped' : m.state === vizFilter);
+    vizFilter === 'all'
+      ? (m.state !== 'skipped' && m.state !== 'sent')
+      : m.state === vizFilter);
 
   el.innerHTML = `<div class="row" style="margin-bottom:10px;flex-wrap:wrap">${bar}</div>` +
     (shown.length
@@ -6436,13 +6588,20 @@ function vizMessage(m) {
         it. Then send it from step 4, the same queue as everything else.</p>
     </div>`;
   }
+  // Whether step 4 is actually holding it, in step 4's own words. "It isn't
+  // brought over" was the only report a person could make about a card that
+  // said ready beside a queue that never offered the lead.
+  const where = m.in_send_queue
+    ? `<p class="hint" style="margin:6px 0 0">Waiting in
+         <a href="#send-step">step 4</a> now, the same queue as the website
+         messages. There is no separate send button here.</p>`
+    : `<div class="long-err" style="margin:6px 0 0">Not in step 4 yet
+         &mdash; ${esc(m.send_hold || 'step 4 is not offering this lead')}.</div>`;
   return `<div class="viz-next">
     <div class="sub"><b>The message this picture goes out with</b> &mdash;
       written for this business, and editable in step 4 before you send:</div>
     <div class="viz-words">${esc(m.message)}</div>
-    <p class="hint" style="margin:6px 0 0">It sends from
-      <a href="#send-step">step 4</a>, the same queue as the website messages.
-      There is no separate send button here.</p>
+    ${where}
   </div>`;
 }
 

@@ -64,7 +64,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1648 tests, pytest, no CI -- the suite is the only gate
+tests/             1666 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -1441,6 +1441,49 @@ read first and restored on any exception. The order stays as it was, because
 the LLM call precedes every write in `regenerate_one`: a failure there means
 no message changed, so putting the status back is exact rather than
 approximate.
+
+**Two lists that must agree are one function.** The infographic card said
+"ready to send" and step 4 never offered that lead, which from the outside is
+the confirm button having done nothing -- and "it isn't brought over" is the
+only report a person can make about it. `_send_lists` is now the one place
+step 4's rules live, and `_send_position` asks it rather than reimplementing
+it, so the card reports the hold in step 4's own words. A second copy of
+those rules would drift, and a card disagreeing with the queue beside it is
+unexplainable.
+
+**The tick is the moment the message has to match the picture.** Confirming
+the words is what lets a message carry a graphic, and two real runs showed
+what that left behind: a lead held with no message at all, because the
+picture had not come back when drafting ran, and a lead drafted as a website
+lead before the prompt existed, still offering a page. Both produced a
+"ready" card step 4 would not take. `_message_for_the_picture` writes it on
+confirm -- no second button, because the confirm *is* the decision and a
+press to make the message match the thing just confirmed is a step nobody
+would know to take. It rewrites only when there is no message, or when the
+stored one sells that lead's own page on a track that offers none; a message
+already about the picture is left alone, since rewriting it costs a call and
+can only make it different. Never fatal: the tick is already saved before the
+call, because losing the one check only a person can do -- because a model
+was retired -- would send them round the whole loop again.
+
+**A sent graphic is finished work, not a queue item.** `_visual_state` grew a
+fifth state read off the Outreach Log, because the visual track writes no
+Stage and the send is recorded there. Leaving it under Ready made that list
+grow by one every time a message went out, which is the opposite of what a
+queue is for. `sent` is out of *All* for the same reason `skipped` is: those
+three counts are the work in front of you, and a running total of everything
+ever produced is a different question nobody asked.
+
+**The picture's message gives before it asks.** The OFFER beat asked them to
+say which of the three items was wrong -- small, answerable, and a *request*
+dressed as an offer. Lyon asked for the reverse: the picture is theirs, it
+costs nothing, the fixes are ones they could do themselves, and if any of it
+is useful they can message back. So `3. VALUE` forbids asking for anything at
+all and `4. INVITATION` is one open sentence, never a meeting. The beat names
+changed, so `_VISUAL_PLUS_PAGE` -- which says where the page link goes on
+`both` -- had to be repointed, and a test holds that every paragraph it names
+is still a beat: a prompt pointing at a paragraph that was renamed is a
+prompt arguing with itself.
 
 **"Never write a model name" was only half a policy.** The rule has been
 here from the start, and the thing it implies -- that the owner can look one

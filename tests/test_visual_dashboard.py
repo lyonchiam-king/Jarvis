@@ -1123,3 +1123,223 @@ def test_redrafting_a_lead_with_no_prompt_says_so(app):
 def test_redraft_needs_a_lead(app):
     client, _ = app()
     assert client.post("/api/visual/redraft", json={}).status_code == 400
+
+
+# --------- confirming the words is what makes the message match the picture
+
+
+def _ready_to_confirm(app, monkeypatch, logged=None, briefs=None):
+    """A lead with a picture pasted in, waiting for someone to read it."""
+    visual.visuals_dir().mkdir(parents=True, exist_ok=True)
+    (visual.visuals_dir() / "a.png").write_bytes(b"png")
+    client, sheets = app(visuals=brief(
+        "a", **{"Image File": "visuals/a.png", "Text Confirmed": ""}
+    ))
+    sheets._tabs[schema.OUTREACH_LOG.title] = logged or {}
+    sheets._tabs[schema.SITE_BRIEFS.title] = briefs or {}
+    monkeypatch.setattr(
+        "outreach.providers.llm.make_writer", lambda *a, **k: object()
+    )
+    return client, sheets
+
+
+def test_confirming_writes_the_message_for_a_lead_that_was_held(
+    app, monkeypatch
+):
+    """The picture had not come back when drafting ran, so the lead was held
+    with no message at all. Confirming then produced a card saying "ready to
+    send" that step 4 never offered -- which from the outside is the confirm
+    button having done nothing."""
+    from outreach.stages import outreach_draft as draft
+
+    client, sheets = _ready_to_confirm(app, monkeypatch)
+    wrote = []
+    monkeypatch.setattr(
+        draft, "regenerate_one",
+        lambda c, s, w, lead_id: (wrote.append(lead_id), {})[1],
+    )
+
+    d = client.post("/api/visual/confirm", json={"lead_id": "a"}).get_json()
+
+    assert d["ok"] is True
+    assert d.get("message_written") is True
+    assert wrote == ["a"]
+
+
+def test_confirming_replaces_a_message_that_sells_the_page(app, monkeypatch):
+    """Drafted as a website lead before the prompt existed, so its message
+    offers a page this message is not about."""
+    from outreach.stages import outreach_draft as draft
+
+    client, sheets = _ready_to_confirm(
+        app, monkeypatch,
+        logged={"a": (2, {"Lead ID": "a",
+                          "WhatsApp Message": "I built you https://x.y"})},
+        briefs={"a": (2, {"Lead ID": "a", "Preview URL": "https://x.y"})},
+    )
+    wrote = []
+    monkeypatch.setattr(
+        draft, "regenerate_one",
+        lambda c, s, w, lead_id: (wrote.append(lead_id), {})[1],
+    )
+
+    client.post("/api/visual/confirm", json={"lead_id": "a"})
+
+    assert wrote == ["a"]
+
+
+def test_confirming_leaves_a_message_already_about_the_picture(
+    app, monkeypatch
+):
+    """The control. Rewriting a good message costs a call and can only make
+    it different, not better."""
+    from outreach.stages import outreach_draft as draft
+
+    client, _ = _ready_to_confirm(
+        app, monkeypatch,
+        logged={"a": (2, {"Lead ID": "a",
+                          "WhatsApp Message": "Noticed people cannot find you."})},
+        briefs={"a": (2, {"Lead ID": "a", "Preview URL": "https://x.y"})},
+    )
+    wrote = []
+    monkeypatch.setattr(
+        draft, "regenerate_one",
+        lambda c, s, w, lead_id: (wrote.append(lead_id), {})[1],
+    )
+
+    d = client.post("/api/visual/confirm", json={"lead_id": "a"}).get_json()
+
+    assert wrote == []
+    assert "message_written" not in d
+
+
+def test_confirming_never_rewrites_a_message_already_sent(app, monkeypatch):
+    """Not ours to replace. Step 4 offers that deliberately, because it has
+    to clear the send status too."""
+    from outreach.stages import outreach_draft as draft
+
+    client, _ = _ready_to_confirm(
+        app, monkeypatch,
+        logged={"a": (2, {"Lead ID": "a", "WhatsApp Message": "see https://x.y",
+                          "WhatsApp Status": "sent",
+                          "WhatsApp Sent At": "2026-08-28T00:00:00Z"})},
+        briefs={"a": (2, {"Lead ID": "a", "Preview URL": "https://x.y"})},
+    )
+    wrote = []
+    monkeypatch.setattr(
+        draft, "regenerate_one",
+        lambda c, s, w, lead_id: (wrote.append(lead_id), {})[1],
+    )
+
+    client.post("/api/visual/confirm", json={"lead_id": "a"})
+
+    assert wrote == []
+
+
+def test_the_tick_survives_a_failed_rewrite(app, monkeypatch):
+    """The tick is the one check only a person can do. Losing it because a
+    model was retired would send them round the whole loop again."""
+    from outreach.stages import outreach_draft as draft
+
+    client, sheets = _ready_to_confirm(app, monkeypatch)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("that model has been withdrawn")
+
+    monkeypatch.setattr(draft, "regenerate_one", boom)
+
+    d = client.post("/api/visual/confirm", json={"lead_id": "a"}).get_json()
+
+    assert d["ok"] is True
+    assert "withdrawn" in d["message_error"]
+    ticked = {(col, tuple(v)) for _t, col, v, _u in sheets.writes}
+    assert ("Text Confirmed", ("a",)) in ticked
+
+
+# ----------------------- a graphic that has gone is finished work, not a queue
+
+
+def _sent_setup(app, status="sent"):
+    visual.visuals_dir().mkdir(parents=True, exist_ok=True)
+    (visual.visuals_dir() / "a.png").write_bytes(b"png")
+    client, sheets = app(visuals=brief(
+        "a", **{"Image File": "visuals/a.png", "Text Confirmed": "yes"}
+    ))
+    sheets._tabs[schema.OUTREACH_LOG.title] = {
+        "a": (2, {"Lead ID": "a", "Channel": "WhatsApp", "Status": "Drafted",
+                  "WhatsApp Message": "about your picture",
+                  "Drafted At": "2026-09-01T00:00:00Z",
+                  "WhatsApp Status": status,
+                  "WhatsApp Sent At": "2026-09-02T00:00:00Z"})
+    }
+    return client, sheets
+
+
+def test_a_sent_graphic_leaves_the_ready_list(app):
+    """Reported after a real send: the Ready list grew by one every time a
+    message went out, which is the opposite of what a queue is for."""
+    client, _ = _sent_setup(app)
+
+    d = client.get("/api/visual/queue").get_json()
+
+    assert d["queue"][0]["state"] == "sent"
+    assert d["counts"]["sent"] == 1
+    assert d["counts"]["ready"] == 0
+
+
+def test_an_unconfirmed_send_counts_as_gone(app):
+    """It was missing from WA_SENT_STATUSES once already, which kept a sent
+    lead at the top of the send queue. The same word means the same thing
+    here: the message left."""
+    client, _ = _sent_setup(app, status="unconfirmed")
+
+    assert client.get("/api/visual/queue").get_json()["counts"]["sent"] == 1
+
+
+def test_a_ready_card_says_it_is_waiting_in_step_four(app):
+    """The two lists are built by one function, so they cannot disagree."""
+    visual.visuals_dir().mkdir(parents=True, exist_ok=True)
+    (visual.visuals_dir() / "a.png").write_bytes(b"png")
+    client, sheets = app(
+        leads={"a": (2, {"Lead ID": "a", "Business Name": "Nail Crush",
+                         "Phone": "+60123456789", "WhatsApp Reachable": "yes"})},
+        visuals=brief("a", **{"Image File": "visuals/a.png",
+                              "Text Confirmed": "yes"}),
+    )
+    sheets._tabs[schema.OUTREACH_LOG.title] = {
+        "a": (2, {"Lead ID": "a", "Channel": "WhatsApp", "Status": "Drafted",
+                  "WhatsApp Message": "about your picture",
+                  "Drafted At": "2026-09-01T00:00:00Z"})
+    }
+
+    row = client.get("/api/visual/queue").get_json()["queue"][0]
+
+    assert row["state"] == "ready"
+    assert row["in_send_queue"] is True
+    assert row["send_hold"] == ""
+
+
+def test_a_ready_card_says_why_step_four_is_holding_it(app):
+    """"It isn't brought over" was the only report a person could make. The
+    card is the one screen that can answer it, in step 4's own words."""
+    visual.visuals_dir().mkdir(parents=True, exist_ok=True)
+    (visual.visuals_dir() / "a.png").write_bytes(b"png")
+    client, sheets = app(
+        leads={"a": (2, {"Lead ID": "a", "Business Name": "Nail Crush",
+                         "Phone": "+60123456789", "WhatsApp Reachable": "yes"})},
+        visuals=brief("a", **{"Image File": "visuals/a.png",
+                              "Text Confirmed": "yes"}),
+    )
+    # Drafted as an email, so it went to Gmail drafts and step 4 never
+    # offers it -- a real exclusion, and one no button on this card fixes.
+    sheets._tabs[schema.OUTREACH_LOG.title] = {
+        "a": (2, {"Lead ID": "a", "Channel": "email", "Status": "Drafted",
+                  "WhatsApp Message": "about your picture",
+                  "Recipient": "hi@x.com",
+                  "Drafted At": "2026-09-01T00:00:00Z"})
+    }
+
+    row = client.get("/api/visual/queue").get_json()["queue"][0]
+
+    assert row["in_send_queue"] is False
+    assert "Gmail drafts" in row["send_hold"]

@@ -610,26 +610,28 @@ whether the rest is read, so it must be impossible to send to any other \
 business. "I hope this finds you well" and "I came across your business" are \
 deleted unread.
 
-2. SOLUTION -- say what the attached picture is, in one or two sentences: the \
-few things you would change, on one page, so they can see all of it at a \
-glance. The subject is their customers, not your work. Never say you "made a \
-graphic" or "designed an infographic" -- that is a sentence about you. Do not \
-list the three items; they are already in the picture, and repeating them in \
-text makes the message long and the picture pointless.
+2. WHAT IS ATTACHED -- one or two sentences on what the picture shows: the \
+few things costing them enquiries, and what the businesses doing well do \
+instead, on one page they can read at a glance. The subject is their \
+customers, not your work. Never say you "made a graphic" or "designed an \
+infographic" -- that is a sentence about you -- and never offer to build \
+anything here. Do not list the items; they are already in the picture, and \
+repeating them in text makes the message long and the picture pointless.
 
-3. OFFER -- the concrete thing they get, and what it costs them to look. The \
-picture is attached to this message, so the offer is to look at it and say \
-which of them is wrong. That question is the whole offer: it is small, it is \
-answerable in one line, and being told they are wrong is a real reply. Never \
-a meeting.
+3. VALUE -- the picture is theirs, and this sentence says so. It is attached, \
+it costs them nothing, and the fixes on it are ones they could do themselves. \
+Say that plainly. Do not ask them to critique it, do not ask which item is \
+wrong, and do not ask for anything at all in this paragraph: a message that \
+arrives with something useful and no request is the reason this one gets \
+read, and spending it on a question makes it another pitch.
 
-4. MODEL -- how this works in one sentence, so nobody has to guess what the \
-catch is. Say plainly what happens next if they like it and what happens if \
-they do not. Ending without this reads as a trick, and a small business owner \
-who suspects a trick does not reply. Then one clause -- no list -- saying \
-getting found is the wider job and this is one part of it. That is what the \
-appended list of services follows on from, so without it the list arrives out \
-of nowhere. A list of services is appended after your message, worded by the \
+4. INVITATION -- one sentence, low and open: if any of it is useful, or they \
+want to know how a particular one is done, they can message back and you will \
+explain it. That is the whole ask. No meeting, no call, no form, no deadline, \
+and nothing they have to decide. Then one clause -- no list -- saying getting \
+found is the wider job and this is one part of it. That is what the appended \
+list of services follows on from, so without it the list arrives out of \
+nowhere. A list of services is appended after your message, worded by the \
 sender, so writing one here duplicates it and risks naming something nobody \
 sells.
 
@@ -643,14 +645,14 @@ raising it reads as a second attempt at the same sale.
 # Added to the visual beats when this lead also has a built page. "Both"
 # produces ONE message, not two: the same business messaged twice in a day is
 # the thing this pipeline works hardest to avoid, so the picture is the hook
-# and the page rides in the offer beside it.
+# and the page rides in the value paragraph beside it.
 _VISUAL_PLUS_PAGE = """\
-- This lead also has a working page built for them. Put its link in the offer \
+- This lead also has a working page built for them. Put its link in the VALUE \
 paragraph, on its own line with a blank line either side, written as \
-"Website: [the link]", AFTER the sentence asking them to look at the picture. \
-The picture is the hook and the page is the proof; a message that leads with \
-the link throws the picture away. Mention the page in one clause only -- the \
-picture is still what the offer asks about.
+"Website: [the link]", AFTER the sentence saying the picture is theirs. The \
+picture is the hook and the page is the proof; a message that leads with the \
+link throws the picture away. Mention the page in one clause only -- the \
+picture is still the subject.
 """
 
 # The graphic carries no business name and no claim about them specifically,

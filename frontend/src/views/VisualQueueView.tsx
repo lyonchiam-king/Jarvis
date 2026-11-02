@@ -194,7 +194,9 @@ export const VisualQueueView: React.FC<{ onRefresh?: () => void }> = ({
 
   const counts = data.counts || ({} as Record<string, number>);
   const shown = data.queue.filter((m) =>
-    filter === 'all' ? m.state !== 'skipped' : m.state === filter
+    filter === 'all'
+      ? m.state !== 'skipped' && m.state !== 'sent'
+      : m.state === filter
   );
 
   return (
@@ -301,6 +303,7 @@ const STATE_WORDS: Record<string, string> = {
   needs_image: 'needs a picture',
   needs_check: 'needs checking',
   ready: 'ready to send',
+  sent: 'sent',
   skipped: 'removed',
 };
 
@@ -529,7 +532,9 @@ const VisualCard: React.FC<CardProps> = ({
         </div>
       )}
 
-      {(item.state === 'needs_check' || item.state === 'ready') && (
+      {(item.state === 'needs_check' ||
+        item.state === 'ready' ||
+        item.state === 'sent') && (
         <div className="space-y-3">
           {imageFailed ? (
             <p
@@ -577,7 +582,7 @@ const VisualCard: React.FC<CardProps> = ({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {item.state === 'ready' ? (
+            {item.state === 'ready' || item.state === 'sent' ? (
               <span className="inline-flex items-center gap-1.5 text-[12px] text-emerald-300">
                 <Check className="w-3.5 h-3.5" />
                 Picture checked.
@@ -601,7 +606,9 @@ const VisualCard: React.FC<CardProps> = ({
             </button>
           </div>
 
-          {item.state === 'ready' && <VisualMessage item={item} />}
+          {(item.state === 'ready' || item.state === 'sent') && (
+            <VisualMessage item={item} />
+          )}
         </div>
       )}
 
@@ -749,9 +756,11 @@ const RotationPicker: React.FC<{
 /**
  * Which list is showing.
  *
- * Three of the four states need nothing from him, so the default is the one
- * that does. "Removed" is never part of All: remove has to mean gone from
- * the list, or the button has not done what it says.
+ * Most states need nothing from him, so the default is the one that does.
+ * "Removed" is never part of All -- remove has to mean gone from the list --
+ * and neither is "Sent": a graphic that has reached a business is finished
+ * work, and leaving it under Ready made that list grow by one every time a
+ * message went out.
  */
 const FilterBar: React.FC<{
   counts: Record<string, number>;
@@ -765,6 +774,7 @@ const FilterBar: React.FC<{
     ['needs_check', 'Need checking', counts.needs_check || 0],
     ['ready', 'Ready to send', counts.ready || 0],
     ['all', 'All', live],
+    ['sent', 'Sent', counts.sent || 0],
     ['skipped', 'Removed', counts.skipped || 0],
   ];
   return (
@@ -1047,10 +1057,26 @@ const VisualMessage: React.FC<{ item: VisualItem }> = ({ item }) => {
       <pre className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-[12px] text-slate-200 whitespace-pre-wrap font-mono">
         {item.message}
       </pre>
-      <p className="text-[11px] text-slate-500">
-        It sends from <strong>Review &amp; Send</strong>, the same queue as the
-        website messages. There is no separate send button here.
-      </p>
+      {/* Whether Review & Send is actually offering it, in that step's own
+          words. "It isn't brought over" was the only report a person could
+          make about a card saying ready beside a queue that never had it. */}
+      {item.in_send_queue ? (
+        <p
+          id={`visual-in-queue-${item.lead_id}`}
+          className="text-[11px] text-slate-500"
+        >
+          Waiting in <strong>Review &amp; Send</strong> now, the same queue as
+          the website messages. There is no separate send button here.
+        </p>
+      ) : (
+        <p
+          id={`visual-send-hold-${item.lead_id}`}
+          className="text-[11px] text-amber-300 whitespace-pre-wrap"
+        >
+          Not in Review &amp; Send yet &mdash;{' '}
+          {item.send_hold || 'that step is not offering this lead'}.
+        </p>
+      )}
     </div>
   );
 };

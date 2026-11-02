@@ -256,9 +256,16 @@ export interface ApiResponse<T> {
 /**
  * Where one graphic is up to. Four states, because four things are genuinely
  * different and each needs a different button: retired by hand, waiting for
- * the picture, waiting for a person to read the words on it, and ready.
+ * the picture, waiting for a person to read the words on it, ready, and
+ * gone. `sent` is finished work rather than a queue item -- leaving it under
+ * Ready made that list grow by one every time a message went out.
  */
-export type VisualState = 'skipped' | 'needs_image' | 'needs_check' | 'ready';
+export type VisualState =
+  | 'skipped'
+  | 'needs_image'
+  | 'needs_check'
+  | 'ready'
+  | 'sent';
 
 export interface VisualItem {
   lead_id: string;
@@ -292,6 +299,14 @@ export interface VisualItem {
    */
   message: string;
   sent_at: string;
+  /**
+   * Whether step 4 is actually offering this lead, and if not why -- in step
+   * 4's own words, from the same function that builds step 4's two lists. A
+   * card saying "ready to send" beside a queue that never offered it is the
+   * one failure a person cannot diagnose from the outside.
+   */
+  in_send_queue: boolean;
+  send_hold: string;
   created_at: string;
 }
 
