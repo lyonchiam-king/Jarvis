@@ -1685,6 +1685,53 @@ is the entire error a failing render check reported -- and the throw was a
 panels. `exception.description` carries the message and the stack. A check
 that cannot say what broke costs more than the bug.
 
+**A fix that cannot reach the machine that needs it does not exist.** Three
+fixes in a row were written, tested, pushed, and reported back as still
+broken -- "it still doesn't show any button", "there's no button to send",
+"still not showing any of the drop sent to queue button. Are you sure you
+fixed it?". Every report was correct and every fix was real: the only way to
+receive one was a `git pull` typed into a terminal by someone who does not
+use one, and `Dashboard.bat` printed "Checking for updates..." over a
+`pip install -e .` that reinstalls whatever is already on disk. So the
+launcher fetches, and `selfupdate.py` owns every decision about whether that
+is safe -- the same line `--phone` sits on, because anything that must be
+right on Windows and cannot be run from this container belongs on the Python
+side where a test can drive it. It is **never allowed to stop the dashboard
+opening**: git missing, GitHub unreachable, a local edit and a branch that
+cannot fast-forward are each one sentence on the way past. `--ff-only` and
+nothing stashed, because a conflict cannot be resolved on an unattended
+machine and a half-merged checkout is worse than an old one. Untracked files
+are ignored: `installer-log.txt`, `relay-log.txt`, `sites/` and `.cache/`
+all live in the working copy, and reading them as "local edits" would switch
+updating off for ever on exactly the machine that has been running longest.
+
+**"Are you sure you fixed it?" has to be answerable from the machine.** It
+was not -- not by its owner, and not by whoever was helping him, which is
+why three correct bug reports were each met with a fix that was already
+pushed. The commit and its date are in the sidebar and in `outreach
+version`, so the question is read off a screenshot instead of argued about.
+Blank when the copy was not cloned with Git, never guessed: a made-up
+version string is the invented-fact class the front end is already checked
+for, and it would be invented on the one screen somebody reads to decide
+whether a fix has arrived.
+
+**The stamp is on the summary, so it is mapped like everything else.** It
+shipped in the bundle, rendered nowhere, and only `render-check` noticed --
+because `client.ts` translates rather than passes through, and a field it
+does not name does not exist to any view. The `wa_link` shape for the
+seventh time. It is deliberately *not* on the summary's error reply either:
+`map` collapses a body carrying an `error` down to the error alone, so a
+stamp put there would reach nothing, and a field returned and rendered by
+nobody is the bug rather than the feature.
+
+**A safety net is only a net while it is reachable.** `/` redirects to the
+React page and the original kept its own address at `/classic` -- and
+nothing on the new page named it, so the fallback existed and could not be
+found: "now I cannot go back to the previous old dashboard. Which was
+working." The same defect as the link *into* that page being small grey
+text, and the same answer. It is in the sidebar, and `render-check` reads
+the rendered anchor rather than the source.
+
 ## Conventions
 
 - Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`, `chore:`)
@@ -1737,6 +1784,14 @@ ends -- so it goes on deliberately, not as a side effect of a `git pull`.
 
 Say so rather than implying otherwise:
 
+- The launcher's update step has never run on Windows from here. `outreach
+  self-update` itself is driven against real git repositories in
+  `tests/test_self_update.py` -- a fast-forward, a local edit surviving, an
+  untracked file not blocking one, a divergent branch refused, offline, git
+  absent -- so the logic is checked. What is unchecked is the two lines of
+  `Dashboard.bat` that call it, and whether git is on PATH on Lyon's
+  machine at all: if it is not, the step says so and names git-scm.com,
+  which is a sentence nobody here has watched appear.
 - The Windows launchers (`Dashboard.bat`, `run.bat`, `Schedule-Daily.ps1`,
   `Phone-Check.bat`, `Dashboard-Anywhere.bat`) have never been executed on
   Windows here, and neither

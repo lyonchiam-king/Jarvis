@@ -23,18 +23,31 @@ The address opens the **current** dashboard — the dark one, with Today,
 Campaigns, Contacts and Results down the side. Everything in this guide works
 there.
 
-The original page is still at **`/classic`** (so `http://127.0.0.1:5000/classic`
-on your own machine). Nothing has been taken away from it; it is the fallback
-if the newer page ever misbehaves. If you want it back as the default, set
+The original page is still there, and you no longer need to remember an
+address for it: **"Open the old dashboard"** sits at the bottom of the
+left-hand side, under the model name. (Its address is `/classic`, so
+`http://127.0.0.1:5000/classic`, if you ever want to bookmark it.) Nothing
+has been taken away from it; it is the fallback if the newer page ever
+misbehaves.
+
+Beside that link is a short code and a date — something like
+`dcbd1e1 · 2026-11-02`. That is **which version you are running**. If
+something looks like it was never fixed, send that line: it says in one
+glance whether the fix has actually reached your computer yet. If you want it back as the default, set
 `OUTREACH_CLASSIC_DASHBOARD=true` in your `.env`.
 
 ---
 
 ## Getting it onto your computer
 
-You already have this folder and a working `.env`. To pick up the newest
-version, open **PowerShell** in the project folder and run these four lines
-once:
+**Normally you do not have to do anything.** `Dashboard.bat` now checks for
+updates every time you start it, and says one line about what it found —
+"Updated: 2 updates downloaded", or "Already up to date". If you have no
+internet, or you changed a file in the folder yourself, it says so and opens
+the dashboard anyway; it will never refuse to start over an update.
+
+If you want to do it by hand anyway, open **PowerShell** in the project
+folder and run these four lines:
 
 ```powershell
 git pull

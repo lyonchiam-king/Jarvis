@@ -4563,3 +4563,54 @@ def test_a_card_that_already_has_one_says_so_rather_than_claiming_a_write():
     """)
     note = __import__("json").loads(out)["note"]
     assert "already has a message" in note
+
+
+# ------------------------------------------- which build is actually running
+
+
+def test_the_summary_says_which_build_is_running(monkeypatch):
+    """"Are you sure you fixed it?" was unanswerable from this machine.
+
+    Three fixes in a row were pushed, reported as still missing, and were
+    genuinely absent -- nothing on the machine ever fetched them, and
+    nothing on screen said which commit it was serving. The stamp makes
+    that readable off a screenshot.
+    """
+    from dataclasses import replace
+
+    from outreach import dashboard as dash
+    from outreach import env_edit
+
+    monkeypatch.setattr(dash, "_load_summary", lambda config: dash.Summary(total=3))
+    monkeypatch.setattr(env_edit, "is_set", lambda path, name: True)
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(
+        config,
+        secrets=replace(
+            config.secrets, sheet_id="s", places_api_key="p", anthropic_api_key="a"
+        ),
+    )
+    client = create_app(config).test_client()
+
+    d = client.get("/api/summary").get_json()
+
+    assert d["build"]["commit"], "no commit on the summary"
+    assert d["build"]["date"]
+
+
+def test_the_build_is_named_even_when_nothing_is_set_up(monkeypatch):
+    """The moment somebody needs to know which build they are looking at is
+    the moment it is not working, so the two replies that report a problem
+    carry the stamp too."""
+    from dataclasses import replace
+
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(
+        config, secrets=replace(config.secrets, sheet_id="", places_api_key="")
+    )
+    client = create_app(config).test_client()
+
+    d = client.get("/api/summary").get_json()
+
+    assert d["setup_needed"]
+    assert d["build"]["commit"]

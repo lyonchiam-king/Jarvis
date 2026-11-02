@@ -157,8 +157,22 @@ export interface ErrorItem {
   retryable: boolean;
 }
 
+/** Which commit is on disk. Blank when this copy was not cloned with Git. */
+export interface BuildStamp {
+  commit: string;
+  date: string;
+  branch: string;
+}
+
 export interface Summary {
   setup_needed?: string[];
+  /**
+   * Present on every reply the summary endpoint gives, including the two
+   * that report a problem -- "which build am I running" is the question
+   * nobody could answer from this machine, and it is asked when something
+   * looks unfixed.
+   */
+  build?: BuildStamp;
   total: number;
   disqualified: number;
   by_stage: Record<Stage, number>;

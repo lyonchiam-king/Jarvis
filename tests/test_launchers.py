@@ -157,3 +157,42 @@ def test_the_launcher_asks_for_phone_access_and_lets_python_decide():
     # No decision logic left in batch at all.
     assert "findstr" not in commands or "DASHBOARD_PASSWORD" not in commands
     assert "%PHONE%" not in commands
+
+
+def test_the_launcher_fetches_pushed_fixes_before_installing():
+    """A fix that cannot reach the machine that needs it does not exist.
+
+    `Dashboard.bat` printed "Checking for updates..." and then ran
+    `pip install -e .`, which reinstalls whatever is already on disk. So
+    three fixes in a row were written, tested, pushed and reported back as
+    still broken -- correctly, every time, because the only way to receive
+    one was a `git pull` typed into a terminal by someone who does not use
+    one.
+
+    The ordering is the substance of this test: the first install is what
+    makes the `outreach` command exist, the fetch comes next, and an install
+    after it is what picks up a dependency the update added.
+    """
+    import pathlib
+
+    text = pathlib.Path("Dashboard.bat").read_text()
+    commands = "\n".join(
+        line for line in text.splitlines()
+        if not line.strip().upper().startswith("REM")
+    )
+
+    assert "self-update" in commands, "the launcher never fetches anything"
+
+    fetch = commands.index("self-update")
+    installs = [
+        i for i in range(len(commands))
+        if commands.startswith("pip install --quiet -e .", i)
+    ]
+    assert len(installs) == 2, "expected an install either side of the fetch"
+    assert installs[0] < fetch, "nothing is installed to fetch with yet"
+    assert installs[1] > fetch, "a new dependency would not be installed"
+
+    # No decision about whether updating is safe may live in batch, where
+    # nothing in this container can run it. Python owns all of it.
+    assert "git " not in commands
+    assert "ERRORLEVEL" not in commands.split("self-update")[1][:200]

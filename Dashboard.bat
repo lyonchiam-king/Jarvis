@@ -61,9 +61,24 @@ goto :eof
 :installed
 
 REM ------------------------------------------------- install / update the app
-REM Reinstalling is quick when nothing changed, and it is what picks up new
-REM code after a `git pull`.
+REM The first install is what makes the `outreach` command exist at all, so
+REM it has to come before anything that uses it -- on a first run there is
+REM nothing installed to fetch an update with.
+"%PY%" -m pip install --quiet -e . 2>installer-log.txt
+
+REM Now fetch anything that has been pushed since this copy was made. This
+REM line is the whole reason three fixes in a row were reported as still
+REM broken: the step above only reinstalls what is already on disk, so a fix
+REM sitting on GitHub never arrived. Every decision about whether updating
+REM is safe is made in Python, where a test can drive it -- this file asks,
+REM it does not decide. It always succeeds, because being a day behind must
+REM never stop the dashboard opening.
 echo   Checking for updates...
+"%PY%" -m outreach self-update
+
+REM And install again, because an update may have added a dependency. It is
+REM quick when nothing changed, which is the ordinary case; paying for it
+REM every start beats a missing package on the one start that needed it.
 "%PY%" -m pip install --quiet -e . 2>installer-log.txt
 if not exist "%APP%" (
     echo.

@@ -334,6 +334,7 @@ try {
       emails_waiting: 0, errors: 2, errors_retryable: 1,
       sheet_url: 'https://docs.google.com/spreadsheets/d/EXAMPLE/edit',
       has_work: true,
+      build: { commit: 'abc1234', date: '2026-11-02', branch: 'main' },
     },
     '/api/log': { running: null, lines: ['discovery: 5 new leads', 'research: 4 done'] },
     '/api/leads': { leads: [] },
@@ -1301,6 +1302,48 @@ try {
     if (!resultsText.includes(phrase)) {
       fail(`Results did not render ${JSON.stringify(phrase)}`);
     }
+  }
+
+  // The way back to the old dashboard, and which build this is.
+  //
+  // Both exist because of the same failure from the other side: `/` now
+  // redirects here, so the original page can only be reached by someone who
+  // knows the word "classic" -- and three pushed fixes were reported as
+  // missing with nothing on screen able to say which commit was serving the
+  // page. Asserted by reading the rendered sidebar rather than the source,
+  // because a link that ships in the bundle and renders nowhere is the
+  // `wa_link` shape all over again.
+  const backWay = await dt.evaluate(`(() => {
+    const a = document.getElementById('classic-dashboard-link');
+    if (!a) return { found: false };
+    const r = a.getBoundingClientRect();
+    return {
+      found: true,
+      href: a.getAttribute('href'),
+      text: (a.textContent || '').trim(),
+      visible: r.width > 0 && r.height > 0,
+    };
+  })()`);
+  if (!backWay.found) {
+    fail('the new dashboard renders no way back to the old one');
+  } else {
+    if (backWay.href !== '/classic') {
+      fail(`the way back points at ${JSON.stringify(backWay.href)}, not /classic`);
+    }
+    if (!backWay.visible) {
+      fail('the link to the old dashboard rendered with no size');
+    }
+    if (!/old dashboard/i.test(backWay.text)) {
+      fail(`the way back reads ${JSON.stringify(backWay.text)}`);
+    }
+  }
+
+  const stamp = await dt.evaluate(`(() => {
+    const el = document.getElementById('build-stamp');
+    return el ? (el.textContent || '').trim() : '';
+  })()`);
+  if (!stamp.includes('abc1234')) {
+    fail(`the build stamp read ${JSON.stringify(stamp)}, not the commit it was given`);
   }
 
   // The pairing QR must arrive as an image, not as its own base64 printed

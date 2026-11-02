@@ -118,6 +118,12 @@ class ApiClient {
       errors: ApiClient.num(d.errors),
       errors_retryable: ApiClient.num(d.errors_retryable),
       sheet_url: d.sheet_url || undefined,
+      // Which commit is serving this page. Mapped through explicitly, like
+      // everything else here: the stamp shipped in the bundle, rendered
+      // nowhere, and only the browser check noticed -- because this file
+      // translates rather than passes through, and a field it does not
+      // name does not exist to any view.
+      build: (d.build || undefined) as Summary['build'],
     }));
   }
 

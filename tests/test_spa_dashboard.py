@@ -762,3 +762,28 @@ def test_a_checkout_with_no_built_page_still_opens(monkeypatch, tmp_path):
 
     assert res.status_code == 200
     assert b"<script>" in res.data
+
+
+def test_the_way_back_to_the_old_dashboard_ships():
+    """A safety net is only a net while it is reachable.
+
+    The original dashboard stayed at `/classic` on purpose when `/` began
+    redirecting here -- and nothing on this page named it, so from the one
+    person who needed it the net simply did not exist: "I cannot go back to
+    the previous old dashboard. Which was working." The same defect as the
+    link into this page being small grey text, and the same answer.
+    """
+    bundle = _bundle()
+    assert "/classic" in bundle, "the new page names no way back"
+    assert "Open the old dashboard" in bundle
+
+
+def test_the_page_says_which_build_it_is():
+    """"Are you sure you fixed it?" could not be answered from this machine
+    by anyone -- not its owner, and not whoever was helping him. Three
+    pushed fixes were reported as missing and were genuinely absent."""
+    bundle = _bundle()
+    assert "build-stamp" in bundle
+    # Blank rather than guessed at, on a screen read to decide whether a
+    # fix has arrived.
+    assert "build unknown" in bundle

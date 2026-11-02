@@ -269,6 +269,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
             Runs on your own machine. The Sheet and WhatsApp stay in your
             private environment.
           </p>
+
+          {/*
+            Which build this is, and the way back to the old page.
+
+            The stamp exists because "are you sure you fixed it?" could not
+            be answered from this machine by anybody -- not its owner, and
+            not whoever was helping him. Three fixes in a row were pushed,
+            reported as still missing, and were genuinely absent, because
+            nothing here ever fetched them. A commit and a date on screen
+            turn that into something readable off a screenshot.
+
+            The link is a regression being paid back: `/` used to serve the
+            original dashboard and now redirects here, and nothing on this
+            page named the old one -- so the safety net existed and could
+            not be reached, which is the whole of what a safety net is for.
+          */}
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <a
+              id="classic-dashboard-link"
+              href="/classic"
+              className="text-[11px] font-medium text-slate-400 underline decoration-slate-700 decoration-dotted underline-offset-2 hover:text-emerald-400 studio-transition"
+            >
+              Open the old dashboard
+            </a>
+            <span
+              id="build-stamp"
+              title={
+                summary?.build?.branch
+                  ? `Branch ${summary.build.branch}`
+                  : undefined
+              }
+              className="text-[10px] text-slate-600 tabular-nums shrink-0"
+            >
+              {summary?.build?.commit
+                ? `${summary.build.commit}${
+                    summary.build.date ? ` · ${summary.build.date}` : ''
+                  }`
+                : 'build unknown'}
+            </span>
+          </div>
         </div>
       </aside>
     </>

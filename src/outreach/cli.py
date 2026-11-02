@@ -1703,3 +1703,43 @@ def _echo_sheet_link(config: Config) -> None:
 
 if __name__ == "__main__":
     main()
+
+
+@main.command("self-update")
+def self_update() -> None:
+    """Download any fix that has been pushed since this copy was made.
+
+    The launcher runs this on every start, which is the whole point of it:
+    three fixes in a row were pushed and reported back as still broken,
+    because nothing on the machine ever fetched them. It prints one line and
+    always exits 0 -- being a day behind must never stop the dashboard
+    opening.
+    """
+    from . import selfupdate
+
+    result = selfupdate.update()
+    click.echo(f"  {result.message}")
+    if result.outcome == "updated":
+        version = selfupdate.describe()
+        click.echo(f"  Now running {version.label}.")
+
+
+@main.command("version")
+def version_cmd() -> None:
+    """Say which build is on disk.
+
+    Named after the question it answers: "am I running the fix yet?" -- which
+    until now could not be answered from this machine at all, by its owner or
+    by anyone helping him.
+    """
+    from . import selfupdate
+
+    version = selfupdate.describe()
+    if not version.commit:
+        click.echo("Build: unknown (this copy was not downloaded with Git)")
+        return
+    click.echo(f"Build:  {version.commit}")
+    if version.date:
+        click.echo(f"Dated:  {version.date}")
+    if version.branch:
+        click.echo(f"Branch: {version.branch}")

@@ -1374,6 +1374,29 @@ def create_app(config: Config) -> Flask:
             }
         )
 
+    def _build_stamp() -> dict[str, str]:
+        """Which commit is running, for every answer this endpoint gives.
+
+        It rides on the summary rather than earning an endpoint of its own
+        because the sidebar already reads that, and because a stamp is only
+        worth having if it is on screen without anyone asking for it.
+
+        On the setup-needed reply as well as the full one, because a copy
+        with no keys filled in is still a copy somebody wants to identify.
+        Not on the error reply: `client.ts` collapses a body carrying an
+        `error` down to the error alone, so a stamp put there would reach no
+        view -- the field-returned-and-rendered-by-nothing shape, which has
+        now cost this project six separate controls.
+        """
+        from . import selfupdate
+
+        version = selfupdate.cached_describe()
+        return {
+            "commit": version.commit,
+            "date": version.date,
+            "branch": version.branch,
+        }
+
     @app.route("/api/summary")
     def api_summary():
         c = current()
@@ -1399,7 +1422,7 @@ def create_app(config: Config) -> Flask:
         if env_name and not is_set(paths.env_file(), env_name):
             missing.append(env_name)
         if missing:
-            return jsonify({"setup_needed": missing})
+            return jsonify({"setup_needed": missing, "build": _build_stamp()})
 
         try:
             summary = _load_summary(c)
@@ -1407,6 +1430,7 @@ def create_app(config: Config) -> Flask:
             return jsonify({"error": _explain_sheets(exc, c)}), 200
         return jsonify(
             {
+                "build": _build_stamp(),
                 "total": summary.total,
                 "by_stage": summary.by_stage,
                 "disqualified": summary.disqualified,
