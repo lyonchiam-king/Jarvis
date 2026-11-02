@@ -192,6 +192,24 @@ class ApiClient {
     }));
   }
 
+  /**
+   * Which models this campaign's own key can actually use.
+   *
+   * No model name is written into Jarvis anywhere, because one correct today
+   * stops working without warning. This is the other half of that rule: the
+   * provider is asked, and the answer is never cached, since a catalogue is
+   * exactly the thing that is wrong by the time you read it.
+   */
+  async getModelCatalogue(): Promise<
+    ApiResponse<{ provider: string; models: string[] }>
+  > {
+    const res = await this.request<Raw>('/api/model/catalogue');
+    return this.map(res, (d) => ({
+      provider: d.provider || '',
+      models: Array.isArray(d.models) ? (d.models as string[]) : [],
+    }));
+  }
+
   async saveModel(settings: {
     provider?: string;
     model?: string;

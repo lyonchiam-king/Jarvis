@@ -1033,7 +1033,11 @@ def test_the_withdrawn_message_relays_the_providers_own_replacement():
 
 def test_no_replacement_model_name_is_written_into_the_code():
     """Relayed from the API, never hardcoded. A name that is correct today
-    404s in a month, and nothing here can check one."""
+    404s in a month, and nothing here can check one.
+
+    Absolute, including prose: a name in a comment is one a later reader
+    copies into a config, and this module is where the rule lives.
+    """
     from pathlib import Path
 
     import outreach.providers.llm as llm_module
@@ -1096,3 +1100,143 @@ def test_a_body_that_is_not_json_still_reaches_the_reader():
     message = _explain_http(502, "upstream connect error", "https://x/y", "m")
 
     assert "upstream connect error" in message
+
+
+# --- asking the key what it has ---------------------------------------------
+#
+# The rule that no model name may be written into this code was only half a
+# policy: there was nowhere for the owner to get a real one. `list-models`
+# spoke to Gemini alone, for the site builder, and only from a terminal.
+
+
+class _Resp:
+    def __init__(self, status=200, payload=None, text=""):
+        self.status_code = status
+        self._payload = payload
+        self.text = text or _json.dumps(payload or {})
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("not json")
+        return self._payload
+
+
+def _ollama_config():
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    return replace(
+        config,
+        research=replace(
+            config.research, provider="ollama-cloud",
+            base_url="https://ollama.com/v1", model="whatever",
+        ),
+        secrets=replace(config.secrets, llm_api_key="k"),
+    )
+
+
+def test_the_catalogue_comes_from_the_users_own_key(monkeypatch):
+    """The only authority on what works. Anything written here is a guess
+    with a shelf life."""
+    import outreach.providers.llm as llm_module
+
+    seen = {}
+
+    def fake_get(url, headers=None, timeout=None):
+        seen.update(url=url, auth=headers.get("Authorization"))
+        return _Resp(payload={"data": [{"id": "b-model"}, {"id": "a-model"}]})
+
+    monkeypatch.setattr("requests.get", fake_get)
+
+    names = llm_module.available_models(_ollama_config())
+
+    assert names == ["a-model", "b-model"], "sorted -- forty names are read by eye"
+    assert seen["url"] == "https://ollama.com/v1/models"
+    assert seen["auth"] == "Bearer k"
+
+
+def test_a_provider_that_spells_it_name_is_still_read(monkeypatch):
+    """Both spellings are in the wild. Reading only `id` would return a list
+    of blanks, which reads as "your key has no models" and sends someone to
+    rotate a key that is perfectly good."""
+    import outreach.providers.llm as llm_module
+
+    monkeypatch.setattr(
+        "requests.get",
+        lambda *a, **k: _Resp(payload={"data": [{"name": "x"}, {"name": "y"}]}),
+    )
+
+    assert llm_module.available_models(_ollama_config()) == ["x", "y"]
+
+
+def test_a_bare_list_of_strings_is_read(monkeypatch):
+    """Some self-hosted gateways answer with the names and nothing else."""
+    import outreach.providers.llm as llm_module
+
+    monkeypatch.setattr("requests.get", lambda *a, **k: _Resp(payload=["z", "a"]))
+
+    assert llm_module.available_models(_ollama_config()) == ["a", "z"]
+
+
+def test_the_catalogue_explains_a_rejected_key(monkeypatch):
+    """A bare 401 sends someone hunting for a broken provider."""
+    import outreach.providers.llm as llm_module
+
+    monkeypatch.setattr(
+        "requests.get", lambda *a, **k: _Resp(status=401, text="nope")
+    )
+
+    with pytest.raises(LLMError) as err:
+        llm_module.available_models(_ollama_config())
+
+    assert "rejected the API key" in str(err.value)
+
+
+def test_the_catalogue_says_which_key_is_missing(monkeypatch):
+    """Named, because the .env line is the fix and there are five of them."""
+    import outreach.providers.llm as llm_module
+
+    config = _ollama_config()
+    config = replace(config, secrets=replace(config.secrets, llm_api_key=""))
+
+    with pytest.raises(LLMError) as err:
+        llm_module.available_models(config)
+
+    assert "OLLAMA_API_KEY" in str(err.value)
+
+
+def test_a_catalogue_that_is_not_json_is_not_a_crash(monkeypatch):
+    """A proxy or a captive portal answers with HTML."""
+    import outreach.providers.llm as llm_module
+
+    monkeypatch.setattr(
+        "requests.get", lambda *a, **k: _Resp(payload=None, text="<html>")
+    )
+
+    with pytest.raises(LLMError) as err:
+        llm_module.available_models(_ollama_config())
+
+    assert "did not answer with JSON" in str(err.value)
+
+
+def test_local_ollama_is_asked_without_a_key(monkeypatch):
+    """It takes none, which is why it is absent from PROVIDER_KEY_ENV."""
+    import outreach.providers.llm as llm_module
+
+    seen = {}
+
+    def fake_get(url, headers=None, timeout=None):
+        seen.update(headers=headers)
+        return _Resp(payload={"data": [{"id": "local"}]})
+
+    monkeypatch.setattr("requests.get", fake_get)
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(
+        config,
+        research=replace(
+            config.research, provider="ollama",
+            base_url="http://localhost:11434/v1", model="m",
+        ),
+        secrets=replace(config.secrets, llm_api_key=""),
+    )
+
+    assert llm_module.available_models(config) == ["local"]
+    assert "Authorization" not in seen["headers"]

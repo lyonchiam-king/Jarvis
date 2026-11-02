@@ -1157,6 +1157,36 @@ def create_app(config: Config) -> Flask:
             }
         )
 
+    @app.route("/api/model/catalogue")
+    def api_model_catalogue():
+        """Which models this campaign's own key can actually use.
+
+        The rule has always been that no model name may be written into this
+        code, because a name correct today 404s in a month. What was missing
+        was the other half: a way for the owner to *ask*. `outreach
+        list-models` speaks only to Gemini, for the site builder, and it is a
+        terminal command -- so when the model his campaign named was retired,
+        the tool said what was wrong and he had nowhere to look up the answer.
+
+        Never cached. A catalogue is exactly the thing that changes between
+        the time it was fetched and the moment it is wrong.
+        """
+        from .providers.llm import LLMError, available_models
+
+        c = current()
+        try:
+            names = available_models(c)
+        except LLMError as exc:
+            return jsonify({"error": str(exc)}), 200
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
+        return jsonify({
+            "provider": c.research.provider,
+            "models": names,
+            "model": c.research.model,
+            "outreach_model": c.outreach.model,
+        })
+
     @app.route("/api/model", methods=["POST"])
     def api_set_model():
         """Change provider/model, and optionally store that provider's key.
@@ -5317,18 +5347,24 @@ function drawModel(editing) {
       border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)">
       ${options}</select>
     <label class="sub" for="m-model">Model</label>
-    <input id="m-model" style="width:100%;margin:5px 0 4px" value="${esc(m.model)}"
-           placeholder="claude-opus-5">
-    <p class="hint" style="margin:0 0 14px">e.g. <code>kimi-k2.6</code> on
-      ollama-cloud, <code>moonshotai/kimi-k2-thinking</code> on openrouter,
-      <code>gemini-2.5-flash</code> on gemini, <code>claude-opus-5</code> on
-      anthropic.</p>
+    <input id="m-model" style="width:100%;margin:5px 0 4px" value="${esc(m.model)}">
+    <p class="hint" style="margin:0 0 8px">Used for research, the site brief and
+      the infographic prompt. No example is printed here on purpose: a model
+      name that is right today stops working without warning, so the only
+      honest list is the one your own key answers with.</p>
+    <div class="row" style="margin:0 0 6px">
+      <button type="button" onclick="loadCatalogue()">Show the models my key has</button>
+      <span class="sub" id="m-cat-msg"></span>
+    </div>
+    <div id="m-catalogue" style="margin:0 0 14px"></div>
     <label class="sub" for="m-omodel">Message model <span class="sub">(optional)</span></label>
     <input id="m-omodel" style="width:100%;margin:5px 0 4px" value="${esc(m.outreach_model || '')}"
            placeholder="blank = use the model above">
     <p class="hint" style="margin:0 0 14px">A smaller model that only writes the
-      email + WhatsApp text. Blank means it uses the model above. Set this to
-      cut the token cost of drafting.</p>
+      email + WhatsApp text &mdash; <b>every</b> message, the website ones and
+      the infographic ones alike. There is no separate model for the picture
+      messages. Blank means it uses the model above. Set this to cut the token
+      cost of drafting.</p>
     <label class="sub" for="m-key">API key <span id="m-keyenv"></span></label>
     <input id="m-key" type="password" autocomplete="off" style="width:100%;margin:5px 0 4px"
            placeholder="leave blank to keep the current one">
@@ -5345,6 +5381,47 @@ function drawModel(editing) {
       <button onclick="drawModel(false)">Cancel</button>
       <span class="sub" id="m-msg"></span>
     </div>`;
+}
+
+async function loadCatalogue() {
+  const box = $('#m-catalogue'), note = $('#m-cat-msg');
+  if (!box) return;
+  note.textContent = 'Asking your provider\u2026';
+  box.innerHTML = '';
+  let d;
+  try {
+    d = await (await fetch('/api/model/catalogue')).json();
+  } catch { d = {error: 'Could not reach the dashboard'}; }
+  if (d.error) {
+    note.textContent = '';
+    box.innerHTML = `<div class="long-err">${esc(d.error)}</div>`;
+    return;
+  }
+  const names = d.models || [];
+  if (!names.length) {
+    note.textContent = '';
+    box.innerHTML = '<div class="sub">Your key sees no models at all. '
+      + 'That usually means the key belongs to a different provider.</div>';
+    return;
+  }
+  note.textContent = names.length + ' from ' + d.provider;
+  // Clickable, because the whole point is that nobody should be retyping a
+  // name they read off a screen -- that is how a typo becomes a 404 that
+  // looks like a retired model.
+  box.innerHTML = '<div style="max-height:220px;overflow:auto;border:1px solid var(--line);'
+    + 'border-radius:8px;padding:6px">'
+    + names.map(n => `<div class="row" style="justify-content:space-between;gap:8px;padding:2px 0">
+         <code style="overflow-wrap:anywhere">${esc(n)}</code>
+         <span class="row" style="gap:6px">
+           <button type="button" onclick="pickModel('m-model', '${esc(n)}')">Use</button>
+           <button type="button" onclick="pickModel('m-omodel', '${esc(n)}')">For messages</button>
+         </span></div>`).join('')
+    + '</div>';
+}
+
+function pickModel(field, name) {
+  const el = $('#' + field);
+  if (el) { el.value = name; el.focus(); }
 }
 
 async function saveModel() {

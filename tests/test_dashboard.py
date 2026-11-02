@@ -3391,7 +3391,7 @@ _VIZ_DOM = """
         innerHTML: '', textContent: '', value: '', className: '',
         disabled: false, hidden: false, style: {},
         classList: {add(){}, remove(){}},
-        select(){}, querySelector: () => null,
+        select(){}, focus(){}, querySelector: () => null,
       };
       return _registry[sel];
     }
@@ -4235,3 +4235,127 @@ def test_a_lead_with_no_page_built_is_never_flagged(monkeypatch):
     assert client.get("/api/whatsapp/queue").get_json()["queue"][0][
         "stale_pitch"
     ] is False
+
+
+# ------------------------------------- asking the key which models it has
+
+
+def _model_client(monkeypatch):
+    monkeypatch.setattr(dash, "_sheets_client", lambda config: _GuardedSheets())
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    config = replace(config, secrets=replace(config.secrets, sheet_id="s"))
+    return create_app(config).test_client()
+
+
+def test_the_catalogue_endpoint_answers_with_the_names(monkeypatch):
+    """A terminal command the owner cannot run is not an answer, and
+    `list-models` only ever spoke to Gemini anyway."""
+    monkeypatch.setattr(
+        "outreach.providers.llm.available_models", lambda c: ["a", "b"]
+    )
+    client = _model_client(monkeypatch)
+
+    body = client.get("/api/model/catalogue").get_json()
+
+    assert body["models"] == ["a", "b"]
+
+
+def test_the_catalogue_endpoint_reports_a_refusal_rather_than_500(monkeypatch):
+    """The page can only render a 500 as "could not reach the dashboard",
+    which is a different problem entirely."""
+    from outreach.providers.llm import LLMError
+
+    def boom(_c):
+        raise LLMError("that key was rejected")
+
+    monkeypatch.setattr("outreach.providers.llm.available_models", boom)
+    client = _model_client(monkeypatch)
+
+    res = client.get("/api/model/catalogue")
+
+    assert res.status_code == 200
+    assert "rejected" in res.get_json()["error"]
+
+
+def test_the_model_panel_can_ask_and_fills_the_box_when_clicked():
+    """Retyping a name read off a screen is how a typo becomes a 404 that
+    looks exactly like a retired model.
+
+    The stub DOM has no real buttons, so the handlers are lifted out of the
+    HTML the page built and run -- which is what proves they name the right
+    function and the right field, rather than that a string was concatenated.
+    """
+    out = _run_in_node(_VIZ_DOM + """
+    globalThis.fetch = async (u) => ({json: async () => (
+      String(u).includes('catalogue')
+        ? {provider: 'ollama-cloud', models: ['alpha:cloud', 'beta:cloud']}
+        : {provider: 'ollama-cloud', model: 'old:cloud', outreach_model: '',
+           providers: ['ollama-cloud'], key_env: 'OLLAMA_API_KEY',
+           key_needed: true, key_set: true, base_url: '', guaranteed: false}
+    )});
+    await loadModel();
+    drawModel(true);
+    await loadCatalogue();
+    const html = _el('#m-catalogue').innerHTML;
+    const handlers = [...html.matchAll(/onclick="([^"]+)"/g)].map(m => m[1]);
+    // The stub does not parse innerHTML, so the input's starting value is
+    // not readable here -- what matters is that these handlers write to it.
+    eval(handlers[0]);
+    eval(handlers[1]);
+    console.log(JSON.stringify({
+      html, note: _el('#m-cat-msg').textContent, handlers: handlers.length,
+      model: _el('#m-model').value, message: _el('#m-omodel').value,
+    }));
+    """)
+    d = __import__("json").loads(out)
+    assert "alpha:cloud" in d["html"] and "beta:cloud" in d["html"]
+    assert "2 from ollama-cloud" in d["note"]
+    assert d["handlers"] == 4, "two names, two buttons each"
+    # The first row's two buttons: the model, and the message model.
+    assert d["model"] == "alpha:cloud"
+    assert d["message"] == "alpha:cloud"
+
+
+def test_the_model_panel_shows_why_the_catalogue_failed():
+    """"Nothing happened" is the one report a person can make otherwise."""
+    out = _run_in_node(_VIZ_DOM + """
+    globalThis.fetch = async (u) => ({json: async () => (
+      String(u).includes('catalogue')
+        ? {error: 'OLLAMA_API_KEY is not set in .env.'}
+        : {provider: 'ollama-cloud', model: 'm', outreach_model: '',
+           providers: ['ollama-cloud'], key_env: 'OLLAMA_API_KEY',
+           key_needed: false, key_set: false, base_url: '', guaranteed: false}
+    )});
+    await loadModel();
+    drawModel(true);
+    await loadCatalogue();
+    console.log(JSON.stringify({html: _el('#m-catalogue').innerHTML}));
+    """)
+    assert "OLLAMA_API_KEY is not set" in __import__("json").loads(out)["html"]
+
+
+def test_the_model_panel_prints_no_example_model_name():
+    """Four were hardcoded as placeholders. Each is a name with a shelf life
+    sitting on the one screen somebody copies from."""
+    page = dash.PAGE if hasattr(dash, "PAGE") else ""
+    if not page:
+        import outreach.dashboard as _d
+        page = _d._page() if hasattr(_d, "_page") else ""
+    assert "kimi-k2" not in page
+    assert "gemini-2.5-flash" not in page
+
+
+def test_the_message_model_says_it_writes_both_kinds_of_message():
+    """Asked outright: does the writing model cover the website message and
+    the picture message? It does -- there is no third model."""
+    out = _run_in_node(_VIZ_DOM + """
+    globalThis.fetch = async () => ({json: async () => (
+      {provider: 'anthropic', model: 'm', outreach_model: '',
+       providers: ['anthropic'], key_env: 'ANTHROPIC_API_KEY',
+       key_needed: true, key_set: true, base_url: '', guaranteed: true})});
+    await loadModel();
+    drawModel(true);
+    console.log(JSON.stringify({html: _el('#model').innerHTML}));
+    """)
+    html = " ".join(__import__("json").loads(out)["html"].split())
+    assert "the website ones and the infographic ones alike" in html

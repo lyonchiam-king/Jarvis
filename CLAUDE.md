@@ -64,7 +64,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1635 tests, pytest, no CI -- the suite is the only gate
+tests/             1648 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -1441,6 +1441,39 @@ read first and restored on any exception. The order stays as it was, because
 the LLM call precedes every write in `regenerate_one`: a failure there means
 no message changed, so putting the status back is exact rather than
 approximate.
+
+**"Never write a model name" was only half a policy.** The rule has been
+here from the start, and the thing it implies -- that the owner can look one
+up instead -- was never built. `outreach list-models` speaks only to Gemini,
+for `build.model`, and is a terminal command besides, so on the morning a
+provider retired the model this campaign named there was no answer available
+to him anywhere, at the moment every message had stopped being written.
+`available_models` asks the campaign's own provider, which is the only
+authority: `GET /models` for everything OpenAI-compatible, the SDK's own
+`models.list` for Anthropic, so a hand-rolled `anthropic-version` is not a
+second shelf-life string in the function written because the first expired.
+Never cached -- a catalogue is exactly the thing that is wrong by the time
+you read it. The names are **clickable** on both pages, because retyping one
+read off a screen is how a typo becomes a 404 indistinguishable from a
+retirement. Four example model names came out of the old page's placeholders
+in the same change: a name with a shelf life, printed on the one screen
+somebody copies from.
+
+**The message model writes both pitches, and the React page let you edit
+neither.** `outreach_model` was read by `client.ts` from the beginning and
+rendered by nothing, so it could only be changed from the other page -- the
+`wa_link` shape again, and the three unwired `render_lovable_prompt` sites.
+It is sent explicitly on save rather than omitted, because blank is a real
+value here meaning "use the research model", and an absent field means
+"leave it alone". Asked outright, so both pages now say it: one model writes
+the website messages and the infographic messages alike. There is no third.
+
+**A prefix-matching fixture answers for its own longer paths.**
+`render-check`'s stub picks the first key the URL *starts with*, in insertion
+order, so `/api/model` answered for `/api/model/catalogue` -- the view got a
+payload with no `models`, threw in render, and the failure surfaced as
+`document.body` being null three assertions later. Longest path first, and
+the comment says why.
 
 **A withdrawn model is permanent, and arrives dressed as a bad minute.**
 Ollama answered HTTP 410 with the sentence "deepseek-v4-flash:0731 was

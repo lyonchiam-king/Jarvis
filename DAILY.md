@@ -1029,12 +1029,33 @@ The model your campaign names has been withdrawn by whoever hosts it. It is
 not a bad minute and it will not clear by waiting — that model is gone.
 
 The error now says so, and passes on the provider's own sentence, which
-usually names a replacement. Open **Settings**, press **Change** beside the
-model, type the one it suggested, and press **Test it**.
+usually names a replacement.
 
-Nothing in Jarvis guesses a model name for you: a name that is right today
-404s in a month, and this tool cannot check one. The provider is the only
-thing that knows, so what you see is what it said.
+To fix it: **Settings** → **Change** beside the model → **Show the models my
+key has**. That list is fetched from your own provider with your own key, so
+it is the only list that is true today. Click **Use** beside the one you
+want, then **Save**, then **Test it**.
+
+Nothing in Jarvis guesses a model name for you, and none is printed anywhere
+as an example: a name that is right today stops working without warning, and
+this tool cannot check one. Clicking a name from that list also means you are
+never retyping it — a typo produces a 404 that looks exactly like another
+retirement.
+
+### Which model writes what
+
+There are two, and that is all:
+
+| Setting | What it does |
+|---|---|
+| **Model** | Research, the site brief, and the infographic prompt. |
+| **Message Model** | Every outreach message — the website ones **and** the infographic ones. Leave it blank to use the one above. |
+
+So yes: the writing model covers both pitches. There is no separate model for
+the picture messages, and nothing else to set up when you switch tracks.
+
+If the message model is blank, the retired-model error is about the **Model**
+field. If it is filled in, it is about that one.
 
 Pressing **Write a new message for this picture** again before changing the
 model will fail in exactly the same way.

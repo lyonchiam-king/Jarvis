@@ -162,7 +162,7 @@ class Devtools {
       // description carries the message and the stack.
       const detail = result.exceptionDetails;
       const described = detail.exception && detail.exception.description;
-      throw new Error(String(described || detail.text).slice(0, 400));
+      throw new Error(String(described || detail.text).slice(0, 1200));
     }
     return result.result.value;
   }
@@ -328,6 +328,21 @@ try {
         },
       ],
       excluded: [],
+    },
+    // The model settings, and the catalogue its button asks for. No model
+    // name is written into Jarvis anywhere -- which left nowhere to look one
+    // up the morning a provider retired the one this campaign named.
+    // Longest path first: the stub matches by prefix in insertion order, so
+    // '/api/model' listed above would answer for the catalogue too.
+    '/api/model/catalogue': {
+      provider: 'ollama-cloud',
+      models: ['alpha-model:cloud', 'beta-model:cloud'],
+    },
+    '/api/model': {
+      provider: 'ollama-cloud', model: 'retired-one:cloud', outreach_model: '',
+      base_url: '', providers: ['anthropic', 'ollama-cloud', 'openrouter'],
+      key_env: 'OLLAMA_API_KEY', key_needed: true, key_set: true,
+      places_key_set: true, guaranteed: false,
     },
     '/api/campaign': {
       category: 'beauty salon', location: 'London, UK',
@@ -910,6 +925,68 @@ try {
   }
   if (!/pre-wrap|pre-line/.test(repair.wraps)) {
     fail(`the multi-line message is collapsed (white-space: ${repair.wraps})`);
+  }
+
+  // Settings: the message model, and the one control that answers "which
+  // model should I use now". Both arrived as fields the client read and
+  // nothing rendered, so neither could be changed from this page at all.
+  await dt.evaluate(`document.getElementById('nav-item-settings').click()`);
+  await new Promise((r) => setTimeout(r, 700));
+  const settings = await dt.evaluate(`(() => {
+    const message = document.getElementById('settings-outreach-model');
+    const button = document.getElementById('settings-catalogue-btn');
+    return {
+      hasMessageModel: !!message,
+      hasButton: !!button,
+      body: (document.body.innerText || '').replace(/\\s+/g, ' '),
+    };
+  })()`);
+  if (!settings.hasMessageModel) {
+    fail('Settings offers no message-model field, so it can only be changed elsewhere');
+  }
+  if (!settings.hasButton) {
+    fail('Settings offers no way to ask which models the key has');
+  }
+  if (!/the website ones and the infographic ones alike/.test(settings.body)) {
+    fail('Settings does not say the message model writes both kinds of message');
+  }
+
+  await dt.evaluate(`document.getElementById('settings-catalogue-btn').click()`);
+  await new Promise((r) => setTimeout(r, 600));
+  // Clicked in its own step: React commits on the next render, so reading
+  // the input in the same expression reads the value from before the click.
+  const clicked = await dt.evaluate(`(() => {
+    const list = document.getElementById('settings-catalogue');
+    const use = document.getElementById('settings-pick-model-alpha-model:cloud');
+    const forMessages = document.getElementById('settings-pick-message-beta-model:cloud');
+    if (use) use.click();
+    if (forMessages) forMessages.click();
+    return {
+      listed: list ? (list.innerText || '').replace(/\\s+/g, ' ') : '',
+      found: !!use && !!forMessages,
+    };
+  })()`);
+  await new Promise((r) => setTimeout(r, 400));
+  const picked = await dt.evaluate(`(() => {
+    const model = document.getElementById('settings-model');
+    const message = document.getElementById('settings-outreach-model');
+    return {
+      model: model ? model.value : '',
+      message: message ? message.value : '',
+    };
+  })()`);
+  picked.listed = clicked.listed;
+  if (!clicked.found) fail('the catalogue rendered no pick buttons');
+  if (!/alpha-model:cloud/.test(picked.listed) || !/beta-model:cloud/.test(picked.listed)) {
+    fail(`the catalogue listed ${JSON.stringify(picked.listed)}`);
+  }
+  // Clicking has to fill the box: retyping a name read off a screen is how a
+  // typo becomes a 404 that looks exactly like a retired model.
+  if (picked.model !== 'alpha-model:cloud') {
+    fail(`Use did not fill the model box -- it reads ${JSON.stringify(picked.model)}`);
+  }
+  if (picked.message !== 'beta-model:cloud') {
+    fail(`For messages did not fill its box -- it reads ${JSON.stringify(picked.message)}`);
   }
 
   // Results, which is new and entirely derived from the summary.

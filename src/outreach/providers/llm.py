@@ -2529,9 +2529,11 @@ def _explain_http(status: int, body: str, url: str, model: str = "") -> str:
             f"{named}has been withdrawn by the provider, so nothing here can "
             "use it again. The provider says:\n\n"
             f"{detail}\n\n"
-            "Open Settings, press Change beside the model, enter one that is "
-            "still offered, and press Test it. Running this again without "
-            "changing it will fail in exactly the same way."
+            "Open Settings, press Change beside the model, then press Show "
+            "the models my key has -- that list comes from your own provider, "
+            "so it is the only one that is true today. Pick one and press "
+            "Test it. Running this again without changing it will fail in "
+            "exactly the same way."
         )
     if status in (401, 403):
         return (
@@ -2548,6 +2550,102 @@ def _explain_http(status: int, body: str, url: str, model: str = "") -> str:
     if status == 429:
         return f"Rate limited by {url} (HTTP 429).\n{detail}"
     return f"{url} returned HTTP {status}.\n{detail}"
+
+
+def available_models(config: Any) -> list[str]:
+    """Ask this campaign's provider which models its key can actually use.
+
+    The oldest rule in this project is that no model name may be written into
+    config from here, because a name correct today 404s in a month and nothing
+    in this container can check one. The corollary nobody had built: the owner
+    had no way to *ask* either. `outreach list-models` only ever spoke to
+    Gemini, for `build.model`, and it is a terminal command besides -- so the
+    morning a provider retired the model this campaign named, there was no
+    answer available to him anywhere, at the moment every message had stopped
+    being written. The guard that keeps a name out of this module is only
+    half a policy without somewhere to get a real one.
+
+    Every provider here but Anthropic is OpenAI-compatible and answers
+    `GET /models`; Anthropic has its own path and its own header. Returned
+    sorted, because a provider's own ordering is arbitrary and a list of
+    forty names is read by eye.
+    """
+    provider = config.research.provider
+    if provider == "anthropic":
+        return _anthropic_models(config.secrets.anthropic_api_key)
+
+    from ..config import PROVIDER_KEY_ENV
+
+    key = config.secrets.llm_api_key
+    if provider != "ollama" and not key:
+        raise LLMError(
+            f"research.provider is {provider!r} but "
+            f"{PROVIDER_KEY_ENV.get(provider, 'the API key')} is not set in .env."
+        )
+    base_url = (config.research.base_url or "").rstrip("/")
+    if not base_url:
+        raise LLMError("No base_url for this provider -- set research.base_url.")
+    headers = {"Accept": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    return _model_names(f"{base_url}/models", headers, "data")
+
+
+def _anthropic_models(key: str) -> list[str]:
+    """Through the SDK, which owns the version header and the pagination.
+
+    A hand-rolled request here would hardcode `anthropic-version`, which is a
+    second string with a shelf life in a function written because the first
+    one expired.
+    """
+    if not key:
+        raise LLMError("ANTHROPIC_API_KEY is not set in .env.")
+    try:
+        import anthropic
+    except ImportError as exc:
+        raise LLMError("The `anthropic` package is not installed") from exc
+    try:
+        page = anthropic.Anthropic(api_key=key).models.list(limit=100)
+    except Exception as exc:  # noqa: BLE001
+        raise LLMError(f"{type(exc).__name__}: {exc}") from exc
+    return sorted(
+        {m.id for m in getattr(page, "data", []) if getattr(m, "id", "")}
+    )
+
+
+def _model_names(url: str, headers: dict[str, str], container: str) -> list[str]:
+    """The names, out of whichever envelope this provider uses.
+
+    Reads `id` and falls back to `name`: both spellings are in the wild, and a
+    provider using the other one would otherwise return a list of blanks --
+    which reads as "your key has no models" and sends someone to rotate a key
+    that is perfectly good.
+    """
+    import requests
+
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+    except Exception as exc:  # noqa: BLE001
+        raise LLMError(f"Could not reach {url}: {type(exc).__name__}: {exc}") from exc
+    if response.status_code != 200:
+        raise LLMError(_explain_http(response.status_code, response.text, url))
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise LLMError(f"{url} did not answer with JSON: {exc}") from exc
+
+    rows = payload.get(container) if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        raise LLMError(f"{url} answered in an unexpected shape.")
+    names = set()
+    for row in rows:
+        if isinstance(row, str):
+            names.add(row.strip())
+        elif isinstance(row, dict):
+            name = row.get("id") or row.get("name") or ""
+            if isinstance(name, str) and name.strip():
+                names.add(name.strip())
+    return sorted(n for n in names if n)
 
 
 def make_writer(config: Any, *, model: str | None = None) -> _Writer:

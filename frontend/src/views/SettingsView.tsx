@@ -23,6 +23,13 @@ export const SettingsView: React.FC = () => {
   // Inputs
   const [provider, setProvider] = useState('');
   const [model, setModel] = useState('');
+  // The model that writes every message -- the website ones and the
+  // infographic ones alike. Read by the client since the beginning and
+  // rendered by nothing, so it could only be changed from the other page.
+  const [outreachModel, setOutreachModel] = useState('');
+  const [catalogue, setCatalogue] = useState<string[] | null>(null);
+  const [catalogueMsg, setCatalogueMsg] = useState<string | null>(null);
+  const [catalogueLoading, setCatalogueLoading] = useState(false);
   const [placesKeyInput, setPlacesKeyInput] = useState('');
   const [modelKeyInput, setModelKeyInput] = useState('');
 
@@ -41,6 +48,7 @@ export const SettingsView: React.FC = () => {
       setModelSettings(mRes.data);
       setProvider(mRes.data.provider);
       setModel(mRes.data.model);
+      setOutreachModel(mRes.data.outreach_model);
     }
     if (wRes.data) {
       setWhatsappStatus(wRes.data);
@@ -58,6 +66,9 @@ export const SettingsView: React.FC = () => {
     const res = await api.saveModel({
       provider,
       model,
+      // Sent explicitly. Blank is a real value here -- it means "use the
+      // model above" -- so it cannot be omitted the way an absent field is.
+      outreach_model: outreachModel,
       places_key: placesKeyInput || undefined,
       api_key: modelKeyInput || undefined,
     });
@@ -69,6 +80,26 @@ export const SettingsView: React.FC = () => {
     setSaveMsg(res.error ? `Not saved -- ${res.error}` : 'Saved.');
     setTimeout(() => setSaveMsg(null), 6000);
     loadData();
+  };
+
+  const loadCatalogue = async () => {
+    setCatalogueLoading(true);
+    setCatalogue(null);
+    setCatalogueMsg(null);
+    const res = await api.getModelCatalogue();
+    setCatalogueLoading(false);
+    if (res.error) {
+      setCatalogueMsg(res.error);
+      return;
+    }
+    const names = res.data?.models || [];
+    setCatalogue(names);
+    if (!names.length) {
+      setCatalogueMsg(
+        'Your key sees no models at all. That usually means it belongs to a ' +
+          'different provider than the one selected above.'
+      );
+    }
   };
 
   const handleTestKey = async (type: 'places' | 'model') => {
@@ -167,13 +198,98 @@ export const SettingsView: React.FC = () => {
               Model Identifier
             </label>
             <input
+              id="settings-model"
               type="text"
               value={model}
               onChange={(e) => setModel(e.target.value)}
               placeholder="exact model name"
               className="w-full p-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 font-mono"
             />
+            <p className="text-[11px] text-slate-500 mt-1">
+              Research, the site brief and the infographic prompt. No example
+              is printed here on purpose: a model name that is right today
+              stops working without warning, so the only honest list is the
+              one your own key answers with.
+            </p>
           </div>
+
+          <div>
+            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Message Model <span className="font-normal text-slate-500">(optional)</span>
+            </label>
+            <input
+              id="settings-outreach-model"
+              type="text"
+              value={outreachModel}
+              onChange={(e) => setOutreachModel(e.target.value)}
+              placeholder="blank = use the model above"
+              className="w-full p-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 font-mono"
+            />
+            <p className="text-[11px] text-slate-500 mt-1">
+              Writes every message &mdash; the website ones and the infographic
+              ones alike. There is no separate model for the picture messages.
+              Blank means it uses the model above.
+            </p>
+          </div>
+        </div>
+
+        {/* The other half of "never write a model name into this tool": a way
+            to ask. Without it, a retired model left nowhere to look up a
+            replacement at the moment every message had stopped being written. */}
+        <div className="mt-4 space-y-2">
+          <button
+            id="settings-catalogue-btn"
+            onClick={loadCatalogue}
+            disabled={catalogueLoading}
+            className="px-3.5 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-[12px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 studio-transition disabled:opacity-50"
+          >
+            {catalogueLoading ? 'Asking your provider...' : 'Show the models my key has'}
+          </button>
+
+          {catalogueMsg && (
+            <p
+              id="settings-catalogue-error"
+              className="text-[11px] text-amber-700 dark:text-amber-300 whitespace-pre-wrap"
+            >
+              {catalogueMsg}
+            </p>
+          )}
+
+          {catalogue && catalogue.length > 0 && (
+            <div
+              id="settings-catalogue"
+              className="max-h-56 overflow-auto rounded-lg border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800"
+            >
+              {catalogue.map((name) => (
+                <div
+                  key={name}
+                  className="flex items-center justify-between gap-2 px-2.5 py-1.5"
+                >
+                  <code className="text-[11px] font-mono text-slate-700 dark:text-slate-300 break-all">
+                    {name}
+                  </code>
+                  <span className="flex gap-1.5 shrink-0">
+                    {/* Clickable, because retyping a name read off a screen is
+                        how a typo becomes a 404 that looks like a retirement. */}
+                    <button
+                      id={`settings-pick-model-${name}`}
+                      onClick={() => setModel(name)}
+                      className="px-2 py-1 rounded-md bg-emerald-500 text-slate-950 text-[11px] font-semibold hover:bg-emerald-400 studio-transition"
+                    >
+                      Use
+                    </button>
+                    <button
+                      id={`settings-pick-message-${name}`}
+                      onClick={() => setOutreachModel(name)}
+                      className="px-2 py-1 rounded-md border border-slate-300 dark:border-slate-700 text-[11px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 studio-transition"
+                    >
+                      For messages
+                    </button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
