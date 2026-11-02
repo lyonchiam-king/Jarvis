@@ -4439,3 +4439,66 @@ def test_a_sent_graphic_is_not_in_the_working_lists():
     assert "Sent (1)" in d["tabs"]
     assert "Nothing in this list" in d["inAll"]
     assert "Your Nail Crush" in d["inSent"]
+
+
+def test_a_held_card_offers_the_repair_where_the_problem_is_read():
+    """"It still doesn't show any button" -- the repair existed, in step 4's
+    excluded list, which is a different screen from the one saying the
+    message is ready."""
+    html = _open_ready(_checked(
+        message="About your picture.",
+        in_send_queue=False, can_unblock=True,
+        send_hold="its Outreach Log row does not say Drafted",
+    ))
+    assert "Put it in step 4" in html
+    assert "unblockViz(" in html
+
+
+def test_a_hold_no_button_can_fix_offers_none():
+    """A button beside "it has no phone number" would press and change
+    nothing, which reads as the dashboard being broken."""
+    html = _open_ready(_checked(
+        message="About your picture.",
+        in_send_queue=False, can_unblock=False,
+        send_hold="there is no phone number on its Leads row",
+    ))
+    assert "Put it in step 4" not in html
+    assert "no phone number" in html
+
+
+def test_every_drafted_card_can_be_rewritten():
+    """Asked for by name. It was only ever offered on an already-sent lead,
+    where the old words are about a different pitch -- but a message you
+    simply do not like is the same problem with no button."""
+    html = _open_ready(_checked(message="About your picture."))
+    assert "Rewrite this message" in html
+    assert "redraftViz(" in html
+
+
+def test_pressing_the_repair_redraws_both_panels():
+    """The card stops saying it is held and step 4 grows a row. Redrawing one
+    and not the other is how a page ends up disagreeing with itself."""
+    payload = _checked(message="About your picture.", in_send_queue=False,
+                       can_unblock=True, send_hold="it is not Drafted")
+    out = _run_in_node(_VIZ_DOM + f"""
+    // The page defines its own loadWhatsAppInline, which shadows anything
+    // put on globalThis -- so the refresh is observed by the request it
+    // makes rather than by a stub it never sees.
+    const calls = [];
+    globalThis.fetch = async (u, opts) => {{
+      calls.push(String(u));
+      return {{json: async () => (String(u).includes('undo-send')
+        ? {{ok: true, cleared: ['Status (Skipped -> Drafted)']}}
+        : {payload})}};
+    }};
+    await loadVisual();
+    vizSetFilter('ready');
+    vizToggle('LEAD-1');
+    await unblockViz('LEAD-1');
+    console.log(JSON.stringify({{calls}}));
+    """)
+    calls = __import__("json").loads(out)["calls"]
+    assert any("undo-send" in c for c in calls)
+    after = calls[calls.index(next(c for c in calls if "undo-send" in c)) + 1:]
+    assert any("/api/visual/queue" in c for c in after), "the card was not redrawn"
+    assert any("/api/whatsapp/queue" in c for c in after), "step 4 was not refreshed"

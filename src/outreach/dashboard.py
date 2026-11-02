@@ -2535,6 +2535,10 @@ def create_app(config: Config) -> Flask:
                     # was the one screen that could not say so.
                     "in_send_queue": bool(where.get("queued")),
                     "send_hold": "" if where.get("queued") else where.get("reason", ""),
+                    # Whether the one repair this dashboard has would fix it.
+                    # A button offered beside "it has no phone number" would
+                    # press and change nothing, which reads as broken.
+                    "can_unblock": bool(where.get("fixable")),
                     "created_at": row.get("Created At", ""),
                 }
             )
@@ -2544,6 +2548,13 @@ def create_app(config: Config) -> Flask:
     # Why a lead with a confirmed picture is not in step 4, in words rather
     # than a code. Keyed by the reason step 4 itself records, so the two
     # cannot describe the same lead differently.
+    # The two holds **Send again** actually repairs -- it clears the send
+    # status and restores Status to Drafted, and nothing else. The other
+    # reasons need the lead fixing (a phone number, a Leads row) or are a
+    # different channel entirely, and a button promising to undo one of
+    # those would not work. Same list step 4's own excluded rows use.
+    _UNBLOCKABLE = ("status_not_drafted", "already_sent")
+
     _SEND_HOLD_WORDS: dict[str, str] = {
         "already_sent": "already sent from step 4",
         "status_not_drafted": "its Outreach Log row does not say Drafted",
@@ -2584,15 +2595,18 @@ def create_app(config: Config) -> Flask:
         except Exception as exc:  # noqa: BLE001
             log.warning("Could not work out the send position: %s", exc)
             return {}
-        position = {m["lead_id"]: {"queued": True, "reason": ""} for m in queue}
+        position = {
+            m["lead_id"]: {"queued": True, "reason": "", "fixable": False}
+            for m in queue
+        }
         for row in excluded:
             # A lead cannot be in both, but if step 4 ever offered one it
             # also excluded, being in the queue is the fact that matters.
+            reason = row.get("reason", "")
             position.setdefault(row.get("lead_id", ""), {
                 "queued": False,
-                "reason": _SEND_HOLD_WORDS.get(
-                    row.get("reason", ""), row.get("reason", "")
-                ),
+                "reason": _SEND_HOLD_WORDS.get(reason, reason),
+                "fixable": reason in _UNBLOCKABLE,
             })
         return position
 
@@ -3582,16 +3596,25 @@ def create_app(config: Config) -> Flask:
             # is the exception the rule names: a dashboard action on one
             # named row the user has just clicked. Only written when it is
             # actually what is holding the lead out of the queue -- a row
-            # already saying Drafted is left alone.
+            # already reading as drafted is left alone.
+            #
+            # Asked of `_is_drafted_outreach` rather than compared against
+            # the word, because a blank Status counts as drafted only when
+            # the row carries the draft's own markers. Testing the string
+            # left that case unrepairable: excluded from the queue, and
+            # answered with "nothing was blocking this one".
             status = (row.get("Status") or "").strip()
-            if status and status.casefold() != "drafted":
+            if not _is_drafted_outreach(row):
                 sheets.update_column(
                     schema.OUTREACH_LOG,
                     "Status",
                     {lead_id: "Drafted"},
                     user_edit=True,
                 )
-                cleared.append(f"Status ({status} -> Drafted)")
+                cleared.append(
+                    f"Status ({status} -> Drafted)" if status
+                    else "Status (blank -> Drafted)"
+                )
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": f"{type(exc).__name__}: {exc}"}), 200
 
@@ -6591,18 +6614,56 @@ function vizMessage(m) {
   // Whether step 4 is actually holding it, in step 4's own words. "It isn't
   // brought over" was the only report a person could make about a card that
   // said ready beside a queue that never offered the lead.
+  // The one repair this dashboard has, offered where the problem is read
+  // rather than only in step 4's excluded list -- which is a different
+  // screen from the one saying the message is ready.
+  const unblock = m.can_unblock
+    ? `<button id="vizu-${esc(m.lead_id)}"
+         onclick="unblockViz('${esc(m.lead_id)}')"
+         style="margin-top:8px">Put it in step 4</button>`
+    : '';
   const where = m.in_send_queue
     ? `<p class="hint" style="margin:6px 0 0">Waiting in
          <a href="#send-step">step 4</a> now, the same queue as the website
          messages. There is no separate send button here.</p>`
     : `<div class="long-err" style="margin:6px 0 0">Not in step 4 yet
-         &mdash; ${esc(m.send_hold || 'step 4 is not offering this lead')}.</div>`;
+         &mdash; ${esc(m.send_hold || 'step 4 is not offering this lead')}.
+         ${unblock}</div>`;
+  // Asked for by name. It was only ever offered on an already-sent lead,
+  // where the old words are about a different pitch -- but a message you
+  // simply do not like is the same problem with no button.
+  const again = `<button class="ghost" onclick="redraftViz('${esc(m.lead_id)}')"
+      style="margin-top:8px">Rewrite this message</button>
+    <span class="sub" id="vizr-${esc(m.lead_id)}"></span>`;
   return `<div class="viz-next">
     <div class="sub"><b>The message this picture goes out with</b> &mdash;
       written for this business, and editable in step 4 before you send:</div>
     <div class="viz-words">${esc(m.message)}</div>
     ${where}
+    <div class="row">${again}</div>
   </div>`;
+}
+
+async function unblockViz(leadId) {
+  const btn = document.querySelector('#vizu-' + leadId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Putting it back...'; }
+  let d;
+  try {
+    d = await (await fetch('/api/whatsapp/undo-send', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lead_id: decodeURIComponent(leadId)}),
+    })).json();
+  } catch (e) { d = {error: 'Could not reach the dashboard: ' + e}; }
+  if (!d.ok) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Put it in step 4'; }
+    vizSay(leadId, d.error || 'Could not do that.', true);
+    return;
+  }
+  // Both panels change: this card stops saying it is held, and step 4
+  // grows a row. Redrawing one and not the other is how a page ends up
+  // disagreeing with itself.
+  await loadVisual();
+  if (typeof loadWhatsAppInline === 'function') await loadWhatsAppInline();
 }
 
 async function redraftViz(leadId) {

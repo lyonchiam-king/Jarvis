@@ -412,6 +412,7 @@ class ApiClient {
           // knows step 4's rules, and a second answer would drift.
           in_send_queue: v.in_send_queue === true,
           send_hold: v.send_hold || '',
+          can_unblock: v.can_unblock === true,
           approval: v.approval || '',
           expected_text: v.expected_text || [],
           message: v.message || '',
@@ -556,6 +557,15 @@ class ApiClient {
     layouts: string[]
   ): Promise<ApiResponse<{ ok: boolean; styles: string[]; layouts: string[] }>> {
     return this.post('/api/visual/rotation', { styles, layouts });
+  }
+
+  /**
+   * Put one lead back in Review & Send. The same repair the send step's
+   * excluded list offers -- it clears the send status and restores Status to
+   * Drafted, and writes nothing else.
+   */
+  async unblockSend(lead_id: string): Promise<ApiResponse<{ ok: boolean }>> {
+    return this.post('/api/whatsapp/undo-send', { lead_id });
   }
 
   // ------------------------------------------------------------------ send

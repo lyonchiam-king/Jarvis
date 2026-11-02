@@ -150,6 +150,26 @@ class Devtools {
     });
   }
 
+  /**
+   * What the page currently reads, as text.
+   *
+   * `document.body.innerText` is read a dozen times in this file and threw
+   * "Cannot read properties of null" twice, both times masking the real
+   * failure behind a stack pointing at column 15 of a one-line expression.
+   * The body can be momentarily absent when an evaluate races the document,
+   * so this asks for it safely and gives it one more chance before
+   * believing the page is empty.
+   */
+  async pageText() {
+    const read = 'document.body ? (document.body.innerText || "") : ""';
+    let text = await this.evaluate(read);
+    if (!text) {
+      await new Promise((r) => setTimeout(r, 250));
+      text = await this.evaluate(read);
+    }
+    return text;
+  }
+
   async evaluate(expression) {
     const result = await this.send('Runtime.evaluate', {
       expression,
@@ -235,7 +255,7 @@ try {
     if (!html.includes(marker)) fail(`React did not render ${JSON.stringify(marker)}`);
   }
 
-  const visible = await dt.evaluate('document.body.innerText');
+  const visible = await dt.pageText();
   const fullHtml = await dt.evaluate('document.documentElement.outerHTML');
   for (const phrase of FORBIDDEN) {
     if (`${visible}\n${fullHtml}`.includes(phrase)) {
@@ -441,7 +461,11 @@ try {
           // Confirmed, drafted, and step 4 is still not offering it. The
           // card is the only screen that can say why.
           in_send_queue: false,
-          send_hold: 'it was drafted as an email, so it is in Gmail drafts',
+          send_hold: 'its Outreach Log row does not say Drafted',
+          // The one hold this dashboard repairs, so the button must be here
+          // -- it lived in step 4's excluded list, which is a different
+          // screen from the one saying the message is ready.
+          can_unblock: true,
           created_at: '2026-01-01T00:00:00Z',
         },
         {
@@ -479,6 +503,7 @@ try {
     // the view would read as success -- named here so the button is driven
     // against a reply this check chose.
     '/api/visual/redraft': { ok: true, lead_id: 'LEAD-D' },
+    '/api/whatsapp/undo-send': { ok: true, cleared: ['Status (Skipped -> Drafted)'] },
   };
 
   await dt.send('Page.addScriptToEvaluateOnNewDocument', {
@@ -500,7 +525,7 @@ try {
   const withWork = Date.now() + 20000;
   let loaded = '';
   while (Date.now() < withWork) {
-    loaded = await dt.evaluate('document.body.innerText || ""');
+    loaded = await dt.pageText();
     if (loaded.includes('Ready to contact')) break;
     await new Promise((r) => setTimeout(r, 250));
   }
@@ -531,7 +556,7 @@ try {
   // The stage navigator, reached the way Today reaches it.
   await dt.evaluate(`document.getElementById('today-primary-action').click()`);
   await new Promise((r) => setTimeout(r, 400));
-  const stageText = await dt.evaluate('document.body.innerText || ""');
+  const stageText = await dt.pageText();
   for (const step of ['List', 'Reachability', 'Brief', 'Build', 'Review & Send']) {
     if (!stageText.includes(step)) fail(`the stage navigator is missing ${JSON.stringify(step)}`);
   }
@@ -550,7 +575,7 @@ try {
   }
   await dt.evaluate(`document.getElementById('stage-visual').click()`);
   await new Promise((r) => setTimeout(r, 500));
-  const vizText = await dt.evaluate('document.body.innerText || ""');
+  const vizText = await dt.pageText();
   // The picker, which is what keeps sixty prompts from being written in one
   // press. Groups first, because that is the split he asked to work from.
   for (const phrase of ['Who to write for', 'On WhatsApp', 'Email only',
@@ -586,7 +611,7 @@ try {
   // Cards are collapsed until asked for. Sixty expanded cards is the thing
   // this list was reported for.
   const collapsed = await dt.evaluate(`(() => {
-    const body = document.body.innerText || '';
+    const body = (document.body && document.body.innerText) || '';
     return {
       rows: document.querySelectorAll('[id^="visual-head-"]').length,
       expanded: /Copy prompt for/.test(body),
@@ -605,7 +630,7 @@ try {
   // the three ways the picture comes back, and the way to get it off the list.
   await dt.evaluate(OPEN_FIRST_CARD);
   await new Promise((r) => setTimeout(r, 300));
-  const openedWaiting = await dt.evaluate('document.body.innerText || ""');
+  const openedWaiting = await dt.pageText();
   for (const phrase of ['Your Nail Crush', 'Named', 'Ctrl+V', 'Remove']) {
     if (!openedWaiting.includes(phrase)) {
       fail(`the opened waiting card did not render ${JSON.stringify(phrase)}`);
@@ -619,7 +644,7 @@ try {
   await new Promise((r) => setTimeout(r, 300));
   await dt.evaluate(OPEN_FIRST_CARD);
   await new Promise((r) => setTimeout(r, 400));
-  const vizText2 = await dt.evaluate('document.body.innerText || ""');
+  const vizText2 = await dt.pageText();
   for (const phrase of [
     'Second Salon',
     'Generic',
@@ -640,7 +665,7 @@ try {
   await new Promise((r) => setTimeout(r, 300));
   await dt.evaluate(OPEN_FIRST_CARD);
   await new Promise((r) => setTimeout(r, 400));
-  const checked = await dt.evaluate('document.body.innerText || ""');
+  const checked = await dt.pageText();
   for (const phrase of [
     'Third Salon',
     'The message this picture goes out with',
@@ -648,7 +673,7 @@ try {
     // Confirmed and drafted, and Review & Send is still not offering it.
     // "It isn't brought over" was the only report a person could make.
     'Not in Review & Send yet',
-    'in Gmail drafts',
+    'does not say Drafted',
   ]) {
     if (!checked.includes(phrase)) {
       fail(`the checked card did not render ${JSON.stringify(phrase)}`);
@@ -656,6 +681,24 @@ try {
   }
   if (checked.includes('Waiting in')) {
     fail('a card step 4 is holding claims to be waiting in it');
+  }
+
+  // The repair, pressed. "It still doesn't show any button" was the report:
+  // it existed, in step 4's excluded list, one screen away from this one.
+  const repaired = await dt.evaluate(`(() => {
+    const fix = document.getElementById('visual-unblock-LEAD-C');
+    const rewrite = document.getElementById('visual-rewrite-LEAD-C');
+    if (fix) fix.click();
+    return { fix: !!fix, rewrite: !!rewrite };
+  })()`);
+  if (!repaired.fix) {
+    fail('a card step 4 can be unblocked from offers no button to do it');
+  }
+  if (!repaired.rewrite) fail('a drafted card offers no way to rewrite it');
+  await new Promise((r) => setTimeout(r, 500));
+  const afterFix = await dt.pageText();
+  if (!afterFix.includes('It is in Review & Send now')) {
+    fail('pressing the repair said nothing about what it did');
   }
 
   // Sent is finished work: out of every working list, in its own.
@@ -669,7 +712,7 @@ try {
   }
   await dt.evaluate(`document.getElementById('visual-filter-all').click()`);
   await new Promise((r) => setTimeout(r, 300));
-  const inAll = await dt.evaluate('document.body.innerText || ""');
+  const inAll = await dt.pageText();
   if (inAll.includes('Fifth Salon')) {
     fail('a sent graphic is still counted among the work left to do');
   }
@@ -687,7 +730,7 @@ try {
   })()`);
   if (!sentOpened) fail('the already-messaged lead rendered no card');
   await new Promise((r) => setTimeout(r, 400));
-  const sentText = await dt.evaluate('document.body.innerText || ""');
+  const sentText = await dt.pageText();
   for (const phrase of [
     'Fourth Salon',
     'Already messaged on 2026-08-28 09:14',
@@ -764,7 +807,8 @@ try {
       has: !!img,
       src: img ? String(img.getAttribute('src')).slice(0, 20) : '',
       explained: !!note,
-      leaked: /base64,[A-Za-z0-9+/]{16}/.test(document.body.innerText || ''),
+      leaked: /base64,[A-Za-z0-9+/]{16}/.test(
+        (document.body && document.body.innerText) || ''),
     };
   })()`);
   if (vizShot.has) {
@@ -907,7 +951,8 @@ try {
   const sendStep = await dt.evaluate(`(() => {
     const warn = document.getElementById('send-stale-pitch-SEND-A');
     return {
-      body: (document.body.innerText || '').replace(/\\s+/g, ' '),
+      body: ((document.body && document.body.innerText) || '')
+        .replace(/\\s+/g, ' '),
       warned: warn ? (warn.innerText || '').replace(/\\s+/g, ' ') : '',
       // The control: the card beside it was rewritten and must stay quiet.
       quiet: !document.getElementById('send-stale-pitch-SEND-B'),
@@ -981,7 +1026,8 @@ try {
     return {
       hasMessageModel: !!message,
       hasButton: !!button,
-      body: (document.body.innerText || '').replace(/\\s+/g, ' '),
+      body: ((document.body && document.body.innerText) || '')
+        .replace(/\\s+/g, ' '),
     };
   })()`);
   if (!settings.hasMessageModel) {
@@ -1035,7 +1081,7 @@ try {
   // Results, which is new and entirely derived from the summary.
   await dt.evaluate(`document.getElementById('nav-item-results').click()`);
   await new Promise((r) => setTimeout(r, 400));
-  const resultsText = await dt.evaluate('document.body.innerText || ""');
+  const resultsText = await dt.pageText();
   for (const phrase of ['Messages sent', 'Where everyone currently sits', 'What is not here']) {
     if (!resultsText.includes(phrase)) {
       fail(`Results did not render ${JSON.stringify(phrase)}`);
@@ -1066,7 +1112,8 @@ try {
       return {
         hasImage: !!img,
         src: img ? String(img.getAttribute('src')).slice(0, 24) : '',
-        leaked: (document.body.innerText || '').includes('iVBORw0KGgo'),
+        leaked: ((document.body && document.body.innerText) || '')
+          .includes('iVBORw0KGgo'),
       };
     })()`);
     if (!qr.hasImage) fail('the pairing code did not render as an image');

@@ -1020,6 +1020,79 @@ const AlreadyMessaged: React.FC<{ item: VisualItem }> = ({ item }) => {
   );
 };
 
+/**
+ * The one repair this dashboard has, offered where the problem is read.
+ *
+ * It existed in the send step's excluded list, which is a different screen
+ * from the one saying the message is ready -- so the report was "it still
+ * doesn't show any button".
+ */
+const UnblockButton: React.FC<{ item: VisualItem }> = ({ item }) => {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+  const [done, setDone] = useState(false);
+
+  if (done) {
+    return (
+      <span className="text-[11px] text-emerald-300">
+        Done. It is in Review &amp; Send now.
+      </span>
+    );
+  }
+  return (
+    <>
+      <button
+        id={`visual-unblock-${item.lead_id}`}
+        onClick={async () => {
+          setBusy(true);
+          setNote('');
+          const res = await api.unblockSend(item.lead_id);
+          setBusy(false);
+          if (res.error) setNote(res.error);
+          else setDone(true);
+        }}
+        disabled={busy}
+        className="px-3 py-1.5 rounded-lg bg-emerald-500 text-slate-950 text-[11px] font-semibold hover:bg-emerald-400 studio-transition disabled:opacity-50"
+      >
+        {busy ? 'Putting it back...' : 'Put it in Review & Send'}
+      </button>
+      {note && <span className="text-[11px] text-amber-300">{note}</span>}
+    </>
+  );
+};
+
+/**
+ * Rewrite the message for a lead that has not been sent yet.
+ *
+ * Asked for by name. It was only ever offered on an already-sent lead, where
+ * the old words are about a different pitch -- but a message you simply do
+ * not like is the same problem with no button.
+ */
+const RewriteButton: React.FC<{ item: VisualItem }> = ({ item }) => {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+
+  return (
+    <>
+      <button
+        id={`visual-rewrite-${item.lead_id}`}
+        onClick={async () => {
+          setBusy(true);
+          setNote('');
+          const res = await api.redraftVisual(item.lead_id);
+          setBusy(false);
+          setNote(res.error ? res.error : 'Rewritten.');
+        }}
+        disabled={busy}
+        className="px-3 py-1.5 rounded-lg border border-slate-700 text-slate-300 text-[11px] hover:bg-slate-800/60 studio-transition disabled:opacity-50"
+      >
+        {busy ? 'Writing...' : 'Rewrite this message'}
+      </button>
+      {note && <span className="text-[11px] text-slate-400">{note}</span>}
+    </>
+  );
+};
+
 const VisualMessage: React.FC<{ item: VisualItem }> = ({ item }) => {
   if (item.sent_at) {
     return <AlreadyMessaged item={item} />;
@@ -1069,14 +1142,24 @@ const VisualMessage: React.FC<{ item: VisualItem }> = ({ item }) => {
           the website messages. There is no separate send button here.
         </p>
       ) : (
-        <p
+        <div
           id={`visual-send-hold-${item.lead_id}`}
-          className="text-[11px] text-amber-300 whitespace-pre-wrap"
+          className="space-y-2"
         >
-          Not in Review &amp; Send yet &mdash;{' '}
-          {item.send_hold || 'that step is not offering this lead'}.
-        </p>
+          <p className="text-[11px] text-amber-300 whitespace-pre-wrap">
+            Not in Review &amp; Send yet &mdash;{' '}
+            {item.send_hold || 'that step is not offering this lead'}.
+          </p>
+          {item.can_unblock && (
+            <div className="flex flex-wrap items-center gap-2">
+              <UnblockButton item={item} />
+            </div>
+          )}
+        </div>
       )}
+      <div className="flex flex-wrap items-center gap-2">
+        <RewriteButton item={item} />
+      </div>
     </div>
   );
 };

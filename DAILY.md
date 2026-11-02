@@ -779,17 +779,26 @@ outright, and says why in step 4's own words — "Not in step 4 yet — it was
 drafted as an email, so it is in Gmail drafts", say. That line comes from the
 same code that builds step 4's lists, so the two cannot disagree.
 
-Two of those reasons have a fix on the card itself:
+Most of those reasons have a button on the card itself:
 
+- **"its Outreach Log row does not say Drafted"** — press **Put it in step 4**.
+  That is the same repair as **Send again** in step 4: it clears the send
+  status and sets the row back to Drafted, and writes nothing else. It is the
+  usual reason, and it happens when a lead was skipped or its Status cell was
+  edited.
 - **no message yet** — pressing **The words are right** writes it. If it was
-  already confirmed before this update, press **Write a new message for this
-  picture**.
+  already confirmed before this update, press **Rewrite this message**.
 - **already messaged** — drafting leaves that lead alone, which is what stops
   a business being written to twice. Press **Write a new message for this
   picture**.
 
-The rest are real: no phone number, no Leads row, drafted as an email. Those
-need the lead fixing, not the card.
+The rest are real and no button fixes them: no phone number, no Leads row,
+drafted as an email. Those need the lead fixing, so no button is offered —
+one that pressed and changed nothing would read as the tool being broken.
+
+Every drafted card also carries **Rewrite this message**, whether it is held
+or not. It replaces the message with a fresh one written from the same
+research and the same picture; the picture and the prompt are untouched.
 
 ### Why you have to read the words yourself
 

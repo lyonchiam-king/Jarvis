@@ -64,7 +64,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1666 tests, pytest, no CI -- the suite is the only gate
+tests/             1670 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -1465,6 +1465,42 @@ already about the picture is left alone, since rewriting it costs a call and
 can only make it different. Never fatal: the tick is already saved before the
 call, because losing the one check only a person can do -- because a model
 was retired -- would send them round the whole loop again.
+
+**Naming the problem is not fixing it.** The card learned to say "Not in
+step 4 yet -- its Outreach Log row does not say Drafted", and the next report
+was "it still doesn't show any button". The repair already existed -- **Send
+again** clears the send status and restores `Status` to Drafted -- but it
+lived in step 4's *excluded* list, which is a different screen from the one
+telling you the message is ready. `can_unblock` says whether that repair
+would actually fix this hold, and the button goes on the card beside the
+sentence. Offered for `status_not_drafted` and `already_sent` only: a button
+beside "it has no phone number" would press and change nothing, which reads
+as the dashboard being broken. Pressing it reloads both panels, because a
+card that stops saying it is held while step 4 still shows no row is the
+page disagreeing with itself.
+
+**A blank Status was unrepairable by the thing meant to repair it.**
+`undo-send` compared `Status` against the word "drafted" and skipped a blank
+cell -- but `_is_drafted_outreach` accepts a blank Status *only* when the row
+carries the draft's own markers, so a blank row without a `Drafted At` was
+excluded from the queue and answered with "nothing was blocking this one".
+It asks `_is_drafted_outreach` now, which is the same question the queue
+asks, so the repair and the exclusion cannot disagree about what Drafted
+means.
+
+**Rewrite was offered only where the words were someone else's pitch.** It
+appeared on an already-sent lead, whose message is about a different track --
+but a drafted message you simply do not like is the same problem with no
+button at all. Every drafted card carries it now, on both pages.
+
+**`document.body` can be momentarily null under CDP.** It threw twice in
+`render-check`, both times reported as `Cannot read properties of null` with
+a stack pointing at column 15 of a one-line expression -- which is where
+`innerText` starts in `document.body.innerText`, and says nothing about
+*which* of a dozen identical reads it was. Worse, it masked the real failure
+on a control run. `dt.pageText()` asks for the body safely and gives it one
+more chance before believing the page is empty; a flake that hides the thing
+you are testing costs more than the thing you are testing.
 
 **A sent graphic is finished work, not a queue item.** `_visual_state` grew a
 fifth state read off the Outreach Log, because the visual track writes no

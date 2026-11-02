@@ -307,6 +307,12 @@ export interface VisualItem {
    */
   in_send_queue: boolean;
   send_hold: string;
+  /**
+   * Whether the one repair this dashboard has would fix the hold. A button
+   * offered beside "it has no phone number" would press and change nothing,
+   * which reads as the dashboard being broken.
+   */
+  can_unblock: boolean;
   created_at: string;
 }
 
