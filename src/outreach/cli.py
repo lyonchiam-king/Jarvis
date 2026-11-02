@@ -1491,7 +1491,10 @@ def run_site_brief(
     "--group",
     "groups",
     multiple=True,
-    type=click.Choice(["whatsapp", "email", "unchecked", "none"]),
+    # Read off the stage rather than retyped here: the group list grew a
+    # fifth member once already, and a flag that refuses a group the stage
+    # understands looks exactly like the filter being ignored.
+    type=click.Choice(list(visual_brief_stage.GROUPS)),
     help=(
         "Only write for leads in this group, by the channel a message would "
         "use. Repeatable. Leave it off for every group. Sixty prompts is not "

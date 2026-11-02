@@ -601,7 +601,8 @@ naming something nobody sells.
 # change a single word of the prompt the other tracks already produce.
 _BEATS_VISUAL = """\
 1. HOOK -- one or two sentences that prove you looked at THEIR business \
-before you wrote, and that land on the first gap named in the Gaps block. \
+before you wrote, and that land on the first point the attached picture \
+makes, which is listed for you in the brief. \
 Name the specific thing -- what customers keep praising, what they do that \
 nobody else nearby does -- then the consequence, which is about the customers \
 they are missing, never about you. This is the only sentence that decides \
@@ -631,6 +632,12 @@ appended list of services follows on from, so without it the list arrives out \
 of nowhere. A list of services is appended after your message, worded by the \
 sender, so writing one here duplicates it and risks naming something nobody \
 sells.
+
+RULE ABOUT A WEBSITE: say nothing about a website, a page, or a link unless \
+the brief explicitly tells you one exists and to include it. This message \
+offers a picture and the thinking behind it, not a build. A lead may well \
+have been sent a site months ago -- that is not this message's subject and \
+raising it reads as a second attempt at the same sale.
 """
 
 # Added to the visual beats when this lead also has a built page. "Both"
@@ -1869,6 +1876,7 @@ def build_outreach_prompt(
     sender_title: str,
     company: str,
     preview_url: str = "",
+    gaps: str = "",
 ) -> str:
     lines = [
         f"Business: {name}",
@@ -1887,6 +1895,24 @@ def build_outreach_prompt(
         f"- Title: {sender_title or ''}",
         f"- Company: {company or ''}",
     ]
+    # What the attached picture actually says. The visual beats have always
+    # told the model to "land on the first gap named in the Gaps block" --
+    # and no such block was ever built, so every message was written blind to
+    # the three statements it was supposed to be about. The id is stripped:
+    # the model needs the claim, not the rule that chose it.
+    if gaps:
+        lines += ["", "What the attached picture says, in order:"]
+        for index, line in enumerate(gaps.splitlines(), start=1):
+            claim = line.split(":", 1)[-1].strip() if ":" in line else line.strip()
+            if claim:
+                lines.append(f"  {index}. {claim}")
+        lines.append(
+            "These are the points the picture makes. The hook lands on the "
+            "first of them. Do not list them all -- they are already in the "
+            "picture, and repeating them makes the message long and the "
+            "picture pointless."
+        )
+
     if preview_url:
         lines += [
             "",

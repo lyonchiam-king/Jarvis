@@ -326,6 +326,12 @@ export interface VisualGroup {
   contactable: boolean;
   /** Capped: a count is the whole truth, sixty names is a wall. */
   capped: boolean;
+  /**
+   * These have had a message already. Still a batch worth choosing -- a
+   * second approach with something new to say -- but never what "On
+   * WhatsApp" should mean.
+   */
+  second_approach?: boolean;
   leads: { lead_id: string; name: string; category: string }[];
 }
 

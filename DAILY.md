@@ -652,7 +652,7 @@ Campaign settings → **Track**:
 | Track | What the message carries |
 |---|---|
 | **Website** | The demo site, linked. The original, and what you run today. |
-| **Infographic** | The picture, attached. No site is built. |
+| **Infographic** | The picture, attached. No site is built, and the message mentions no website at all. |
 | **Both** | The picture attached **and** the site link in the text — still one message. |
 
 **Both** is one message, not two. The same business messaged twice in a day is
@@ -674,9 +674,17 @@ prompt by how you would actually contact them:
 
 - **On WhatsApp** — the check said yes. The ones you can send to tonight.
 - **Email only** — no WhatsApp, but research found an address.
+- **Already messaged once** — on WhatsApp, and you have written to them
+  before with the website pitch. A picture is a fair second approach, so they
+  are offered as their own group rather than mixed in with people who have
+  never heard from you.
 - **Not checked yet** — nothing can be written for these until the WhatsApp
   check has run, so there is no button on them. Run step 1b first.
 - **No way to contact them** — a dead end, shown so the numbers add up.
+
+The first four groups are everyone who has **not** been sent a picture. A lead
+drops off this list the moment its graphic goes out, so the counts are work
+left to do rather than a running total.
 
 Set **How many** (10 to start), then either press **Write for this group** on
 the group worth starting with, or open a group and tick the exact businesses
@@ -708,6 +716,36 @@ business's own research, exactly like the website messages. Once you have
 confirmed the picture, the card shows you that message in full, below the
 proofreading box.
 
+### What the picture's message says
+
+It is not the website message with the link taken out. It is written from the
+picture itself.
+
+Whatever the three cards claim about that business is what the message opens
+on — the people who found them rate them highly and the people who have not
+cannot find them at all, say. The first card is the hook, the rest sit behind
+it, and the picture is offered as the thing that lays it out. You are arriving
+with something useful in hand, not asking for anything.
+
+It says nothing about a website, because on this track there isn't one. No
+link, no demo, no "I built you a page". On **Both** the site link comes back,
+in the text beside the picture.
+
+### A business you have already messaged
+
+Step 3b has a group for them, and the card for one of those leads looks
+different: it shows **the message you sent before**, and the date.
+
+That is there because the drafting step will not write to a lead that already
+has an Outreach Log row — which is exactly what stops a business being
+messaged twice, and also meant a picture made for one of them could never get
+a message of its own. The card carries one button, **Write a new message for
+this picture**, which clears the old send status and writes the new message
+about the graphic. The picture and its prompt are kept; nothing is generated
+twice.
+
+The lead then appears in step 4 like any other, with the graphic attached.
+
 ### There is no send button on step 3b
 
 On purpose. Everything sends from **step 4**, one queue, whichever track the
@@ -720,6 +758,14 @@ or **Site screenshot attached**.
 Step 4 holds a lead until step 4 of that list is done. That is deliberate:
 until someone has read the words, there is no message, because the message is
 written about a picture nobody has checked.
+
+**If a picture you have confirmed is not in step 4**, it is one of two things,
+and the card on step 3b says which:
+
+- its message has not been written yet — press **Run this morning's batch**,
+  or run the Draft step on its own; or
+- you messaged that business before, so drafting left it alone. Press **Write
+  a new message for this picture** on its card.
 
 ### Why you have to read the words yourself
 

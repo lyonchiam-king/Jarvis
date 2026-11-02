@@ -4009,13 +4009,49 @@ def test_a_card_with_no_message_yet_says_what_to_press():
     assert "its own research" in html
 
 
-def test_an_already_sent_one_says_so_rather_than_inviting_a_second_send():
-    """The same business messaged twice is the thing this pipeline works
-    hardest to avoid."""
-    html = _open_ready(_checked(message="Hi there.", sent_at="2026-11-02T09:00:00Z"))
-    assert "Already sent" in html
+def test_an_already_messaged_lead_shows_the_old_message_and_offers_a_new_one():
+    """A row on the Outreach Log is what stops a business being written to
+    twice, so the draft stage will never touch this lead again -- and its
+    picture could never get a message. The button is the one way through."""
+    html = _open_ready(_checked(message="Old website pitch.",
+                                sent_at="2026-11-02T09:00:00Z"))
+    assert "Already messaged on" in html
     assert "2026-11-02T09:00:00Z" in html
+    assert "Old website pitch." in html
+    assert "Write a new message for this picture" in html
+    assert "redraftViz(" in html
+    # It is not simply re-offered for sending: the old words are not what
+    # this picture is about.
     assert "no separate send button here" not in html
+
+
+def test_redrafting_puts_it_back_in_the_queue_and_rewrites_the_message():
+    out = _run_in_node(_VIZ_DOM + """
+    const asked = [];
+    globalThis.fetch = async (url, opts) => {
+      asked.push(url);
+      return {json: async () => ({ok: true, enabled: true, queue: [], counts: {}})};
+    };
+    await redraftViz('LEAD-1');
+    console.log(JSON.stringify({
+      posted: asked.filter(u => u === '/api/visual/redraft').length,
+      reloaded: asked.filter(u => u === '/api/visual/queue').length,
+    }));
+    """)
+    data = __import__("json").loads(out)
+    assert data["posted"] == 1
+    assert data["reloaded"] == 1, "the card was left showing the old message"
+
+
+def test_a_failed_redraft_is_shown_on_the_card():
+    out = _run_in_node(_VIZ_DOM + """
+    globalThis.fetch = async () => ({json: async () => ({
+      error: 'Check the picture first.'
+    })});
+    await redraftViz('LEAD-1');
+    console.log(JSON.stringify({note: _el('#vizr-LEAD-1').textContent}));
+    """)
+    assert "Check the picture first." in __import__("json").loads(out)["note"]
 
 
 def test_an_unchecked_card_does_not_show_the_message_yet():

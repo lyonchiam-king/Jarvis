@@ -970,3 +970,78 @@ def test_an_extra_argument_cannot_land_on_another_stage():
     assert stage_args("visual-brief", 5, extra=extra) == [
         "run", "visual-brief", "--limit", "5", "--group", "whatsapp",
     ]
+
+
+# ------------------------------------- writing a new message for an old lead
+
+
+def test_the_picker_splits_out_the_ones_already_messaged(app):
+    """A business contacted months ago with the website pitch is not fresh
+    work. Counting it as such is how 104 "on WhatsApp" read as 104 new
+    conversations."""
+    client, sheets = picker_app(app, [researched("fresh"), researched("old")])
+    sheets._tabs[schema.OUTREACH_LOG.title] = {
+        "old": (2, {"Lead ID": "old", "WhatsApp Sent At": "2026-08-28T17:48:30Z",
+                    "WhatsApp Status": "sent"})
+    }
+    groups = {g["key"]: g for g in client.get("/api/visual/candidates").get_json()["groups"]}
+    assert groups["whatsapp"]["count"] == 1
+    assert groups["messaged"]["count"] == 1
+    # Still a batch he can deliberately choose -- it was asked for by name.
+    assert groups["messaged"]["contactable"] is True
+    assert groups["messaged"]["second_approach"] is True
+    assert groups["whatsapp"]["second_approach"] is False
+
+
+def test_redrafting_clears_the_send_status_and_rewrites_the_message(
+    app, monkeypatch, tmp_path
+):
+    """The draft stage never touches a lead that already has an Outreach Log
+    row -- which is what stops a business being written to twice, and also
+    meant its picture could never get a message."""
+    from outreach.stages import outreach_draft as draft
+
+    visual.visuals_dir().mkdir(parents=True, exist_ok=True)
+    (visual.visuals_dir() / "a.png").write_bytes(b"png")
+    client, sheets = app(visuals=brief(
+        "a", **{"Image File": "visuals/a.png", "Text Confirmed": "yes"}
+    ))
+    rewritten = {}
+    monkeypatch.setattr(
+        draft, "regenerate_one",
+        lambda c, s, w, lead_id: (
+            rewritten.update(lead=lead_id),
+            {"whatsapp_message": "A new message about the picture."},
+        )[1],
+    )
+    monkeypatch.setattr(
+        "outreach.providers.llm.make_writer", lambda *a, **k: object()
+    )
+
+    d = client.post("/api/visual/redraft", json={"lead_id": "a"}).get_json()
+    assert d["ok"] is True
+    assert rewritten["lead"] == "a"
+    cleared = {(c, tuple(v)) for _t, c, v, _u in sheets.writes}
+    assert ("WhatsApp Status", ("a",)) in cleared
+    assert ("WhatsApp Sent At", ("a",)) in cleared
+
+
+def test_redrafting_refuses_before_the_picture_is_checked(app, monkeypatch):
+    """The gate exists so a garbled graphic cannot reach a business. A
+    redraft must not route around it."""
+    client, sheets = app(visuals=brief("a", **{"Image File": "", "Text Confirmed": ""}))
+    d = client.post("/api/visual/redraft", json={"lead_id": "a"}).get_json()
+    assert "ok" not in d
+    assert "Check the picture first" in d["error"]
+    assert sheets.writes == []
+
+
+def test_redrafting_a_lead_with_no_prompt_says_so(app):
+    client, _ = app(visuals={})
+    d = client.post("/api/visual/redraft", json={"lead_id": "a"}).get_json()
+    assert "no image prompt" in d["error"]
+
+
+def test_redraft_needs_a_lead(app):
+    client, _ = app()
+    assert client.post("/api/visual/redraft", json={}).status_code == 400

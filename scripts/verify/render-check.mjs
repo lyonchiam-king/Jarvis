@@ -156,7 +156,14 @@ class Devtools {
       returnByValue: true,
       awaitPromise: true,
     });
-    if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+    if (result.exceptionDetails) {
+      // `text` is only ever "Uncaught", which costs an afternoon when the
+      // throw is a null element three expressions deep. The exception's own
+      // description carries the message and the stack.
+      const detail = result.exceptionDetails;
+      const described = detail.exception && detail.exception.description;
+      throw new Error(String(described || detail.text).slice(0, 400));
+    }
     return result.result.value;
   }
 }
@@ -320,13 +327,17 @@ try {
       enabled: true,
       total: 63,
       groups: [
-        { key: 'whatsapp', label: 'On WhatsApp', count: 41, contactable: true,
+        { key: 'whatsapp', label: 'On WhatsApp, not messaged yet', count: 41, contactable: true,
           capped: true, leads: [
             { lead_id: 'W1', name: 'Salon One', category: 'Nail salon' },
             { lead_id: 'W2', name: 'Salon Two', category: 'Hair salon' }] },
         { key: 'email', label: 'Email only', count: 7, contactable: true,
           capped: false, leads: [
             { lead_id: 'E1', name: 'Clinic One', category: 'Clinic' }] },
+        // Contacted before. Still a batch worth choosing, never what "On
+        // WhatsApp" should mean.
+        { key: 'messaged', label: 'Already messaged once', count: 23,
+          contactable: true, capped: false, second_approach: true, leads: [] },
         { key: 'unchecked', label: 'Not checked yet', count: 15,
           contactable: false, capped: false, leads: [] },
         { key: 'none', label: 'No way to contact them', count: 0,
@@ -345,7 +356,7 @@ try {
       // supposed to disappear rather than become a dead link.
       tool_url: 'https://example.com/flow',
       signature: 'by Lyon, Business Growth Consultant',
-      counts: { needs_image: 1, needs_check: 1, ready: 1, skipped: 0 },
+      counts: { needs_image: 1, needs_check: 1, ready: 2, skipped: 0 },
       catalogue: {
         styles: ['paper-cut', 'watercolour'], layouts: ['rows', 'road'],
         chosen_styles: [], chosen_layouts: [],
@@ -389,8 +400,27 @@ try {
           sent_at: '',
           created_at: '2026-01-01T00:00:00Z',
         },
+        {
+          // Messaged months ago with the website pitch, and now holding a
+          // confirmed picture. The draft stage will not touch a lead that
+          // already has an Outreach Log row, so without the redraft button
+          // this graphic could never get a message of its own.
+          lead_id: 'LEAD-D', name: 'Fourth Salon', category: 'Hair salon',
+          prompt: 'Wide 16:9 landscape semi-infographic for "Fourth Salon".',
+          gaps: 'no_website: Google lists no website for this business',
+          style: 'paper-cut', layout: 'road', specific: true,
+          state: 'ready', approval: 'Approved',
+          expected_text: ['3 quick wins for Fourth Salon'],
+          message: 'Hi, Lyon here. I built you a page to look at.',
+          sent_at: '2026-08-28 09:14',
+          created_at: '2026-01-01T00:00:00Z',
+        },
       ],
     },
+    // The redraft itself. The stub answers {} for an unlisted path, which
+    // the view would read as success -- named here so the button is driven
+    // against a reply this check chose.
+    '/api/visual/redraft': { ok: true, lead_id: 'LEAD-D' },
   };
 
   await dt.send('Page.addScriptToEvaluateOnNewDocument', {
@@ -466,6 +496,7 @@ try {
   // The picker, which is what keeps sixty prompts from being written in one
   // press. Groups first, because that is the split he asked to work from.
   for (const phrase of ['Who to write for', 'On WhatsApp', 'Email only',
+                        'Already messaged once', 'second approach',
                         'Not checked yet']) {
     if (!vizText.includes(phrase)) {
       fail(`the Infographic step did not render ${JSON.stringify(phrase)}`);
@@ -561,6 +592,49 @@ try {
     if (!checked.includes(phrase)) {
       fail(`the checked card did not render ${JSON.stringify(phrase)}`);
     }
+  }
+
+  // The lead already messaged with the website pitch. Reported from a real
+  // run: a card saying "Already sent" over a message about a website, and no
+  // way to write the one about the picture.
+  const sentOpened = await dt.evaluate(`(() => {
+    const head = document.getElementById('visual-head-LEAD-D');
+    if (!head) return false;
+    if (head.getAttribute('aria-expanded') !== 'true') head.click();
+    return true;
+  })()`);
+  if (!sentOpened) fail('the already-messaged lead rendered no card');
+  await new Promise((r) => setTimeout(r, 400));
+  const sentText = await dt.evaluate('document.body.innerText || ""');
+  for (const phrase of [
+    'Fourth Salon',
+    'Already messaged on 2026-08-28 09:14',
+    'Hi, Lyon here. I built you a page to look at.',
+    'Write a new message for this picture',
+  ]) {
+    if (!sentText.includes(phrase)) {
+      fail(`the already-messaged card did not render ${JSON.stringify(phrase)}`);
+    }
+  }
+  // Pressing it is the point: the button existed, was typed, built and
+  // shipped once before as a thing no page rendered.
+  await dt.evaluate(`document.getElementById('visual-redraft-LEAD-D').click()`);
+  await new Promise((r) => setTimeout(r, 500));
+  const redrafted = await dt.evaluate(`(() => {
+    const card = document.getElementById('visual-sent-LEAD-D');
+    const button = document.getElementById('visual-redraft-LEAD-D');
+    return {
+      text: card ? (card.innerText || '').replace(/\\s+/g, ' ') : '',
+      disabled: button ? button.disabled : null,
+    };
+  })()`);
+  if (!/back in Review/.test(redrafted.text)) {
+    fail(`pressing redraft left the card saying ${JSON.stringify(redrafted.text)}`);
+  }
+  if (redrafted.disabled !== true) {
+    // A second press would rewrite the message he has just been told is
+    // waiting in the send queue.
+    fail('the redraft button is still pressable after it has run');
   }
 
   // All three ways in. Read off the waiting card, which is the only state

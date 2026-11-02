@@ -871,6 +871,11 @@ const CandidatePicker: React.FC<{ onStarted: () => void }> = ({ onStarted }) => 
             <summary className="flex flex-wrap items-center gap-2 cursor-pointer text-[13px] text-slate-200">
               <span className="font-medium">{g.label}</span>
               <span className="text-slate-500">— {g.count}</span>
+              {g.second_approach && (
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300">
+                  second approach
+                </span>
+              )}
               {g.contactable ? (
                 <button
                   id={`visual-run-${g.key}`}
@@ -949,21 +954,65 @@ const CandidatePicker: React.FC<{ onStarted: () => void }> = ({ onStarted }) => 
  * has reached a real business. So the real text is here, on the same card,
  * and it says where it sends from: there is no send button on this step.
  */
+/**
+ * A business contacted before, now with a picture and no way to say so.
+ *
+ * The draft stage never touches a lead that already has an Outreach Log row
+ * -- which is what stops a business being written to twice, and also meant
+ * its graphic could never get a message. This button is the one way through:
+ * it clears the send status and rewrites the message about the picture.
+ */
+const AlreadyMessaged: React.FC<{ item: VisualItem }> = ({ item }) => {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+  const [done, setDone] = useState(false);
+
+  return (
+    <div
+      id={`visual-sent-${item.lead_id}`}
+      className="p-3 rounded-lg border border-slate-700 bg-slate-950/60 space-y-2"
+    >
+      <p className="text-[12px] text-slate-300 font-medium">
+        Already messaged on {item.sent_at}, with this:
+      </p>
+      <pre className="text-[12px] text-slate-400 whitespace-pre-wrap font-mono">
+        {item.message}
+      </pre>
+      <p className="text-[11px] text-slate-500">
+        That was the old message. Write a new one about this picture and the
+        lead goes back into Review &amp; Send, with the graphic attached. The
+        picture and the prompt are kept.
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          id={`visual-redraft-${item.lead_id}`}
+          onClick={async () => {
+            setBusy(true);
+            setNote('');
+            const res = await api.redraftVisual(item.lead_id);
+            setBusy(false);
+            if (res.error) setNote(res.error);
+            else setDone(true);
+          }}
+          disabled={busy || done}
+          className="px-3.5 py-2 rounded-lg bg-emerald-500 text-slate-950 text-[12px] font-semibold hover:bg-emerald-400 studio-transition disabled:opacity-50"
+        >
+          {busy ? 'Writing...' : 'Write a new message for this picture'}
+        </button>
+        {done && (
+          <span className="text-[12px] text-emerald-300">
+            Written. It is back in Review &amp; Send.
+          </span>
+        )}
+        {note && <span className="text-[12px] text-amber-300">{note}</span>}
+      </div>
+    </div>
+  );
+};
+
 const VisualMessage: React.FC<{ item: VisualItem }> = ({ item }) => {
   if (item.sent_at) {
-    return (
-      <div
-        id={`visual-sent-${item.lead_id}`}
-        className="p-3 rounded-lg border border-slate-700 bg-slate-950/60 space-y-2"
-      >
-        <p className="text-[12px] text-slate-300 font-medium">
-          Already sent — {item.sent_at}
-        </p>
-        <pre className="text-[12px] text-slate-400 whitespace-pre-wrap font-mono">
-          {item.message}
-        </pre>
-      </div>
-    );
+    return <AlreadyMessaged item={item} />;
   }
   if (!item.message) {
     return (

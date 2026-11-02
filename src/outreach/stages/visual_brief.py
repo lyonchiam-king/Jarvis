@@ -57,27 +57,56 @@ log = logging.getLogger("outreach")
 # which one doesn't" -- because it is the one that decides how a lead gets
 # contacted, and therefore which batch is worth spending an evening in the
 # image tool on. The names are the user's words, not the column's.
-GROUPS: tuple[str, ...] = ("whatsapp", "email", "unchecked", "none")
+GROUPS: tuple[str, ...] = ("whatsapp", "email", "messaged", "unchecked", "none")
 
 GROUP_LABELS: dict[str, str] = {
-    "whatsapp": "On WhatsApp",
-    "email": "Email only",
+    "whatsapp": "On WhatsApp, not messaged yet",
+    "email": "Email only, not messaged yet",
+    "messaged": "Already messaged once",
     "unchecked": "Not checked yet",
     "none": "No way to contact them",
 }
 
 
-def group_of(lead: dict[str, str], research_row: dict[str, str] | None) -> str:
-    """Which group this lead is in, named by the channel that would be used.
+def already_messaged(outreach_row: dict[str, str] | None) -> bool:
+    """Whether this business has had a message from us already.
 
-    WhatsApp wins where the check said yes, even when there is also an email:
-    that is the channel the message goes out on, so grouping it as "email
-    only" would put it in a batch Lyon picked for a different reason.
+    Read with the same statuses the send queue treats as gone, so the picker
+    and the queue cannot disagree about who has been contacted.
+    """
+    from ..providers.whatsapp import WA_SENT_STATUSES
+
+    if not outreach_row:
+        return False
+    if (outreach_row.get("WhatsApp Sent At") or "").strip():
+        return True
+    status = (outreach_row.get("WhatsApp Status") or "").strip().casefold()
+    return status in WA_SENT_STATUSES
+
+
+def group_of(
+    lead: dict[str, str],
+    research_row: dict[str, str] | None,
+    outreach_row: dict[str, str] | None = None,
+) -> str:
+    """Which group this lead is in, by the decision it actually presents.
+
+    **Already messaged wins over the channel.** A business contacted months
+    ago with the website pitch is not fresh work, and mixing it into "On
+    WhatsApp" is what made a count of 104 look like 104 new conversations.
+    It is still a legitimate batch -- a second approach, with something new
+    to say -- so it keeps a group of its own rather than being hidden.
+
+    Below that, WhatsApp wins over an email the lead also has: that is the
+    channel the message goes out on, so grouping it as "email only" would put
+    it in a batch picked for a different reason.
 
     A lead nobody has checked and that has no email is **unchecked**, not
     unreachable -- missing evidence is not evidence of absence, and the whole
     point of the reachability check is that it answers later.
     """
+    if already_messaged(outreach_row):
+        return "messaged"
     if stored_verdict(lead, research_row) == "yes":
         return "whatsapp"
     if has_email(research_row or {}):
@@ -416,6 +445,10 @@ def run(
     leads = sheets.read_rows(schema.LEADS)
     research = sheets.read_rows(schema.RESEARCH)
     existing = sheets.read_rows(schema.VISUAL_BRIEFS)
+    # Only when a group was asked for: grouping is the one thing that needs
+    # it, and a campaign running the stage unfiltered must not pay a Sheet
+    # round trip to answer a question nobody asked.
+    outreach = sheets.read_rows(schema.OUTREACH_LOG) if groups else {}
     report.candidates = len(leads)
 
     # The same contactability gate the site brief applies, for the same
@@ -451,6 +484,7 @@ def run(
             if group_of(
                 entry[1],
                 (research.get(lead_id) or (0, None))[1],
+                (outreach.get(lead_id) or (0, None))[1],
             )
             in wanted
         }

@@ -2460,24 +2460,13 @@ def create_app(config: Config) -> Flask:
     def _expected_text(row) -> list[str]:
         """Every string that must appear on the graphic, in reading order.
 
-        Lifted back out of the prompt rather than recomputed: the prompt is
-        what was pasted into the image tool, so it is the only honest source
-        for what the picture was asked to say. Recomputing from the Sheet
-        would drift the moment a prompt was edited by hand.
+        One implementation, in `visual`, because the outreach draft reads the
+        same thing to write the message from. Two copies drifting apart would
+        mean a message describing a picture that says something else.
         """
-        import re
+        from . import visual as visual_lib
 
-        prompt = row.get("Image Prompt", "") or ""
-        out = []
-        headline = re.search(r'Top headline, large: "([^"]*)"', prompt)
-        if headline:
-            out.append(headline.group(1))
-        for problem, fix in re.findall(r'^\d+: "([^"]*)" -> "([^"]*)"', prompt, re.M):
-            out.append(f"{problem}  ->  {fix}")
-        ribbon = re.search(r'Bottom ribbon in small text: "([^"]*)"', prompt)
-        if ribbon:
-            out.append(ribbon.group(1))
-        return out
+        return visual_lib.picture_text(row)
 
     @app.route("/api/visual/candidates")
     def api_visual_candidates():
@@ -2503,7 +2492,8 @@ def create_app(config: Config) -> Flask:
             "enabled": needs_an_image(c),
             "groups": [
                 {"key": k, "label": GROUP_LABELS[k], "count": 0, "leads": [],
-                 "contactable": k in ("whatsapp", "email")}
+                 "contactable": k in ("whatsapp", "email", "messaged"),
+                 "second_approach": k == "messaged"}
                 for k in GROUPS
             ],
             "total": 0,
@@ -2516,6 +2506,11 @@ def create_app(config: Config) -> Flask:
             leads = sheets.read_rows(schema.LEADS)
             research = sheets.read_rows(schema.RESEARCH)
             briefs = sheets.read_rows(schema.VISUAL_BRIEFS)
+            # Who has already had a message. Without this a business
+            # contacted months ago with the website pitch counted as fresh
+            # work -- which is how 104 "on WhatsApp" read as 104 new
+            # conversations.
+            outreach = sheets.read_rows(schema.OUTREACH_LOG)
         except Exception as exc:  # noqa: BLE001
             from .sheets import TabMissing
 
@@ -2542,7 +2537,8 @@ def create_app(config: Config) -> Flask:
             if rank(current_stage) < rank(Stage.RESEARCHED):
                 continue
             research_row = (research.get(lead_id) or (0, None))[1]
-            buckets[group_of(lead, research_row)].append({
+            outreach_row = (outreach.get(lead_id) or (0, None))[1]
+            buckets[group_of(lead, research_row, outreach_row)].append({
                 "lead_id": lead_id,
                 "name": lead.get("Business Name", "") or lead_id,
                 "category": lead.get("Category", ""),
@@ -2565,7 +2561,14 @@ def create_app(config: Config) -> Flask:
                     # yet" and "no way to contact" are held by the same gate
                     # the site brief uses, so offering a button for them
                     # would promise work that cannot happen.
-                    "contactable": key in ("whatsapp", "email"),
+                    #
+                    # "Already messaged" CAN be: a second approach with
+                    # something new to say is a real campaign, and it was
+                    # asked for by name. It is just never the default.
+                    "contactable": key in ("whatsapp", "email", "messaged"),
+                    # Said on the card, because picking this group means
+                    # contacting a business for the second time.
+                    "second_approach": key == "messaged",
                 }
                 for key in GROUPS
             ],
@@ -2885,6 +2888,68 @@ def create_app(config: Config) -> Flask:
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": _explain_sheets(exc, c)}), 200
         return jsonify({"ok": True, "lead_id": lead_id, "approval": decision})
+
+    @app.route("/api/visual/redraft", methods=["POST"])
+    def api_visual_redraft():
+        """Write a fresh message for a lead that has already been messaged.
+
+        The draft stage decides what is left to do by whether a Lead ID
+        appears on the Outreach Log, which is what stops a business being
+        written to twice. Correct -- and it meant a business contacted months
+        ago with the website pitch could never get a message about its
+        graphic. The picture existed, the card said "ready to send", and
+        nothing would ever write the words.
+
+        So this is the one deliberate exception, pressed per lead, on a row
+        the user is looking at. It does two things: clears the send status so
+        the lead returns to the queue, and rewrites the message with the
+        picture's own points. Nothing else is touched -- the picture and the
+        prompt cost real work, and the old message is what is being replaced,
+        not the graphic.
+        """
+        payload = request.json or {}
+        lead_id = (payload.get("lead_id") or "").strip()
+        if not lead_id:
+            return jsonify({"error": "lead_id is required"}), 400
+
+        c = current()
+        from . import visual as visual_lib
+
+        try:
+            sheets = _sheets_client(c)
+            briefs = sheets.read_rows(schema.VISUAL_BRIEFS)
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": _explain_sheets(exc, c)}), 200
+
+        entry = briefs.get(lead_id)
+        if entry is None:
+            return jsonify({"error": "That lead has no image prompt."}), 200
+        # Refused rather than silently writing a message about a picture
+        # nobody has checked: the whole gate exists so a garbled graphic
+        # cannot reach a business, and a redraft must not route around it.
+        if visual_lib.confirmed_image(entry[1]) is None:
+            return jsonify({
+                "error": "Check the picture first. A message is written about "
+                         "what the graphic says, so it needs a confirmed one."
+            }), 200
+
+        try:
+            from .providers.llm import make_writer
+            from .stages import outreach_draft as draft
+
+            # Cleared first. If the rewrite then fails, the lead is back in
+            # the queue with its old message -- visible and fixable. The
+            # other order would leave a new message filed as already sent,
+            # which is the state nothing on the page can explain.
+            for column in ("WhatsApp Status", "WhatsApp Sent At"):
+                sheets.update_column(schema.OUTREACH_LOG, column, {lead_id: ""})
+            out = draft.regenerate_one(
+                c, sheets, make_writer(c, model=c.outreach.model or None), lead_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": _explain_sheets(exc, c)}), 200
+
+        return jsonify({"ok": True, "lead_id": lead_id, **out})
 
     @app.route("/api/visual/regenerate", methods=["POST"])
     def api_visual_regenerate():
@@ -6190,10 +6255,20 @@ async function repairTabs(btn) {
 // has reached a real business.
 function vizMessage(m) {
   if (m.sent_at) {
+    // The draft stage will never touch this lead again -- a row on the
+    // Outreach Log is what stops a business being written to twice. So the
+    // only way its picture ever gets a message is this button.
     return `<div class="viz-sent">
-      <div class="sub"><b>Already sent.</b> This one went out on
-        ${esc(m.sent_at)}.</div>
+      <div class="sub"><b>Already messaged on ${esc(m.sent_at)}</b>, with this:</div>
       <div class="viz-words">${esc(m.message || '')}</div>
+      <p class="hint" style="margin:8px 0 0">That was the old message. Write a
+        new one about this picture and the lead goes back into step 4's send
+        list, with the graphic attached. The picture and the prompt are
+        kept.</p>
+      <div class="row" style="margin-top:8px">
+        <button onclick="redraftViz('${encodeURIComponent(m.lead_id)}')">Write a new message for this picture</button>
+        <span class="sub" id="vizr-${encodeURIComponent(m.lead_id)}"></span>
+      </div>
     </div>`;
   }
   if (!m.message) {
@@ -6213,6 +6288,28 @@ function vizMessage(m) {
       <a href="#send-step">step 4</a>, the same queue as the website messages.
       There is no separate send button here.</p>
   </div>`;
+}
+
+async function redraftViz(leadId) {
+  const u = vizFor(leadId);
+  const note = document.querySelector('#vizr-' + leadId);
+  u.busy = true;
+  if (note) { note.textContent = 'Writing a new message...'; note.className = 'sub'; }
+  try {
+    const r = await fetch('/api/visual/redraft', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lead_id: decodeURIComponent(leadId)})
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      if (note) { note.textContent = d.error || 'Could not rewrite it.'; note.className = 'err'; }
+      return;
+    }
+    await loadVisual();
+    refresh();
+  } catch (e) {
+    if (note) { note.textContent = 'Could not reach the dashboard: ' + e; note.className = 'err'; }
+  } finally { u.busy = false; }
 }
 
 function vizArm(leadId, on) {

@@ -418,6 +418,7 @@ class ApiClient {
         count: ApiClient.num(g.count),
         contactable: !!g.contactable,
         capped: !!g.capped,
+        second_approach: !!g.second_approach,
         leads: g.leads || [],
       })),
     }));
@@ -463,6 +464,19 @@ class ApiClient {
     decision: 'Skip' | 'Approved'
   ): Promise<ApiResponse<{ ok: boolean; approval: string }>> {
     return this.post('/api/visual/skip', { lead_id, decision });
+  }
+
+  /**
+   * Write a fresh message for a lead that has already been messaged.
+   *
+   * The draft stage never touches a lead with an Outreach Log row -- which
+   * is what stops a business being written to twice, and also meant its
+   * picture could never get a message. This is the deliberate exception.
+   */
+  async redraftVisual(
+    lead_id: string
+  ): Promise<ApiResponse<{ ok: boolean; whatsapp_message: string }>> {
+    return this.post('/api/visual/redraft', { lead_id });
   }
 
   async regenerateVisual(

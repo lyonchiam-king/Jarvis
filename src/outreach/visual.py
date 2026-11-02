@@ -574,3 +574,52 @@ def save_image(business_name: str, lead_id: str, raw: bytes, content_type: str) 
             pass
         raise ImageRejected(f"Could not save the image: {exc}") from exc
     return rel
+
+
+# --- what the picture actually says ---------------------------------------
+
+def picture_text(row: dict[str, str] | None) -> list[str]:
+    """Every string the prompt asked the image tool to draw, in reading order.
+
+    Lifted back out of the stored prompt rather than recomputed from the
+    Sheet's evidence column: the prompt is what was actually pasted into the
+    image tool, so it is the only honest account of what is on the picture.
+    The evidence column says why a card was *chosen*, which is a different
+    thing and is not what anybody reads.
+
+    One implementation, because two callers need it for opposite reasons --
+    the dashboard shows it to be proofread against the image, and the message
+    is written from it. Those drifting apart would mean a message describing
+    a picture that says something else.
+    """
+    import re
+
+    prompt = (row or {}).get("Image Prompt", "") or ""
+    out: list[str] = []
+    headline = re.search(r'Top headline, large: "([^"]*)"', prompt)
+    if headline:
+        out.append(headline.group(1))
+    for problem, fix in re.findall(r'^\d+: "([^"]*)" -> "([^"]*)"', prompt, re.M):
+        out.append(f"{problem}  ->  {fix}")
+    ribbon = re.search(r'Bottom ribbon in small text: "([^"]*)"', prompt)
+    if ribbon:
+        out.append(ribbon.group(1))
+    return out
+
+
+def picture_cards(row: dict[str, str] | None) -> list[tuple[str, str]]:
+    """Just the problem/solution pairs -- the claims, without the furniture.
+
+    The headline and the ribbon are on the picture too, but neither is a
+    point being made, and handing them to the model as though they were is
+    how a message ends up opening on the sender's own job title.
+    """
+    import re
+
+    prompt = (row or {}).get("Image Prompt", "") or ""
+    return [
+        (problem, fix)
+        for problem, fix in re.findall(
+            r'^\d+: "([^"]*)" -> "([^"]*)"', prompt, re.M
+        )
+    ]

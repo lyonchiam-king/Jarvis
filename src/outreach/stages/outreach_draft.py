@@ -225,6 +225,34 @@ def capture_site_shot(
         return None
 
 
+def picture_points(visual_row) -> str:
+    """The claims on this lead's graphic, one per line, for the message.
+
+    The visual beats have always told the model to land on the first point
+    the picture makes. Nothing ever gave it those points, so every message
+    was written blind to the three statements it was supposed to be about --
+    which is how "give them value, from what the picture says" came out as a
+    generic note.
+    """
+    cards = visual_lib.picture_cards(visual_row)
+    return "\n".join(f"{problem} -- {fix}" for problem, fix in cards)
+
+
+def offers_a_page(config, preview_url: str) -> bool:
+    """Whether this message may mention a website at all.
+
+    Only the `both` track promises one. A `visual` campaign sends a picture
+    and the thinking behind it -- and its leads may well carry a Preview URL
+    from website work done months ago, which is not this message's subject.
+    Raising it reads as a second attempt at the same sale, and Lyon asked
+    outright for it to stop.
+    """
+    return (
+        getattr(config.outreach, "track", "website") != "visual"
+        and bool(preview_url.strip())
+    )
+
+
 def needs_an_image(config) -> bool:
     """Whether this campaign's message is supposed to carry a graphic."""
     return getattr(config.outreach, "track", "website") in ("visual", "both")
@@ -416,13 +444,16 @@ def run(
                     sender_name=config.outreach.sender_name,
                     sender_title=config.outreach.sender_title,
                     company=config.outreach.company,
-                    preview_url=preview_url,
+                    # Never offered on the visual track, whatever the Sheet
+                    # still remembers about an older build.
+                    preview_url=preview_url if offers_a_page(config, preview_url) else "",
+                    gaps=picture_points(visual_row) if graphic is not None else "",
                 )
             ,
                 angle=config.outreach.angle,
                 offers_follow_up=config.outreach.offers_follow_up,
                 pitch=pitch,
-                has_page=bool(preview_url.strip()),
+                has_page=offers_a_page(config, preview_url),
                 # A generic graphic may never be described as made for them.
                 # The owner can see from the picture that it was not, so the
                 # claim fails exactly where it is being read.
@@ -633,13 +664,14 @@ def regenerate_one(
             sender_name=config.outreach.sender_name,
             sender_title=config.outreach.sender_title,
             company=config.outreach.company,
-            preview_url=preview_url,
+            preview_url=preview_url if offers_a_page(config, preview_url) else "",
+            gaps=picture_points(visual_row) if graphic is not None else "",
         )
     ,
         angle=config.outreach.angle,
         offers_follow_up=config.outreach.offers_follow_up,
         pitch="visual" if graphic is not None else "site",
-        has_page=bool(preview_url.strip()),
+        has_page=offers_a_page(config, preview_url),
         specific=visual_lib.is_specific(visual_row) if graphic is not None else True,
     )
 

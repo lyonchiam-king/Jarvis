@@ -818,3 +818,133 @@ def test_a_healthy_run_says_nothing_about_any_of_this():
     summary = "\n".join(report.summary_lines())
     assert "stopped answering" not in summary
     assert "standard wording kept" not in summary
+
+
+# ------------------------------------------- a business already messaged
+#
+# Reported from a real run: "this is already been sent... we are only looking
+# at those that has not been sent yet", beside a picker counting 104 on
+# WhatsApp. A business contacted months ago with the website pitch was being
+# counted as fresh work.
+
+
+def sent_row(lead_id, when="2026-08-28T17:48:30Z", status="sent"):
+    return {
+        "Lead ID": lead_id,
+        "WhatsApp Sent At": when,
+        "WhatsApp Status": status,
+        "WhatsApp Message": "The old website pitch.",
+    }
+
+
+def test_already_messaged_wins_over_the_channel():
+    """Mixing them into "On WhatsApp" is what made 104 look like 104 new
+    conversations."""
+    lead_row = {"WhatsApp Reachable": "yes"}
+    assert visual_brief.group_of(lead_row, {}, None) == "whatsapp"
+    assert visual_brief.group_of(lead_row, {}, sent_row("a")) == "messaged"
+
+
+def test_a_drafted_but_unsent_lead_is_not_already_messaged():
+    """Drafted is not sent. A message sitting in the queue is still fresh
+    work, and hiding it would strand it."""
+    drafted = {"Lead ID": "a", "WhatsApp Message": "ready", "WhatsApp Status": "",
+               "WhatsApp Sent At": ""}
+    assert visual_brief.group_of({"WhatsApp Reachable": "yes"}, {}, drafted) == "whatsapp"
+
+
+def test_unconfirmed_counts_as_messaged():
+    """`unconfirmed` means the message left -- the send queue already treats
+    it that way, and the two must not disagree about who was contacted."""
+    row = {"Lead ID": "a", "WhatsApp Status": "unconfirmed", "WhatsApp Sent At": ""}
+    assert visual_brief.already_messaged(row) is True
+
+
+def test_the_messaged_group_can_still_be_run_for():
+    """A second approach with something new to say is a real campaign. It is
+    just never what "On WhatsApp" means."""
+    sheets = FakeSheets(
+        index([lead("fresh"), lead("old")]),
+        index([research("fresh"), research("old")]),
+    )
+    sheets._tabs[schema.OUTREACH_LOG.title] = index([sent_row("old")])
+    visual_brief.run(cfg(), sheets, FakeWriter(), groups=("messaged",))
+    assert [r["Lead ID"] for r in rows_of(sheets)] == ["old"]
+
+
+def test_asking_for_whatsapp_excludes_the_ones_already_messaged():
+    sheets = FakeSheets(
+        index([lead("fresh"), lead("old")]),
+        index([research("fresh"), research("old")]),
+    )
+    sheets._tabs[schema.OUTREACH_LOG.title] = index([sent_row("old")])
+    visual_brief.run(cfg(), sheets, FakeWriter(), groups=("whatsapp",))
+    assert [r["Lead ID"] for r in rows_of(sheets)] == ["fresh"]
+
+
+def test_an_unfiltered_run_pays_no_round_trip_for_a_tab_it_does_not_need():
+    sheets = FakeSheets(index([lead("a")]), index([research("a")]))
+    seen = []
+    plain = sheets.read_rows
+    sheets.read_rows = lambda tab: (seen.append(tab.title), plain(tab))[1]
+    visual_brief.run(cfg(), sheets, FakeWriter())
+    assert schema.OUTREACH_LOG.title not in seen
+
+
+# -------------------------------------------- what the message is built from
+
+
+def test_the_message_is_given_the_points_the_picture_makes():
+    """The visual beats have always said to land on the first point the
+    picture makes. Nothing ever gave the model those points, so every message
+    was written blind to the three statements it was about."""
+    from outreach.stages.outreach_draft import picture_points
+
+    row = {"Image Prompt": (
+        'Top headline, large: "3 quick wins for X".\n'
+        '1: "The same question keeps coming up" -> "Answer it before they ask"\n'
+        '2: "Everything lives in the feed" -> "A page that does not scroll away"\n'
+        'Bottom ribbon in small text: "by Lyon".\n'
+    )}
+    points = picture_points(row)
+    assert "The same question keeps coming up -- Answer it before they ask" in points
+    # The headline and the ribbon are on the picture but are not points being
+    # made; handing them over is how a message opens on a job title.
+    assert "by Lyon" not in points
+    assert "3 quick wins" not in points
+
+
+def test_the_visual_track_never_offers_a_website(tmp_path, monkeypatch):
+    """Its leads may carry a Preview URL from website work done months ago.
+    That is not this message's subject, and raising it reads as a second
+    attempt at the same sale."""
+    from outreach.stages.outreach_draft import offers_a_page
+
+    assert offers_a_page(cfg("visual"), "https://example.com/a/") is False
+    assert offers_a_page(cfg("both"), "https://example.com/a/") is True
+    assert offers_a_page(cfg("website"), "https://example.com/a/") is True
+    assert offers_a_page(cfg("both"), "") is False
+
+
+def test_a_visual_draft_passes_the_points_and_no_page(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUTREACH_STATE_DIR", str(tmp_path))
+    visuals = confirmed(tmp_path)
+    visuals["a"][1]["Image Prompt"] = (
+        '1: "Calls go unanswered" -> "Let them book online"\n'
+    )
+    briefs = index([{"Lead ID": "a", "Preview URL": "https://example.com/a/"}])
+    sheets = FakeSheets(index([lead("a")]), index([research("a")]),
+                        visuals=visuals, site_briefs=briefs)
+
+    seen = {}
+
+    class Spy(CopyWriter):
+        def write_outreach_copy(self, prompt, **kw):
+            seen["prompt"] = prompt
+            seen.update(kw)
+            return super().write_outreach_copy(prompt, **kw)
+
+    outreach_draft.run(cfg("visual"), sheets, Spy(), None)
+    assert "Calls go unanswered -- Let them book online" in seen["prompt"]
+    assert seen["has_page"] is False
+    assert "https://example.com/a/" not in seen["prompt"]

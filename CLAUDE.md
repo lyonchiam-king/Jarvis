@@ -64,7 +64,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1603 tests, pytest, no CI -- the suite is the only gate
+tests/             1619 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -1390,6 +1390,51 @@ The page's template literals wrap, so "its own research" reached the DOM as
 "its\n        own research" and a literal `in` check failed on correct
 output. Collapse whitespace before asserting -- otherwise the test is
 checking the formatter.
+
+**A queue of work already done reads as a queue of work.** The infographic
+step counted 104 leads ready on WhatsApp, and the first card he opened said
+"Already sent" over a message about a website. `group_of` reads the Outreach
+Log now, and a lead that has been written to goes in its own **messaged**
+group rather than among people who have never heard from us -- so the four
+unsent groups count work left to do. `already_messaged` is the test, not the
+Stage: the visual track deliberately writes no Stage, so the Outreach Log row
+is the only honest record that a message exists.
+
+**The gate that stops a double message also stopped the second pitch.**
+Drafting skips any lead with an Outreach Log row -- which is what keeps a
+business from being written to twice, and meant a graphic made for a
+previously-messaged lead could never get a message at all. The card showed a
+confirmed picture, a website message from months ago, and no way through.
+`/api/visual/redraft` is that way: it clears `WhatsApp Status` and `WhatsApp
+Sent At` and rewrites the copy about the picture, keeping the image and the
+prompt -- both cost money to produce, and a second approach must not pay for
+them again. It is the same shape as **Send again**, and it is offered only on
+a lead that has actually been sent to, because on any other the gate it
+clears is not what is holding things up.
+
+**A message about a picture may not be the website message with the link
+removed.** The visual track promises a graphic and nothing else, so a sentence
+offering a page is a promise with nothing behind it -- and on a lead already
+messaged with the website pitch it is the *same* offer arriving twice.
+`offers_a_page` answers once, from the track and the stored URL, and feeds
+both `preview_url` and `has_page`; the system prompt carries a rule forbidding
+any mention of a site unless the brief says one exists. `Both` still sends the
+link, in the text beside the picture, because there the page genuinely exists.
+
+**The picture's own claims are the message's opening.** Writing "a message
+about the graphic" with nothing in hand produced copy that described the
+sender. The three cards are already chosen, evidenced, and about to be read by
+the owner, so `picture_points` lifts them out of the stored prompt and
+`build_outreach_prompt` renders them in order with the hook pinned to the
+first. Out of the prompt rather than recomputed from the Sheet, for the same
+reason `_expected_text` is: the prompt is what was actually pasted into the
+image tool, so it is the only source that matches the picture.
+
+**`Runtime.evaluate`'s `exceptionDetails.text` is always "Uncaught".** Which
+is the entire error a failing render check reported -- and the throw was a
+`getElementById` returning null three expressions into a page with four
+panels. `exception.description` carries the message and the stack. A check
+that cannot say what broke costs more than the bug.
 
 ## Conventions
 
