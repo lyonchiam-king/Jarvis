@@ -232,7 +232,7 @@ def client():
 
 
 def test_page_renders_with_the_campaign_on_it(client):
-    response = client.get("/")
+    response = client.get("/classic")
     assert response.status_code == 200
     assert b"hair salon" in response.data
     assert b"Georgetown" in response.data
@@ -593,7 +593,7 @@ def test_build_queue_is_empty_without_a_sheet(client):
 
 
 def test_page_offers_the_copy_and_open_builder_flow(client):
-    body = client.get("/").data
+    body = client.get("/classic").data
     assert b"Copy prompt" in body
     # The "Open [tool]" button target now comes from config, not a hardcoded
     # Lovable URL -- the default config pins Google AI Studio.
@@ -616,7 +616,7 @@ def test_build_panel_uses_config_site_builder():
     client = _client_with_build(
         site_builder_name="Acme Builder", site_builder_url="https://acme.example/"
     )
-    body = client.get("/").data.decode()
+    body = client.get("/classic").data.decode()
     # h2 subtitle is server-rendered HTML.
     assert "paste into Acme Builder" in body
     # The const the queue-card button reads from, server-rendered by Jinja.
@@ -629,7 +629,7 @@ def test_build_panel_defaults_render_google_ai_studio():
     contract so a silent default change is caught."""
     config = load_config("config/campaigns/penang-my.yaml", env_file=None)
     client = create_app(config).test_client()
-    body = client.get("/").data.decode()
+    body = client.get("/classic").data.decode()
     assert "paste into Google AI Studio" in body
     assert 'const SITE_BUILDER = "Google AI Studio"' in body
     assert 'const SITE_BUILDER_URL = "https://aistudio.google.com/"' in body
@@ -639,7 +639,7 @@ def test_build_panel_open_button_when_url_blank():
     """A blank URL must not render a dead link. We chose to omit the anchor and
     render a bare button -- assert that choice so the edge stays handled."""
     client = _client_with_build(site_builder_name="Acme Builder", site_builder_url="")
-    body = client.get("/").data.decode()
+    body = client.get("/classic").data.decode()
     assert 'const SITE_BUILDER_URL = ""' in body
     # The queue-card template literal renders a bare button when the URL is
     # blank -- no anchor wrapping it, and never a placeholder href.
@@ -649,7 +649,7 @@ def test_build_panel_open_button_when_url_blank():
 
 def test_page_lays_the_morning_out_in_order(client):
     """Gather, review, build, send -- the order you actually work in."""
-    body = client.get("/").data.decode()
+    body = client.get("/classic").data.decode()
     headings = [f"</span> {s}" for s in ("Gather", "Review", "Build", "Send")]
     for heading in headings:
         assert heading in body, f"missing step heading: {heading}"
@@ -658,7 +658,7 @@ def test_page_lays_the_morning_out_in_order(client):
 
 
 def test_the_review_step_offers_approve_and_skip(client):
-    body = client.get("/").data
+    body = client.get("/classic").data
     assert b"Approve" in body
     assert b"Skip" in body
     assert b"Nothing is spent until you" in body
@@ -880,7 +880,7 @@ def campaign_app(tmp_path, monkeypatch):
 
 
 def test_the_page_shows_what_you_are_hunting(client):
-    body = client.get("/").data
+    body = client.get("/classic").data
     assert b"What you're hunting" in body or b"What you&#39;re hunting" in body
     assert b"Change" in body
 
@@ -909,7 +909,7 @@ def test_a_change_takes_effect_without_a_restart(campaign_app):
     client.post("/api/campaign", json={"category": "cafe"})
 
     assert client.get("/api/campaign").get_json()["category"] == "cafe"
-    assert b"cafe" in client.get("/").data
+    assert b"cafe" in client.get("/classic").data
 
 
 def test_areas_can_be_replaced_from_the_page(campaign_app):
@@ -990,14 +990,14 @@ def test_the_handbook_renders_in_the_app(client):
 
 
 def test_the_dashboard_links_to_the_handbook(client):
-    assert b'href="/guide"' in client.get("/").data
+    assert b'href="/guide"' in client.get("/classic").data
 
 
 def test_each_step_links_to_its_place_in_the_handbook(client):
     """A help link that 404s inside the page is worse than none."""
     from outreach.guide import guide_html
 
-    page = client.get("/").data.decode()
+    page = client.get("/classic").data.decode()
     rendered = guide_html()
 
     anchors = re.findall(r'href="/guide#([^"]+)"', page)
@@ -1137,13 +1137,13 @@ def test_a_nonsense_how_many_is_refused(client, bad):
 
 
 def test_the_page_offers_a_how_many_box(client):
-    body = client.get("/").data
+    body = client.get("/classic").data
     assert b'id="howmany"' in body
     assert b"How many" in body
 
 
 def test_the_target_card_exposes_the_batch_cap(client):
-    assert b'id="t-batch"' in client.get("/").data
+    assert b'id="t-batch"' in client.get("/classic").data
 
 
 def test_the_batch_cap_can_be_raised_from_the_page(campaign_app):
@@ -1290,7 +1290,7 @@ def test_already_done_leads_are_not_previewed():
 
 
 def test_the_page_has_somewhere_to_show_the_queue(client):
-    assert b'id="nextup"' in client.get("/").data
+    assert b'id="nextup"' in client.get("/classic").data
 
 
 def test_next_up_is_empty_without_a_sheet(client):
@@ -1374,7 +1374,7 @@ def test_switching_to_gemini_works_end_to_end_and_never_echoes_the_key(model_app
     assert info["key_set"] is True
     assert "gm-secret-value" not in client.get("/api/model").data.decode()
     # The whole rendered dashboard page too, not just the JSON endpoint.
-    assert "gm-secret-value" not in client.get("/").data.decode()
+    assert "gm-secret-value" not in client.get("/classic").data.decode()
 
 
 def test_switching_provider_and_model_rewrites_the_campaign(model_app):
@@ -1492,7 +1492,7 @@ def test_test_model_is_a_button_the_dashboard_can_press():
 
 
 def test_the_page_has_a_model_section(client):
-    body = client.get("/").data
+    body = client.get("/classic").data
     assert b'id="model"' in body
     assert b'data-run="test-model"' in body
 
@@ -1579,7 +1579,7 @@ def test_the_page_offers_a_rewrite_button_with_its_cost_and_risk_named(client):
     """Lyon reads the page, not the handbook, before he presses a button that
     spends money and can silently invalidate a brief he already approved --
     so both have to be said right next to the button."""
-    body = client.get("/").data.decode()
+    body = client.get("/classic").data.decode()
 
     assert 'data-run="site-brief-rewrite"' in body
     rewrite_pos = body.index('data-run="site-brief-rewrite"')
@@ -2387,7 +2387,7 @@ def test_a_sheet_that_could_not_be_saved_still_tells_them_where_it_is(
 def test_the_first_run_card_offers_to_make_the_sheet(client):
     """A stage Lyon cannot reach from the dashboard does not exist, and the
     same is true of a step a new user cannot reach from the first screen."""
-    page = client.get("/").get_data(as_text=True)
+    page = client.get("/classic").get_data(as_text=True)
 
     assert "createSheet()" in page
     assert "/api/create-sheet" in page
@@ -2536,7 +2536,7 @@ def test_reset_is_refused_when_whatsapp_is_switched_off():
 def test_the_send_section_offers_a_way_to_pair_another_phone(client):
     """The button has to be on the page Lyon actually uses. A reset he can
     only reach with curl is not a reset."""
-    page = client.get("/").get_data(as_text=True)
+    page = client.get("/classic").get_data(as_text=True)
 
     # The status-row button specifically. "resetWhatsApp()" on its own
     # matches the function's definition *and* the Yes-log-out button inside
@@ -2696,7 +2696,7 @@ def test_sending_again_needs_a_drafted_message_to_send(monkeypatch):
 def test_the_send_panel_offers_send_again_only_where_it_would_work(client):
     """No phone, no Leads row and drafted-as-email each need a different fix.
     A button promising to undo them would simply not work."""
-    page = client.get("/").get_data(as_text=True)
+    page = client.get("/classic").get_data(as_text=True)
 
     assert 'onclick="undoSend(' in page
     assert "/api/whatsapp/undo-send" in page
@@ -2708,7 +2708,7 @@ def test_the_send_panel_offers_send_again_only_where_it_would_work(client):
 
 def test_the_not_on_whatsapp_list_can_disqualify_a_lead(client):
     """Answered dead ends. Removing one stops it being researched or built."""
-    page = client.get("/").get_data(as_text=True)
+    page = client.get("/classic").get_data(as_text=True)
 
     assert 'onclick="dropUnreachable(' in page
     assert "async function dropUnreachable(" in page
@@ -2720,7 +2720,7 @@ def test_the_not_on_whatsapp_list_can_disqualify_a_lead(client):
 def test_removing_a_lead_warns_when_it_still_has_an_email(client):
     """A lead with no WhatsApp but a known email is still buildable -- it is
     counted in the panel's own "can be followed up" number."""
-    page = client.get("/").get_data(as_text=True)
+    page = client.get("/classic").get_data(as_text=True)
 
     assert "Remove anyway?" in page
     assert "could still be contacted that way" in page
@@ -2739,7 +2739,7 @@ def test_the_design_level_is_readable_from_the_page(client):
 def test_the_switch_is_on_the_page_lyon_uses(client):
     """A setting he can only reach by editing YAML is a setting he does not
     have -- the same rule that made the reachability stage a button."""
-    page = client.get("/").get_data(as_text=True)
+    page = client.get("/classic").get_data(as_text=True)
 
     assert 'id="design-showcase"' in page
     assert "setDesignLevel(this.checked)" in page
@@ -3102,7 +3102,7 @@ def test_skipping_a_lead_with_no_draft_says_so(monkeypatch):
 def test_the_skip_button_sits_beside_send_and_beside_retry(client):
     """Both states need it: a message you do not want to send and a message
     that just failed are the same decision."""
-    page = client.get("/").get_data(as_text=True)
+    page = client.get("/classic").get_data(as_text=True)
 
     assert "skipWhatsApp('${esc(m.lead_id)}')" in page
     assert "/api/whatsapp/skip" in page
@@ -3123,7 +3123,7 @@ def test_the_services_are_readable_from_the_page(client):
 def test_the_page_offers_a_place_to_edit_them(client):
     """The wording is the part worth tuning after reading a few replies, and
     a setting reachable only by editing YAML is a setting Lyon does not have."""
-    page = client.get("/").get_data(as_text=True)
+    page = client.get("/classic").get_data(as_text=True)
 
     assert 'id="svc-intro"' in page
     assert 'id="svc-list"' in page
@@ -3204,14 +3204,14 @@ def _locked_app(password="hunter2"):
 def test_with_no_password_set_nothing_asks_you_to_sign_in(client):
     """The desktop workflow is unchanged. A login nobody needs is a login
     nobody will set a password for."""
-    assert client.get("/").status_code == 200
+    assert client.get("/classic").status_code == 200
     assert client.get("/api/summary").status_code == 200
 
 
 def test_a_password_locks_the_page_and_the_api():
     app = _locked_app()
 
-    page = app.get("/")
+    page = app.get("/classic")
     api = app.get("/api/summary")
 
     assert page.status_code == 302 and "/login" in page.headers["Location"]
@@ -3227,7 +3227,7 @@ def test_the_right_password_gets_you_in_and_stays_in():
     response = app.post("/login", data={"password": "hunter2"})
 
     assert response.status_code == 302
-    assert app.get("/").status_code == 200
+    assert app.get("/classic").status_code == 200
     assert app.get("/api/summary").status_code == 200
 
 
@@ -3293,7 +3293,7 @@ def test_the_icon_is_a_real_png(client):
 
 
 def test_the_page_links_everything_ios_needs(client):
-    page = client.get("/").get_data(as_text=True)
+    page = client.get("/classic").get_data(as_text=True)
 
     assert 'rel="manifest"' in page
     assert 'rel="apple-touch-icon"' in page
@@ -3306,7 +3306,7 @@ def test_the_page_links_everything_ios_needs(client):
 def test_inputs_are_big_enough_that_safari_does_not_zoom(client):
     """Below 16px Safari zooms the page in on focus and never zooms back --
     tapping the message box to fix a typo left it magnified."""
-    page = client.get("/").get_data(as_text=True)
+    page = client.get("/classic").get_data(as_text=True)
 
     phone = page.split("@media (max-width:640px)", 1)[1].split("}\n  }", 1)[0]
     assert "font-size:16px" in phone
@@ -3314,7 +3314,7 @@ def test_inputs_are_big_enough_that_safari_does_not_zoom(client):
 
 
 def test_the_phone_layout_keeps_content_out_of_the_island_and_the_indicator(client):
-    page = client.get("/").get_data(as_text=True)
+    page = client.get("/classic").get_data(as_text=True)
 
     phone = page.split("@media (max-width:640px)", 1)[1].split("}\n  }", 1)[0]
     assert "env(safe-area-inset-top)" in phone
@@ -3323,7 +3323,7 @@ def test_the_phone_layout_keeps_content_out_of_the_island_and_the_indicator(clie
 
 def test_the_send_buttons_are_thumb_sized_on_a_phone(client):
     """These send messages to real businesses. 44px is Apple's own minimum."""
-    page = client.get("/").get_data(as_text=True)
+    page = client.get("/classic").get_data(as_text=True)
 
     phone = page.split("@media (max-width:640px)", 1)[1].split("}\n  }", 1)[0]
     assert "min-height:44px" in phone

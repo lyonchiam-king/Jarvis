@@ -9,8 +9,69 @@ import {
   Info,
   Sparkles,
 } from 'lucide-react';
-import { ReachabilityResponse } from '../types';
+import { ReachabilityEntry, ReachabilityResponse } from '../types';
 import { api } from '../api/client';
+
+/**
+ * Take one settled dead end off the list for good.
+ *
+ * Offered only where the check answered "not on WhatsApp", which is a
+ * settled question. It disqualifies the lead so nothing researches or builds
+ * for it again -- and a rejected lead holding an email is still buildable
+ * and still counted, so removing one says so before it acts.
+ */
+const RemoveButton: React.FC<{
+  entry: ReachabilityEntry;
+  onRemoved: () => void;
+}> = ({ entry, onRemoved }) => {
+  const [arming, setArming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+
+  if (note) {
+    return <span className="text-[11px] text-amber-300">{note}</span>;
+  }
+  if (!arming) {
+    return (
+      <button
+        id={`reachability-remove-${entry.lead_id}`}
+        onClick={() => setArming(true)}
+        className="px-2.5 py-1 rounded-md border border-slate-300 dark:border-slate-700 text-[11px] text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 studio-transition"
+      >
+        Remove
+      </button>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span className="text-[11px] text-slate-500">
+        {entry.email_found
+          ? 'It still has an email, so it can be followed up. Remove anyway?'
+          : 'Remove for good?'}
+      </span>
+      <button
+        id={`reachability-remove-confirm-${entry.lead_id}`}
+        onClick={async () => {
+          setBusy(true);
+          const res = await api.dropLead(entry.lead_id);
+          setBusy(false);
+          if (res.error) setNote(res.error);
+          else onRemoved();
+        }}
+        disabled={busy}
+        className="px-2.5 py-1 rounded-md bg-amber-500 text-slate-950 text-[11px] font-semibold hover:bg-amber-400 studio-transition disabled:opacity-50"
+      >
+        {busy ? 'Removing...' : 'Yes'}
+      </button>
+      <button
+        onClick={() => setArming(false)}
+        className="px-2 py-1 text-[11px] text-slate-500 hover:text-slate-300"
+      >
+        No
+      </button>
+    </span>
+  );
+};
 
 export const ReachabilityView: React.FC = () => {
   const [data, setData] = useState<ReachabilityResponse | null>(null);
@@ -152,6 +213,10 @@ export const ReachabilityView: React.FC = () => {
                 <th className="p-3">E.164 Dialled Format</th>
                 <th className="p-3">Email Status</th>
                 <th className="p-3">Build Strategy</th>
+                {/* Only on the settled list. An *unchecked* lead is not a dead
+                    end, it is one the relay has not answered for yet, and
+                    removing those throws away work the check has not done. */}
+                {activeTab === 'rejected' && <th className="p-3"></th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
@@ -178,6 +243,11 @@ export const ReachabilityView: React.FC = () => {
                   <td className="p-3 font-medium text-slate-700 dark:text-slate-300">
                     {entry.buildable_reason}
                   </td>
+                  {activeTab === 'rejected' && (
+                    <td className="p-3 text-right">
+                      <RemoveButton entry={entry} onRemoved={loadData} />
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

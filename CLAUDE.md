@@ -64,7 +64,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1670 tests, pytest, no CI -- the suite is the only gate
+tests/             1676 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -1093,11 +1093,31 @@ of it on screen. It proves nothing about whether Flask returns those shapes
 -- `client.ts` and the endpoint test own that -- and a control confirms the
 pass can fail.
 
-**`/app` is additive, and `/` does not move.** The React page is new, has never
-run on Lyon's machine, and replacing the working dashboard with it would make
-a bad first render into a lost morning. Both pages get their own
-`start_url` manifest so each has its own home-screen icon; the old one stays
-the default until he says otherwise.
+**`/app` was additive, and then it was asked to be the front door.** The
+React page was new and had never run on Lyon's machine, so replacing the
+working dashboard would have made a bad first render into a lost morning --
+the old one stayed the default *until he said otherwise*, which he has now
+said. `/` redirects to `/app`, the original keeps its own address at
+`/classic` rather than being deleted (a safety net is only a net while it is
+reachable), and `OUTREACH_CLASSIC_DASHBOARD` turns it round. Read per
+request, blank counting as unset, the same rule `OUTREACH_STATE_DIR` follows.
+A checkout with no built page still opens on the old one, because
+redirecting to a 404 is a dashboard that does not open at all. Thirty-two
+tests fetched `/` for the old page's HTML and now fetch `/classic`; so does
+`render-check`'s control, which otherwise compared the new page with itself
+and proved nothing.
+
+**Eight controls existed only as client methods.** Found by auditing the day
+the React page became the primary one: the send step's **excluded list** --
+so a drafted lead the queue would not offer simply vanished, which is the
+exact silence that list exists to break -- plus Send again, Not this one, the
+services list, the design level, the relay reset and the per-row Remove. Each
+was written, typed, shipped and called by nothing. It is the `wa_link` shape,
+the reachability stage with no button, the three unwired
+`render_lovable_prompt` sites, `client_ip`, and `shot_kind`, for the sixth
+time. `test_every_client_method_is_called_by_a_view` holds the whole class in
+one assertion -- static on purpose, since what a control *does* belongs to
+`render-check`, which drives the real interface.
 
 **A graphic makes three checkable claims, so no model may choose them.** The
 infographic puts statements about a real business on a picture with Lyon's
@@ -1656,16 +1676,23 @@ Say so rather than implying otherwise:
   binary cannot even be fetched. Everything on the Python side -- reading the
   published address, the refusals, the rate-limit keying, the shutdown -- is
   driven against a stand-in for cloudflared.
-- The `Dockerfile` has never been built. A daemon *can* be started here
-  (`sudo dockerd`), but Docker Hub's blob CDN is refused by the proxy, so
-  `FROM python:3.11-slim` cannot be pulled and the build stops at line 9 --
-  don't spend another ten minutes finding that out. Every claim about the
-  image is checked by reading it and by installing the package for real -- which is what caught the missing
-  `package-data` and the install that would have shipped no `outreach`
-  command. Nobody has yet seen the image start, take a screenshot, or reach
-  Google from inside it.
+- The `Dockerfile` has never been built **to completion**. The furthest it
+  has got, checked rather than assumed: a daemon starts (`sudo dockerd`) and
+  `FROM python:3.11-slim` now *does* pull -- Docker Hub's blob CDN is no
+  longer refused, so the old note saying the build stops at line 9 was out of
+  date. It stops at line 19 instead: `apt-get` cannot resolve
+  `deb.debian.org`, because the agent proxy listens on loopback for this
+  session's own tools and is not a general egress for a build container.
+  `--network=host` with the proxy passed as a build arg does not fix it
+  either, since that host is not on the allowlist. Don't spend another ten
+  minutes on it. So every claim about the image is still checked by reading
+  it and by installing the package for real -- which is what caught the
+  missing `package-data` and the install that would have shipped no
+  `outreach` command. Nobody has yet seen the image start, take a
+  screenshot, or reach Google from inside it.
 - Nothing has ever been deployed to Fly from here. `flyctl` is not
-  installed, the image has never been built, and no machine has started --
+  installed, there are no Fly credentials in this container, the image has
+  never finished building, and no machine has started --
   so `fly.toml` is checked only by reading it against the Dockerfile and the
   app (the port, the mount path, and that the health check names a URL the
   app really serves without a session). Every command in `DEPLOY.md` is

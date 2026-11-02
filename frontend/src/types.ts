@@ -200,6 +200,26 @@ export interface ModelSettings {
   places_key_set: boolean;
 }
 
+/**
+ * A drafted lead the send step is not offering, and why.
+ *
+ * Every drafted lead has to land in the queue or in this list. One that
+ * appears in neither is a silent failure: the step goes quiet and the only
+ * way to find out why is to open the Sheet and read columns by eye.
+ */
+export interface SendExclusion {
+  lead_id: string;
+  name: string;
+  phone: string;
+  /** The server's own code, e.g. `already_sent`. Branch on this, not prose. */
+  reason: string;
+  /** Extra detail the server attached, shown verbatim where it exists. */
+  wa_status?: string;
+  status?: string;
+  recipient?: string;
+  channel?: string;
+}
+
 export interface WhatsAppStatus {
   enabled: boolean;
   connected: boolean;

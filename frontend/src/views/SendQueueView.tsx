@@ -11,7 +11,7 @@ import {
   Sparkles,
   ShieldAlert,
 } from 'lucide-react';
-import { SendItem, SendStatus, WhatsAppStatus } from '../types';
+import { SendExclusion, SendItem, SendStatus, WhatsAppStatus } from '../types';
 import { api } from '../api/client';
 
 interface SendQueueViewProps {
@@ -19,12 +19,78 @@ interface SendQueueViewProps {
   onRefresh: () => void;
 }
 
+/**
+ * One drafted lead the send step is not offering, and what to do about it.
+ *
+ * The reasons are the server's own codes, never matched on prose: a page
+ * that chose a button by searching an error message breaks the next time the
+ * sentence is improved.
+ */
+const EXCLUSION_WORDS: Record<string, string> = {
+  already_sent: 'Already sent. If it never arrived, Send again puts it back.',
+  status_not_drafted:
+    'Its Outreach Log row does not say Drafted — a hand edit, or it was skipped.',
+  phone_empty: 'No phone number on its Leads row.',
+  no_lead_row: 'No matching row on the Leads tab.',
+  phone_not_mobile: 'Its number cannot receive WhatsApp.',
+  unreachable: 'No email, and its number cannot take WhatsApp.',
+  email_channel: 'Drafted as an email, so it is in Gmail drafts.',
+  unknown_channel: 'Its Channel cell does not say WhatsApp.',
+};
+
+/** The two a cleared cell actually fixes. The rest need the lead fixing. */
+const REPAIRABLE = ['already_sent', 'status_not_drafted'];
+
+const ExcludedRow: React.FC<{
+  row: SendExclusion;
+  onRepaired: () => void;
+}> = ({ row, onRepaired }) => {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+
+  return (
+    <div
+      id={`send-excluded-${row.lead_id}`}
+      className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
+    >
+      <div className="min-w-0">
+        <p className="text-[12px] font-medium text-slate-800 dark:text-slate-200 truncate">
+          {row.name}
+        </p>
+        <p className="text-[11px] text-slate-500">
+          {EXCLUSION_WORDS[row.reason] || row.reason}
+          {row.recipient ? ` (${row.recipient})` : ''}
+        </p>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        {note && <span className="text-[11px] text-amber-300">{note}</span>}
+        {REPAIRABLE.includes(row.reason) && !note && (
+          <button
+            id={`send-again-${row.lead_id}`}
+            onClick={async () => {
+              setBusy(true);
+              const res = await api.undoWhatsAppSend(row.lead_id);
+              setBusy(false);
+              if (res.error) setNote(res.error);
+              else onRepaired();
+            }}
+            disabled={busy}
+            className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-[11px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 studio-transition disabled:opacity-50"
+          >
+            {busy ? 'Putting it back...' : 'Send again'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
 export const SendQueueView: React.FC<SendQueueViewProps> = ({
   whatsappStatus,
   onRefresh,
 }) => {
   const [queue, setQueue] = useState<SendItem[]>([]);
-  const [excluded, setExcluded] = useState<{ name: string; phone: string; reason: string }[]>([]);
+  const [excluded, setExcluded] = useState<SendExclusion[]>([]);
   const [loading, setLoading] = useState(true);
   const [messagesMap, setMessagesMap] = useState<Record<string, string>>({});
   const [sendingMap, setSendingMap] = useState<Record<string, boolean>>({});
@@ -472,6 +538,27 @@ export const SendQueueView: React.FC<SendQueueViewProps> = ({
                             {isSending ? 'Sending...' : 'Send from here'}
                           </button>
                         )}
+                        {/* "Not this one, not now". It keeps the message and
+                            the picture -- both cost money to make -- and the
+                            excluded list below offers Send again, which is
+                            why it does not stop to confirm. */}
+                        <button
+                          id={`skip-btn-${item.lead_id}`}
+                          onClick={async () => {
+                            const res = await api.skipWhatsApp(item.lead_id);
+                            if (res.error) {
+                              setNotes((prev) => ({
+                                ...prev, [item.lead_id]: res.error as string,
+                              }));
+                            } else {
+                              await loadQueue();
+                            }
+                          }}
+                          title="Takes it off this list without sending. It keeps its message and picture, and Send again below puts it back."
+                          className="px-3 py-2 text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
+                        >
+                          Not this one
+                        </button>
                       </>
                     )}
                   </div>
@@ -490,6 +577,26 @@ export const SendQueueView: React.FC<SendQueueViewProps> = ({
           );
         })}
       </div>
+
+      {/* Every drafted lead has to land in the queue or in this list. One in
+          neither is a silent failure -- the step goes quiet and the only way
+          to find out why is to open the Sheet and read columns by eye. */}
+      {excluded.length > 0 && (
+        <div id="send-excluded" className="space-y-2">
+          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+            Drafted, but not in this list ({excluded.length})
+          </h3>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800 overflow-hidden">
+            {excluded.map((row) => (
+              <ExcludedRow
+                key={row.lead_id || row.name}
+                row={row}
+                onRepaired={loadQueue}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Confirmation Modal for Send All */}
       {showConfirmModal && (

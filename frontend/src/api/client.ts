@@ -34,6 +34,7 @@ import {
   Stage,
   VisualItem,
   VisualQueue,
+  SendExclusion,
   VisualState,
   VisualCandidates,
 } from '../types';
@@ -571,7 +572,7 @@ class ApiClient {
   // ------------------------------------------------------------------ send
 
   async getSendQueue(): Promise<
-    ApiResponse<{ queue: SendItem[]; excluded: { name: string; phone: string; reason: string }[] }>
+    ApiResponse<{ queue: SendItem[]; excluded: SendExclusion[] }>
   > {
     const res = await this.request<Raw>('/api/whatsapp/queue');
     return this.map(res, (d) => ({
@@ -600,7 +601,21 @@ class ApiClient {
           drafted_at: '',
         })
       ),
-      excluded: d.excluded || [],
+      excluded: ((d.excluded || []) as Raw[]).map(
+        (e: Raw): SendExclusion => ({
+          lead_id: e.lead_id || '',
+          name: e.name || e.lead_id || '',
+          phone: e.phone || '',
+          // The server's own code, kept verbatim: a page that decided which
+          // button to show by searching prose breaks the next time the
+          // sentence is improved.
+          reason: e.reason || '',
+          wa_status: e.wa_status || '',
+          status: e.status || '',
+          recipient: e.recipient || '',
+          channel: e.channel || '',
+        })
+      ),
     }));
   }
 

@@ -151,6 +151,25 @@ class Devtools {
   }
 
   /**
+   * Wait until an expression reports something, or give up.
+   *
+   * Every assertion here runs after a fixed sleep, which is a guess at how
+   * long React takes to commit. On a slow run the guess is short and the
+   * check fails on a page that was about to be correct -- a gate that cries
+   * wolf gets re-run until it passes, which is how a real regression gets
+   * waved through. Polling asks the question instead of timing it.
+   */
+  async waitFor(expression, { attempts = 20, every = 150 } = {}) {
+    let last = null;
+    for (let i = 0; i < attempts; i += 1) {
+      last = await this.evaluate(expression);
+      if (last && (!Array.isArray(last) || last.length)) return last;
+      await new Promise((r) => setTimeout(r, every));
+    }
+    return last;
+  }
+
+  /**
    * What the page currently reads, as text.
    *
    * `document.body.innerText` is read a dozen times in this file and threw
@@ -347,11 +366,30 @@ try {
           stale_pitch: false,
         },
       ],
-      excluded: [],
+      // Every drafted lead lands in the queue or here. One in neither is a
+      // silent failure: the step goes quiet and the only way to find out why
+      // is to open the Sheet and read columns by eye.
+      excluded: [
+        {
+          lead_id: 'SEND-X', name: 'Skipped Salon', phone: '+44 7356 003025',
+          reason: 'status_not_drafted', status: 'Skipped',
+        },
+        {
+          lead_id: 'SEND-Y', name: 'No Phone Salon', phone: '',
+          reason: 'phone_empty',
+        },
+      ],
     },
     // The model settings, and the catalogue its button asks for. No model
     // name is written into Jarvis anywhere -- which left nowhere to look one
     // up the morning a provider retired the one this campaign named.
+    '/api/whatsapp/undo-send': { ok: true, cleared: ['Status (Skipped -> Drafted)'] },
+    '/api/whatsapp/skip': { ok: true },
+    '/api/design-level': { level: 'showcase', levels: ['showcase', 'standard'] },
+    '/api/services': {
+      intro: 'these are the other ways I get businesses in front of customers:',
+      services: ['Google Business Profile optimisation', 'Meta ads'],
+    },
     // Longest path first: the stub matches by prefix in insertion order, so
     // '/api/model' listed above would answer for the catalogue too.
     '/api/model/catalogue': {
@@ -545,9 +583,12 @@ try {
   }
 
   // The queue must carry the counts, not just the labels.
-  const queueCounts = await dt.evaluate(
-    `[...document.querySelectorAll('#task-send, #task-build, #task-brief')]
-       .map(el => el.innerText.replace(/\\s+/g, ' ').trim())`,
+  const queueCounts = await dt.waitFor(
+    `(() => {
+       const rows = [...document.querySelectorAll('#task-send, #task-build, #task-brief')]
+         .map(el => el.innerText.replace(/\\s+/g, ' ').trim());
+       return rows.length === 3 ? rows : null;
+     })()`,
   );
   if (!Array.isArray(queueCounts) || queueCounts.length !== 3) {
     fail(`the task queue rendered ${JSON.stringify(queueCounts)}, expected three rows`);
@@ -971,6 +1012,35 @@ try {
     fail('Review & Send did not name which picture it is carrying');
   }
 
+  // The controls that arrived on this page only when it became the primary
+  // one. Each was a client method no view called -- which is the shape this
+  // project keeps producing: right code, unreachable, indistinguishable
+  // from absent.
+  const sendControls = await dt.evaluate(`(() => {
+    const list = document.getElementById('send-excluded');
+    return {
+      excluded: list ? (list.innerText || '').replace(/\\s+/g, ' ') : '',
+      again: !!document.getElementById('send-again-SEND-X'),
+      // phone_empty is not repairable by a cleared cell, so no button.
+      noFalseButton: !document.getElementById('send-again-SEND-Y'),
+      skip: !!document.getElementById('skip-btn-SEND-A'),
+    };
+  })()`);
+  if (!sendControls.excluded) {
+    fail('Review & Send renders no excluded list, so a held lead just vanishes');
+  }
+  for (const phrase of ['Skipped Salon', 'does not say Drafted',
+                        'No Phone Salon', 'No phone number']) {
+    if (!sendControls.excluded.includes(phrase)) {
+      fail(`the excluded list did not render ${JSON.stringify(phrase)}`);
+    }
+  }
+  if (!sendControls.again) fail('a repairable exclusion offers no Send again');
+  if (!sendControls.noFalseButton) {
+    fail('Send again is offered where a cleared cell fixes nothing');
+  }
+  if (!sendControls.skip) fail('a queued card offers no "Not this one"');
+
   // The missing-tab repair. Every schema addition breaks every existing
   // Sheet the same way, so the button beside that error is the difference
   // between one press and a terminal command the owner cannot run. Driven
@@ -1039,6 +1109,12 @@ try {
   if (!/the website ones and the infographic ones alike/.test(settings.body)) {
     fail('Settings does not say the message model writes both kinds of message');
   }
+  // The relay reset: logging out at WhatsApp's end leaves the saved session
+  // on disk, so without this there is no way to pair a different phone.
+  const relay = await dt.evaluate(
+    `!!document.getElementById('relay-reset')`,
+  );
+  if (!relay) fail('Settings offers no way to log out of WhatsApp');
 
   await dt.evaluate(`document.getElementById('settings-catalogue-btn').click()`);
   await new Promise((r) => setTimeout(r, 600));
@@ -1076,6 +1152,38 @@ try {
   }
   if (picked.message !== 'beta-model:cloud') {
     fail(`For messages did not fill its box -- it reads ${JSON.stringify(picked.message)}`);
+  }
+
+  // Campaign settings: the two editors that were client methods no view
+  // called, so they could only be reached from the other page.
+  await dt.evaluate(`document.getElementById('nav-item-campaigns').click()`);
+  await new Promise((r) => setTimeout(r, 700));
+  // Idempotent: the panel is toggled earlier in this run, so clicking blind
+  // would close it and read an interface that is not on screen.
+  await dt.evaluate(`(() => {
+    const toggle = document.getElementById('campaign-settings-toggle');
+    if (toggle && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+  })()`);
+  await new Promise((r) => setTimeout(r, 600));
+  const campaignSettings = await dt.evaluate(`(() => {
+    const level = document.getElementById('design-level-select');
+    const services = document.getElementById('services-lines');
+    return {
+      level: !!level, levelValue: level ? level.value : '',
+      services: !!services, servicesValue: services ? services.value : '',
+    };
+  })()`);
+  if (!campaignSettings.level) {
+    fail('campaign settings offer no way to set how much design the prompts ask for');
+  }
+  if (campaignSettings.levelValue !== 'showcase') {
+    fail(`the design level reads ${JSON.stringify(campaignSettings.levelValue)}`);
+  }
+  if (!campaignSettings.services) {
+    fail('campaign settings offer no way to edit the services on every message');
+  }
+  if (!campaignSettings.servicesValue.includes('Google Business Profile')) {
+    fail('the services box did not load what the campaign has saved');
   }
 
   // Results, which is new and entirely derived from the summary.
@@ -1153,7 +1261,9 @@ try {
 
   // A control: the same assertions run against the old page must NOT pass.
   // Without this the check would certify any page that happened to load.
-  await dt.send('Page.navigate', { url: `http://127.0.0.1:${APP_PORT}/` });
+  // `/classic` rather than `/`, which now opens on the new dashboard -- the
+  // control has to fetch the other page, not whichever one is the default.
+  await dt.send('Page.navigate', { url: `http://127.0.0.1:${APP_PORT}/classic` });
   await new Promise((r) => setTimeout(r, 1500));
   const oldPage = await dt.evaluate('document.documentElement.outerHTML');
   if (oldPage.includes('app-sidebar')) {

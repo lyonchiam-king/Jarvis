@@ -17,6 +17,19 @@ an hour.
 
 ---
 
+## The two dashboards
+
+The address opens the **current** dashboard — the dark one, with Today,
+Campaigns, Contacts and Results down the side. Everything in this guide works
+there.
+
+The original page is still at **`/classic`** (so `http://127.0.0.1:5000/classic`
+on your own machine). Nothing has been taken away from it; it is the fallback
+if the newer page ever misbehaves. If you want it back as the default, set
+`OUTREACH_CLASSIC_DASHBOARD=true` in your `.env`.
+
+---
+
 ## Getting it onto your computer
 
 You already have this folder and a working `.env`. To pick up the newest

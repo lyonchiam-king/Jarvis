@@ -215,9 +215,12 @@ Reload the page. The counts should now be real.
 Open the address in **Safari** on the iPhone. Sign in. Press the **share**
 button (the square with the arrow), scroll down, **Add to Home Screen**.
 
-It gets its own icon and opens without Safari's address bar. There are two
-pages and each installs separately: `/` is the one you already know, `/app`
-is the newer one. Add whichever you prefer -- or both.
+It gets its own icon and opens without Safari's address bar.
+
+The address opens the current dashboard. The original page is still there at
+`/classic` if you ever want it -- it installs separately and gets its own
+icon, so you can have both on the home screen. To make `/classic` what the
+plain address opens, set `OUTREACH_CLASSIC_DASHBOARD=true`.
 
 ---
 

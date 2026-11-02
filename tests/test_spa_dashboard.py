@@ -56,7 +56,7 @@ def test_the_old_page_links_to_the_new_one(client):
     The reachability stage shipped once with no button and never ran; this
     is the same shape of mistake with a front end instead of a stage.
     """
-    assert b'href="/app"' in client.get("/").data
+    assert b'href="/app"' in client.get("/classic").data
 
 
 def test_the_page_is_served_at_app(client):
@@ -435,7 +435,7 @@ def test_a_wrong_password_keeps_the_destination():
 
 
 def test_the_link_to_the_new_page_is_a_button_not_a_footnote(client):
-    page = client.get("/").get_data(as_text=True)
+    page = client.get("/classic").get_data(as_text=True)
     link = page[page.index('href="/app"'):][:400]
     assert "background" in link, "the link to the new dashboard is not styled as a button"
 
@@ -663,3 +663,102 @@ def test_results_says_which_numbers_a_person_sets_by_hand():
     than none, because it gets believed."""
     bundle = _bundle()
     assert "What is not here" in bundle
+
+
+def test_every_client_method_is_called_by_a_view():
+    """The other half of that join, and the failure this project repeats.
+
+    `wa_link` was computed, returned and drawn by neither front end. The
+    reachability stage shipped with no button. Three `render_lovable_prompt`
+    call sites were unwired. `client_ip` was defined and never called.
+    `shot_kind` was returned and rendered by nothing. Each time the code was
+    right, unreachable, and from the owner's side indistinguishable from
+    absent -- and each time the whole suite stayed green.
+
+    Eight more were found the morning the React page was asked to become the
+    primary one: the send step's excluded list, Send again, Not this one, the
+    services list, the design level, the relay reset and the per-row Remove.
+    A method nothing calls is a feature nobody has.
+
+    Static on purpose. What a control *does* belongs to `render-check`, which
+    drives the real interface; this catches the whole class in one line and
+    cannot be satisfied by a method that merely exists.
+    """
+    source = CLIENT_TS.read_text()
+    methods = set(re.findall(r"^  async ([A-Za-z0-9_]+)\(", source, re.M))
+    assert methods, "found no client methods -- has the file moved?"
+
+    views = [
+        path
+        for path in Path("frontend/src").rglob("*.ts*")
+        if path != CLIENT_TS
+    ]
+    assert views, "found no views to read"
+    everything = "\n".join(path.read_text() for path in views)
+
+    unused = sorted(m for m in methods if f".{m}(" not in everything)
+    assert not unused, (
+        "these client methods are called by no view, so the control they "
+        f"would serve does not exist on the page: {unused}"
+    )
+
+
+# ------------------------------------------- which dashboard the door opens on
+
+
+def _door(monkeypatch, *, classic=None, built=True, tmp_path=None):
+    import outreach.dashboard as dash
+
+    if classic is None:
+        monkeypatch.delenv("OUTREACH_CLASSIC_DASHBOARD", raising=False)
+    else:
+        monkeypatch.setenv("OUTREACH_CLASSIC_DASHBOARD", classic)
+    if not built:
+        # A checkout with no built page: the old one has to answer, because
+        # a redirect to a 404 is a dashboard that does not open at all.
+        monkeypatch.setattr(dash, "WEB_ROOT", tmp_path / "nothing")
+    config = load_config("config/campaigns/penang-my.yaml", env_file=None)
+    return create_app(config).test_client()
+
+
+def test_the_front_door_opens_on_the_new_dashboard(monkeypatch):
+    """It was additive while it had never run on his machine -- a bad first
+    render would have cost a morning. It is the one he works from now."""
+    res = _door(monkeypatch).get("/")
+
+    assert res.status_code in (301, 302, 308)
+    assert "/app" in res.headers["Location"]
+
+
+def test_the_old_page_keeps_an_address_that_does_not_move(monkeypatch):
+    """The safety net is only a safety net while it is reachable."""
+    res = _door(monkeypatch).get("/classic")
+
+    assert res.status_code == 200
+    assert b"Jarvis" in res.data or b"<script>" in res.data
+
+
+def test_the_old_page_can_be_asked_for_as_the_default(monkeypatch):
+    """One variable, read per request rather than captured at import, so it
+    can be set without a reinstall."""
+    res = _door(monkeypatch, classic="true").get("/")
+
+    assert res.status_code == 200
+    assert b"<script>" in res.data
+
+
+def test_a_blank_value_counts_as_unset(monkeypatch):
+    """Docker passes empty strings through for every variable nobody filled
+    in -- the same rule OUTREACH_STATE_DIR follows."""
+    res = _door(monkeypatch, classic="").get("/")
+
+    assert res.status_code in (301, 302, 308)
+
+
+def test_a_checkout_with_no_built_page_still_opens(monkeypatch, tmp_path):
+    """`pip install` of a source tree without the built files, or a bad
+    build. Redirecting to a 404 is a dashboard that does not open at all."""
+    res = _door(monkeypatch, built=False, tmp_path=tmp_path).get("/")
+
+    assert res.status_code == 200
+    assert b"<script>" in res.data

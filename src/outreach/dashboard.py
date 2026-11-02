@@ -31,6 +31,7 @@ from flask import (
     request,
     send_from_directory,
     session,
+    url_for,
 )
 from werkzeug.exceptions import NotFound
 
@@ -224,6 +225,18 @@ class Summary:
             or self.awaiting_approval
             or self.approved_unbuilt
         )
+
+
+# Where the built React page lives. Same origin on purpose: served from
+# anywhere else it would need CORS, a public address and a second way to sign
+# in, while from here the login cookie, the API and the page are one thing and
+# `Dashboard.bat` needs no new steps.
+#
+# Module level rather than a closure local because the front door reads it to
+# decide which dashboard to open, and a test has to be able to point it at a
+# directory with nothing in it -- which is what a checkout without the built
+# files actually is.
+WEB_ROOT = Path(__file__).parent / "web"
 
 
 def _is_drafted_outreach(row: dict[str, str]) -> bool:
@@ -927,12 +940,42 @@ def create_app(config: Config) -> Flask:
 
     @app.route("/")
     def index():
+        """Whichever dashboard this install opens on.
+
+        `/app` was additive while it had never run on Lyon's machine: a bad
+        first render would have cost him a morning, and the working page
+        staying put was the whole safety net. It has now been the one he
+        works from for a week, so it is what the front door opens onto -- and
+        the old page keeps its own address rather than being deleted, because
+        the safety net is only a safety net while it is reachable.
+
+        `OUTREACH_CLASSIC_DASHBOARD` turns that round for anyone who wants
+        the old one back, read on every request rather than captured at
+        import so it can be set without a reinstall.
+        """
+        if _classic_requested() or not (WEB_ROOT / "index.html").exists():
+            return _classic_page()
+        return redirect(url_for("spa_index"))
+
+    @app.route("/classic")
+    def classic_index():
+        """The original page, at an address that does not move."""
+        return _classic_page()
+
+    def _classic_page():
         return render_template_string(
             PAGE,
             campaign=current().campaign,
             build=current().build,
             whatsapp_enabled=current().outreach.whatsapp_enabled,
         )
+
+    def _classic_requested() -> bool:
+        value = (os.environ.get("OUTREACH_CLASSIC_DASHBOARD") or "").strip()
+        # A blank value counts as unset, the same rule `OUTREACH_STATE_DIR`
+        # follows: Docker passes empty strings through for every variable
+        # nobody filled in.
+        return value.casefold() in {"1", "true", "yes", "on"}
 
     @app.route("/manifest.webmanifest")
     def manifest():
@@ -1052,12 +1095,6 @@ def create_app(config: Config) -> Flask:
     # about it is proven on Lyon's machine yet, and a dashboard that spends
     # money is not the place to find out by replacing the working one.
     #
-    # Same origin on purpose. Served from anywhere else it would need CORS,
-    # a public address and a second way to sign in; served from here the
-    # login cookie, the API and the page are one thing, and `Dashboard.bat`
-    # needs no new steps.
-    WEB_ROOT = Path(__file__).parent / "web"
-
     @app.route("/app")
     @app.route("/app/")
     def spa_index():

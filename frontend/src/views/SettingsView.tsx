@@ -30,6 +30,9 @@ export const SettingsView: React.FC = () => {
   const [catalogue, setCatalogue] = useState<string[] | null>(null);
   const [catalogueMsg, setCatalogueMsg] = useState<string | null>(null);
   const [catalogueLoading, setCatalogueLoading] = useState(false);
+  const [resetArmed, setResetArmed] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetNote, setResetNote] = useState<string | null>(null);
   const [placesKeyInput, setPlacesKeyInput] = useState('');
   const [modelKeyInput, setModelKeyInput] = useState('');
 
@@ -414,6 +417,59 @@ export const SettingsView: React.FC = () => {
             about it leaves the machine. Its port is set in the campaign file, so it
             is shown here rather than edited.
           </p>
+
+          {/* Logging out at WhatsApp's end leaves the saved session on disk,
+              so the next start reads the dead one straight back, WhatsApp
+              answers 401, and the relay reconnect-loops for ever without
+              ever showing a QR. This deletes the folder, which is what makes
+              pairing a different phone possible. */}
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {resetArmed ? (
+              <>
+                <span className="text-[11px] text-amber-700 dark:text-amber-300">
+                  This unlinks the phone and deletes the saved session. You scan
+                  a new code to pair again. Sure?
+                </span>
+                <button
+                  id="relay-reset-confirm"
+                  onClick={async () => {
+                    setResetBusy(true);
+                    setResetNote(null);
+                    const res = await api.resetWhatsApp();
+                    setResetBusy(false);
+                    setResetArmed(false);
+                    setResetNote(
+                      res.error || res.data?.note || 'Unlinked. Scan the new code to pair again.'
+                    );
+                    loadData();
+                  }}
+                  disabled={resetBusy}
+                  className="px-3 py-1.5 rounded-lg bg-amber-500 text-slate-950 text-[11px] font-semibold hover:bg-amber-400 studio-transition disabled:opacity-50"
+                >
+                  {resetBusy ? 'Unlinking...' : 'Yes, unlink it'}
+                </button>
+                <button
+                  onClick={() => setResetArmed(false)}
+                  className="px-2 py-1.5 text-[11px] text-slate-500 hover:text-slate-300"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                id="relay-reset"
+                onClick={() => setResetArmed(true)}
+                className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-[11px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 studio-transition"
+              >
+                Log out / pair a different phone
+              </button>
+            )}
+            {resetNote && (
+              <span className="text-[11px] text-slate-400 whitespace-pre-wrap">
+                {resetNote}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

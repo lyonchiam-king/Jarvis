@@ -21,6 +21,156 @@ import { api } from '../api/client';
  * not start), and folding it into Save Configuration would make that refusal
  * reject everything else on this screen with it.
  */
+/**
+ * How much craft the site prompt asks for.
+ *
+ * A campaign setting rather than a schema field: every business gets the
+ * same answer about type scale and colour ratio, so asking a model to
+ * restate it per lead spends tokens on a chance to forget one.
+ */
+const DesignLevelPicker: React.FC = () => {
+  const [level, setLevel] = useState('');
+  const [levels, setLevels] = useState<string[]>([]);
+  const [note, setNote] = useState('');
+  const [bad, setBad] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api.getDesignLevel().then((res) => {
+      if (res.data) {
+        setLevel(res.data.level || '');
+        setLevels(res.data.levels || []);
+      }
+    });
+  }, []);
+
+  if (!levels.length) return null;
+
+  return (
+    <div id="design-level" className="space-y-2">
+      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+        How much design the prompts ask for
+      </h3>
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          id="design-level-select"
+          value={level}
+          onChange={(e) => setLevel(e.target.value)}
+          className="p-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 text-[13px]"
+        >
+          {levels.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <button
+          id="design-level-save"
+          onClick={async () => {
+            setSaving(true);
+            setNote('');
+            const res = await api.saveDesignLevel(level);
+            setSaving(false);
+            setBad(!!res.error);
+            setNote(res.error || 'Saved.');
+          }}
+          disabled={saving}
+          className="px-3.5 py-2 rounded-lg bg-emerald-500 text-slate-950 text-[12px] font-semibold hover:bg-emerald-400 studio-transition disabled:opacity-50"
+        >
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+        {note && (
+          <span className={`text-[12px] ${bad ? 'text-amber-300' : 'text-emerald-300'}`}>
+            {note}
+          </span>
+        )}
+      </div>
+      <p className="text-[11px] text-slate-500">
+        It changes only the text handed to the site builder, never the brief
+        itself &mdash; so no research model sees it.
+      </p>
+    </div>
+  );
+};
+
+/**
+ * The other things on offer, appended verbatim to every message.
+ *
+ * Written once rather than asked of the model: told to "mention the other
+ * services" a model rewords one, drops one, or invents a fourth, and an
+ * invented service is something nobody sells.
+ */
+const ServicesEditor: React.FC = () => {
+  const [intro, setIntro] = useState('');
+  const [lines, setLines] = useState('');
+  const [note, setNote] = useState('');
+  const [bad, setBad] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api.getServices().then((res) => {
+      if (res.data) {
+        setIntro(res.data.intro || '');
+        setLines((res.data.services || []).join('\n'));
+      }
+    });
+  }, []);
+
+  return (
+    <div id="services-editor" className="space-y-2">
+      <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+        The other services on every message
+      </h3>
+      <input
+        id="services-intro"
+        value={intro}
+        onChange={(e) => setIntro(e.target.value)}
+        placeholder="The line that introduces the list"
+        className="w-full p-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 text-[13px]"
+      />
+      <textarea
+        id="services-lines"
+        value={lines}
+        onChange={(e) => setLines(e.target.value)}
+        rows={4}
+        placeholder="One service per line. Leave empty for none."
+        className="w-full p-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 text-[13px] font-mono"
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          id="services-save"
+          onClick={async () => {
+            setSaving(true);
+            setNote('');
+            const res = await api.saveServices(
+              intro,
+              // Blank lines dropped, but an empty list is still saved as one:
+              // clearing it has to mean cleared, not "restore what shipped".
+              lines.split('\n').map((l) => l.trim()).filter(Boolean)
+            );
+            setSaving(false);
+            setBad(!!res.error);
+            setNote(res.error || 'Saved.');
+          }}
+          disabled={saving}
+          className="px-3.5 py-2 rounded-lg bg-emerald-500 text-slate-950 text-[12px] font-semibold hover:bg-emerald-400 studio-transition disabled:opacity-50"
+        >
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+        {note && (
+          <span className={`text-[12px] ${bad ? 'text-amber-300' : 'text-emerald-300'}`}>
+            {note}
+          </span>
+        )}
+      </div>
+      <p className="text-[11px] text-slate-500">
+        Appended word for word after every message, exactly as the compliance
+        footer is. Never write one here you do not actually sell.
+      </p>
+    </div>
+  );
+};
+
 const TrackPicker: React.FC = () => {
   const [track, setTrack] = useState('website');
   const [signature, setSignature] = useState('');
@@ -279,6 +429,8 @@ export const CampaignView: React.FC = () => {
       )}
 
       <TrackPicker />
+      <DesignLevelPicker />
+      <ServicesEditor />
 
       {/* Primary Niche & Location */}
       <div className="p-5 rounded-xl border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
