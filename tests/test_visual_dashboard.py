@@ -1143,27 +1143,60 @@ def _ready_to_confirm(app, monkeypatch, logged=None, briefs=None):
     return client, sheets
 
 
-def test_confirming_writes_the_message_for_a_lead_that_was_held(
-    app, monkeypatch
-):
+def test_confirming_drafts_a_lead_that_has_no_message_at_all(app, monkeypatch):
     """The picture had not come back when drafting ran, so the lead was held
-    with no message at all. Confirming then produced a card saying "ready to
-    send" that step 4 never offered -- which from the outside is the confirm
-    button having done nothing."""
+    with no Outreach Log row.
+
+    It has to go through **drafting**, not `regenerate_one`: that function
+    ends in `update_column`, which skips a key with no row and returns 0, so
+    it spent a model call, wrote nothing, and reported the copy as saved --
+    while the lead stayed out of the send queue and the card could only say
+    "that step is not offering this lead". Drafting is the one thing here
+    that creates a row.
+    """
     from outreach.stages import outreach_draft as draft
 
     client, sheets = _ready_to_confirm(app, monkeypatch)
-    wrote = []
+    monkeypatch.setattr("outreach.cli._gmail_or_none", lambda c: None)
+    rewrote, drafted = [], []
+
+    def fake_run(c, s, w, gmail, *, limit=None, leads_only=None, **kw):
+        drafted.append((tuple(leads_only or ()), limit))
+        return draft.OutreachReport(copy_written=1)
+
+    monkeypatch.setattr(draft, "run", fake_run)
     monkeypatch.setattr(
         draft, "regenerate_one",
-        lambda c, s, w, lead_id: (wrote.append(lead_id), {})[1],
+        lambda c, s, w, lead_id: (rewrote.append(lead_id), {})[1],
     )
 
     d = client.post("/api/visual/confirm", json={"lead_id": "a"}).get_json()
 
     assert d["ok"] is True
     assert d.get("message_written") is True
-    assert wrote == ["a"]
+    assert drafted == [(("a",), 1)], "drafting is what creates the row"
+    assert rewrote == [], "there was nothing to rewrite"
+
+
+def test_a_draft_that_produced_nothing_is_not_reported_as_written(
+    app, monkeypatch
+):
+    """Reporting success over an empty run is the failure this path exists to
+    undo, so the reason the stage's own gate gave is passed on."""
+    from outreach.stages import outreach_draft as draft
+
+    client, _ = _ready_to_confirm(app, monkeypatch)
+    monkeypatch.setattr("outreach.cli._gmail_or_none", lambda c: None)
+    monkeypatch.setattr(
+        draft, "run",
+        lambda *a, **k: draft.OutreachReport(copy_written=0, already_done=1),
+    )
+
+    d = client.post("/api/visual/confirm", json={"lead_id": "a"}).get_json()
+
+    assert d["ok"] is True
+    assert "message_written" not in d
+    assert "already has an Outreach Log row" in d["message_error"]
 
 
 def test_confirming_replaces_a_message_that_sells_the_page(app, monkeypatch):
@@ -1242,10 +1275,12 @@ def test_the_tick_survives_a_failed_rewrite(app, monkeypatch):
     from outreach.stages import outreach_draft as draft
 
     client, sheets = _ready_to_confirm(app, monkeypatch)
+    monkeypatch.setattr("outreach.cli._gmail_or_none", lambda c: None)
 
     def boom(*_a, **_k):
         raise RuntimeError("that model has been withdrawn")
 
+    monkeypatch.setattr(draft, "run", boom)
     monkeypatch.setattr(draft, "regenerate_one", boom)
 
     d = client.post("/api/visual/confirm", json={"lead_id": "a"}).get_json()

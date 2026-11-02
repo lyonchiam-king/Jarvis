@@ -64,7 +64,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1676 tests, pytest, no CI -- the suite is the only gate
+tests/             1681 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -1485,6 +1485,37 @@ already about the picture is left alone, since rewriting it costs a call and
 can only make it different. Never fatal: the tick is already saved before the
 call, because losing the one check only a person can do -- because a model
 was retired -- would send them round the whole loop again.
+
+**`update_column` writes nothing for a key with no row, and says nothing
+about it.** `if key in existing` -- then `return 0`. So `regenerate_one`,
+which ends in three of those calls, can only *rewrite*: asked for a lead that
+was never drafted it spent a model call, wrote nothing, and handed back the
+new copy as though it had been saved. Three rounds of "I'm still not getting
+that on the infographic" were this: confirm reported success, no Outreach Log
+row existed, the lead was therefore in neither the send queue nor its
+excluded list, and the card could only say "that step is not offering this
+lead". It raises now, naming drafting as the thing that creates a row --
+silently writing nothing is the one outcome worse than refusing.
+
+**Only drafting can make an Outreach Log row, so a held lead goes back
+through drafting.** `run` upserts; nothing else does. `leads_only` narrows it
+to named Lead IDs, applied to the candidates **before** selection -- the
+shape `visual-brief --leads` already follows, because filtering the selected
+batch would make "draft this one lead" produce nothing whenever that lead
+fell outside the first `limit` rows. Confirming a picture now picks by what
+is actually there: a stale message is rewritten, an absent one is drafted.
+And a run that drafted nothing reports *which* of the stage's own gates
+stopped it, because "written" over an empty run is the failure the whole
+path exists to undo.
+
+**A fake that records a write instead of performing it proves nothing.**
+`FakeSheets.upsert` appended to a list and returned `UpsertResult`, so
+`read_rows` never saw the row -- which is how two tests asserting a rewritten
+message passed while the rewrite reached the Sheet in neither the fake nor
+production. The fake inserts now, and its `update_column` skips a missing key
+exactly as the real client does. This is the manual-column bug again, from
+the other direction: when the real client's behaviour is the thing under
+test, the fake has to have that behaviour.
 
 **Naming the problem is not fixing it.** The card learned to say "Not in
 step 4 yet -- its Outreach Log row does not say Drafted", and the next report

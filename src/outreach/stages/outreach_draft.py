@@ -14,6 +14,7 @@ usually the only reliable contact channel.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -300,7 +301,20 @@ def run(
     limit: int | None = None,
     dry_run: bool = False,
     social_first: bool | None = None,
+    leads_only: Sequence[str] | None = None,
 ) -> OutreachReport:
+    """Draft messages for the leads that are ready for one.
+
+    ``leads_only`` narrows the run to named Lead IDs. It exists because
+    drafting is the only code here that can *create* an Outreach Log row --
+    `regenerate_one` can rewrite one and nothing else -- so a single lead
+    that was held without a message has to come back through this door.
+
+    Applied to the candidates **before** selection, the same shape
+    `visual-brief --leads` uses: filtering the selected batch instead would
+    make "draft this one lead" produce nothing whenever that lead happened
+    to fall outside the first `limit` rows.
+    """
     preflight(config)
 
     report = OutreachReport()
@@ -334,6 +348,10 @@ def run(
     prioritise = (
         config.research.social_first if social_first is None else social_first
     )
+    if leads_only is not None:
+        wanted = {str(lead_id).strip() for lead_id in leads_only if str(lead_id).strip()}
+        leads = {key: value for key, value in leads.items() if key in wanted}
+
     selected, already, not_ready = select_pending(
         leads,
         set(existing),
@@ -616,6 +634,19 @@ def regenerate_one(
     leads = sheets.read_rows(schema.LEADS)
     research = sheets.read_rows(schema.RESEARCH)
     site_briefs = sheets.read_rows(schema.SITE_BRIEFS)
+
+    # This function can only *rewrite*. It finishes with three
+    # `update_column` calls, and `update_column` skips a key with no row --
+    # silently, returning 0. So called for a lead that was never drafted it
+    # spent a model call, wrote nothing, and reported the new copy as though
+    # it had been saved; the lead then never appeared in the send queue and
+    # the card could only say "that step is not offering this lead".
+    # Creating a row is `run`'s job, which upserts.
+    if lead_id not in sheets.read_rows(schema.OUTREACH_LOG):
+        raise ValueError(
+            f"{lead_id} has no Outreach Log row yet, so there is no message "
+            "to rewrite. Draft it first -- that is what creates the row."
+        )
 
     services_block = gmail_provider.render_services_block(
         config.outreach.services_intro, config.outreach.services

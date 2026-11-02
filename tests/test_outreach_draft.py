@@ -235,6 +235,21 @@ class FakeSheets:
         self.upserts.append((tab, list(rows)))
         from outreach.sheets import UpsertResult
 
+        # The rows have to land where `read_rows` will find them. Recording
+        # the call and nothing else made this fake more permissive than the
+        # real client, which is how a `regenerate_one` against a row that was
+        # never inserted passed: `update_column` skips a key with no row and
+        # returns 0, silently, so the test asserted copy that reached the
+        # Sheet in neither the fake nor production.
+        table = self._tabs.setdefault(tab.title, {})
+        for row in rows:
+            key = str(row.get(tab.headers[0], "") or "")
+            if not key:
+                continue
+            if key in table:
+                table[key][1].update({k: str(v) for k, v in row.items()})
+            else:
+                table[key] = (len(table) + 2, {k: str(v) for k, v in row.items()})
         return UpsertResult(inserted=len(rows))
 
     def update_column(self, tab, column, values_by_key, *, user_edit=False):
@@ -242,7 +257,14 @@ class FakeSheets:
 
         guard_manual_column(tab, column, user_edit=user_edit)
         self.column_writes.append((tab, column, dict(values_by_key)))
-        return len(values_by_key)
+        # Same rule as the real client: a key with no row is not written.
+        table = self._tabs.get(tab.title, {})
+        written = 0
+        for key, value in values_by_key.items():
+            if key in table:
+                table[key][1][column] = value
+                written += 1
+        return written
 
     def append(self, tab, rows):
         self.appended.append((tab, list(rows)))
@@ -777,3 +799,74 @@ def test_rewriting_one_message_keeps_the_services_in_the_email_too(monkeypatch):
     outreach_draft.regenerate_one(_with_services(), sheets, FakeWriter(), "a")
 
     assert "• Google Business Profile" in seen["services_block"]
+
+
+# ------------- drafting one named lead, because only drafting makes a row
+
+
+def test_drafting_can_be_narrowed_to_one_lead():
+    """`regenerate_one` can rewrite a row and nothing else, so a lead held
+    without a message has to come back through drafting -- and only for
+    itself, not for everyone else waiting."""
+    sheets = FakeSheets(
+        index([lead("a", stage="Site Built"), lead("b", stage="Site Built")]),
+        index([research_row("a"), research_row("b")]),
+    )
+
+    report = outreach_draft.run(
+        cfg(), sheets, FakeWriter(), FakeGmail(), leads_only=["a"]
+    )
+
+    assert report.copy_written == 1
+    written = set(sheets.read_rows(schema.OUTREACH_LOG))
+    assert written == {"a"}, "drafting touched a lead it was not asked about"
+
+
+def test_narrowing_is_applied_before_the_limit_bites():
+    """Filtering the selected batch instead would make "draft this one lead"
+    produce nothing whenever it fell outside the first `limit` rows -- the
+    same shape `visual-brief --leads` already follows."""
+    rows = [lead(key, stage="Site Built") for key in ("a", "b", "c", "d")]
+    sheets = FakeSheets(
+        index(rows), index([research_row(k) for k in ("a", "b", "c", "d")])
+    )
+
+    report = outreach_draft.run(
+        cfg(), sheets, FakeWriter(), FakeGmail(),
+        limit=1, leads_only=["d"],
+    )
+
+    assert report.copy_written == 1
+    assert set(sheets.read_rows(schema.OUTREACH_LOG)) == {"d"}
+
+
+def test_narrowing_to_nothing_drafts_nothing():
+    """A Lead ID that is not on the Leads tab must not quietly draft the
+    whole batch instead."""
+    sheets = FakeSheets(
+        index([lead("a", stage="Site Built")]), index([research_row("a")])
+    )
+
+    report = outreach_draft.run(
+        cfg(), sheets, FakeWriter(), FakeGmail(), leads_only=["nope"]
+    )
+
+    assert report.copy_written == 0
+    assert sheets.read_rows(schema.OUTREACH_LOG) == {}
+
+
+def test_rewriting_a_lead_with_no_row_refuses_instead_of_writing_nothing():
+    """It ends in `update_column`, which skips a key with no row and returns
+    0 -- silently. So it spent a model call, reported the copy as saved, and
+    left the lead out of the send queue for ever."""
+    import pytest
+
+    sheets = FakeSheets(
+        index([lead("a", stage="Site Built")]), index([research_row("a")])
+    )
+
+    with pytest.raises(ValueError) as err:
+        outreach_draft.regenerate_one(cfg(), sheets, FakeWriter(), "a")
+
+    assert "no Outreach Log row" in str(err.value)
+    assert "Draft it first" in str(err.value)

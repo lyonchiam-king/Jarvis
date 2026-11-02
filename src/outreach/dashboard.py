@@ -3078,12 +3078,50 @@ def create_app(config: Config) -> Flask:
             from .providers.llm import make_writer
             from .stages import outreach_draft as draft
 
-            draft.regenerate_one(
-                c, sheets, make_writer(c, model=c.outreach.model or None), lead_id
-            )
+            writer = make_writer(c, model=c.outreach.model or None)
+            if message.strip():
+                # A row exists and its words are the other pitch's. Rewriting
+                # is exactly right here, and leaves Channel, Drafted At and
+                # the Stage alone.
+                draft.regenerate_one(c, sheets, writer, lead_id)
+            else:
+                # No row at all -- the lead was held because the picture had
+                # not come back when drafting last ran. `regenerate_one`
+                # cannot help: it ends in `update_column`, which skips a key
+                # with no row and returns 0, so it spent a model call, wrote
+                # nothing, and reported success while the lead stayed out of
+                # the send queue for ever. Drafting is the only thing here
+                # that creates the row, so the lead goes back through it.
+                from .cli import _gmail_or_none
+
+                report = draft.run(
+                    c, sheets, writer, _gmail_or_none(c),
+                    limit=1, leads_only=[lead_id],
+                )
+                if not report.copy_written:
+                    return {"message_error": _draft_refused(report, lead_id)}
         except Exception as exc:  # noqa: BLE001
             return {"message_error": _explain_sheets(exc, c)}
         return {"message_written": True}
+
+    def _draft_refused(report, lead_id: str) -> str:
+        """Why drafting produced nothing for a lead it was asked about.
+
+        Reporting "written" over an empty run is the failure this whole path
+        exists to undo, so a run that drafted nothing says which of the
+        stage's own gates stopped it.
+        """
+        if getattr(report, "held_for_image", 0):
+            return ("Its picture is not confirmed, so no message was written. "
+                    "Tick the words first.")
+        if getattr(report, "already_done", 0):
+            return ("It already has an Outreach Log row, so drafting skipped "
+                    "it. Use Rewrite this message instead.")
+        if getattr(report, "not_ready", 0):
+            return ("It has not reached the stage drafting starts from -- "
+                    "run Research for it first.")
+        return ("Drafting produced no message for this lead and gave no "
+                "reason. Run the Draft step on its own to see the report.")
 
     @app.route("/api/visual/clear", methods=["POST"])
     def api_visual_clear():
