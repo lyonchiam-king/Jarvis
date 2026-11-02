@@ -896,6 +896,23 @@ the same message and the same screenshot, ready to send.
 Nothing is regenerated, so it costs nothing. Use it whenever WhatsApp claimed
 a message went out and it did not actually land.
 
+### "Your Sheet has no Visual Briefs tab yet"
+
+Press **Add the missing tabs**, right under that message. That is the whole
+fix.
+
+Your Sheet was made before this tab existed, and a spreadsheet does not grow a
+tab on its own when the tool updates — so the first thing to read it found
+nothing there. Nothing is broken and nothing is lost.
+
+The button adds only the tabs that are missing and rewrites only row 1, the
+headers. Every lead, every note and every message you already have is
+untouched, so pressing it twice costs nothing and pressing it on a healthy
+Sheet does nothing at all.
+
+It is the same button whenever this happens again — any future tab lands the
+same way.
+
 ### Clearing out the leads with no WhatsApp
 
 Open **Not on WhatsApp** in the WhatsApp check panel. Each row has a

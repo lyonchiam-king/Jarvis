@@ -10,6 +10,7 @@ import {
   Link2,
   Undo2,
   Loader2,
+  Wrench,
 } from 'lucide-react';
 import { VisualItem, VisualQueue } from '../types';
 import { api } from '../api/client';
@@ -37,6 +38,11 @@ export const VisualQueueView: React.FC<{ onRefresh?: () => void }> = ({
   const [data, setData] = useState<VisualQueue | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Only this one error has a button, so the flag is kept apart from the
+  // message rather than inferred from it.
+  const [missingTab, setMissingTab] = useState(false);
+  const [repairing, setRepairing] = useState(false);
+  const [repairNote, setRepairNote] = useState('');
   // Keyed by Lead ID, never by index: the queue is rebuilt from the server
   // and a row's position is not a stable address for it.
   const [busy, setBusy] = useState<Record<string, string>>({});
@@ -46,12 +52,29 @@ export const VisualQueueView: React.FC<{ onRefresh?: () => void }> = ({
 
   const load = async () => {
     const res = await api.getVisualQueue();
+    setMissingTab(!!res.missingTab);
     if (res.error) setError(res.error);
     else {
       setError(null);
       setData(res.data || null);
     }
     setLoading(false);
+  };
+
+  const repair = async () => {
+    setRepairing(true);
+    setRepairNote('');
+    const res = await api.repairTabs();
+    setRepairing(false);
+    if (res.error) {
+      setRepairNote(res.error);
+      return;
+    }
+    setRepairNote(res.data?.note || 'Done.');
+    // Reloading is the point: repairing and leaving the error on screen
+    // reads as the button having done nothing.
+    await load();
+    onRefresh?.();
   };
 
   useEffect(() => {
@@ -94,8 +117,27 @@ export const VisualQueueView: React.FC<{ onRefresh?: () => void }> = ({
 
   if (error) {
     return (
-      <div id="visual-error" className="p-5 rounded-xl border border-amber-500/40 bg-amber-500/5">
+      <div id="visual-error" className="p-5 rounded-xl border border-amber-500/40 bg-amber-500/5 space-y-3">
+        {/* pre-wrap: this message is several lines and the repair is the
+            last of them, so collapsing the newlines would run the steps
+            together into one paragraph. */}
         <p className="text-[13px] text-amber-200 whitespace-pre-wrap">{error}</p>
+        {missingTab && (
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              id="repair-tabs-btn"
+              onClick={repair}
+              disabled={repairing}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-500 text-slate-950 text-[12px] font-semibold hover:bg-emerald-400 studio-transition disabled:opacity-50"
+            >
+              <Wrench className="w-3.5 h-3.5" />
+              {repairing ? 'Checking your Sheet...' : 'Add the missing tabs'}
+            </button>
+            {repairNote && (
+              <span className="text-[12px] text-emerald-300">{repairNote}</span>
+            )}
+          </div>
+        )}
       </div>
     );
   }

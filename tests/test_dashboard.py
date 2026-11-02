@@ -3662,3 +3662,63 @@ def test_the_rotation_box_is_hidden_when_the_campaign_pitches_a_page():
     console.log(JSON.stringify({shown: _el('#rotation-settings').style.display}));
     """)
     assert '"shown":"none"' in out
+
+
+def test_a_missing_tab_renders_the_button_the_message_tells_him_to_press():
+    """The message says "press Add the missing tabs below". Guidance that
+    names a button nowhere near it is the same as no guidance."""
+    out = _run_in_node(_VIZ_DOM + """
+    globalThis.fetch = async () => ({json: async () => ({
+      enabled: true, track: 'visual', queue: [],
+      error: 'Your Sheet has no \\u201cVisual Briefs\\u201d tab yet.\\nPress the button.',
+      missing_tab: true,
+    })});
+    await loadVisual();
+    console.log(JSON.stringify({html: _el('#visual').innerHTML}));
+    """)
+    html = __import__("json").loads(out)["html"]
+    assert "Add the missing tabs" in html
+    assert "repairTabs(" in html
+    # The message is several lines, and HTML collapses every newline inside a
+    # <span> -- which is how a three-step cure once reached the page as one
+    # run-on paragraph.
+    assert "long-err" in html
+
+
+def test_an_ordinary_error_offers_no_repair_button():
+    """A button that cannot fix what went wrong is worse than no button."""
+    out = _run_in_node(_VIZ_DOM + """
+    globalThis.fetch = async () => ({json: async () => ({
+      enabled: true, track: 'visual', queue: [],
+      error: 'SheetsError: the network went away', missing_tab: false,
+    })});
+    await loadVisual();
+    console.log(JSON.stringify({html: _el('#visual').innerHTML}));
+    """)
+    html = __import__("json").loads(out)["html"]
+    assert "the network went away" in html
+    assert "Add the missing tabs" not in html
+
+
+def test_pressing_the_repair_reloads_the_panel_that_was_broken():
+    """Repairing and then leaving the error on screen reads as the button
+    having done nothing."""
+    out = _run_in_node(_VIZ_DOM + """
+    const asked = [];
+    globalThis.fetch = async (url) => {
+      asked.push(url);
+      return {json: async () => ({ok: true, added: ['Visual Briefs'],
+                                  note: 'Added: Visual Briefs',
+                                  enabled: true, queue: [], counts: {}})};
+    };
+    await repairTabs(null);
+    console.log(JSON.stringify({
+      posted: asked.filter(u => u === '/api/repair-tabs').length,
+      reloaded: asked.filter(u => u === '/api/visual/queue').length,
+      note: _el('#repair-note').textContent,
+    }));
+    """)
+    data = __import__("json").loads(out)
+    assert data["posted"] == 1
+    assert data["reloaded"] == 1
+    assert "Added: Visual Briefs" in data["note"]

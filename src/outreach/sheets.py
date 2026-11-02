@@ -118,6 +118,48 @@ def api_disabled_message(detail: str) -> str:
     return "\n".join(lines)
 
 
+class TabMissing(SheetsError):
+    """A tab this code reads does not exist in the spreadsheet yet.
+
+    Its own class because the repair is a single idempotent action --
+    ``ensure_tabs`` -- and nothing about the credentials, the sharing or the
+    API is wrong. Google reports it as "Unable to parse range", which reads
+    as a bug in this tool rather than as a spreadsheet that predates a
+    column we later added.
+
+    This happens to every existing Sheet whenever the schema grows a tab:
+    the Sheet was created from the schema as it stood that day and is never
+    touched again. It is the Sheet's version of the ``*.local.yaml`` fork
+    that inherits no key added after it was copied, and the same lesson --
+    an addition that existing installs cannot pick up is not shipped.
+    """
+
+    def __init__(self, message: str, tab: str = "") -> None:
+        super().__init__(message)
+        #: The tab Google named, where it could be recovered from the error.
+        self.tab = tab
+
+
+# Google's wording for "that sheet is not in this spreadsheet". Matched on
+# the phrase and nowhere else: every range this code builds is well-formed,
+# so a parse failure can only mean the tab itself is absent.
+_UNPARSEABLE_RANGE = re.compile(r"Unable to parse range: '?([^'!]+)'?!")
+
+
+def tab_missing_message(tab: str) -> str:
+    """Name the tab, say why it is absent, and give the one-press repair."""
+    which = f"\u201c{tab}\u201d" if tab else "A tab this version needs"
+    return (
+        f"Your Sheet has no {which} tab yet.\n\n"
+        "Nothing is broken and nothing is lost. Your Sheet was created\n"
+        "before this tab existed, and a spreadsheet does not grow a tab on\n"
+        "its own when the tool is updated.\n\n"
+        "Press \u201cAdd the missing tabs\u201d below. It adds only what is\n"
+        "missing and writes only the header row -- every lead, every note\n"
+        "and every message you already have is untouched."
+    )
+
+
 class NotSharedWithRobot(SheetsError):
     """The service account can reach Google but not this spreadsheet.
 
@@ -175,6 +217,14 @@ def _with_retry(fn: Callable[[], object], what: str) -> object:
                 # that fix in four repetitions of itself.
                 if status == 403 and "SERVICE_DISABLED" in detail:
                     raise ApiNotEnabled(api_disabled_message(detail)) from exc
+                # A tab this version expects and this Sheet has never had.
+                # Reported by Google as a malformed range, which reads as a
+                # bug in this tool rather than as a spreadsheet that predates
+                # the tab -- and the repair is one press, not a credential.
+                found = _UNPARSEABLE_RANGE.search(detail)
+                if status == 400 and found:
+                    tab = found.group(1).strip()
+                    raise TabMissing(tab_missing_message(tab), tab) from exc
                 raise SheetsError(f"{what} failed (HTTP {status}): {exc}") from exc
             sleep_for = delay + random.uniform(0, 0.5)
             log.warning(
@@ -207,7 +257,9 @@ def explain(exc: Exception, *, robot_email: str = "", sheet_id: str = "") -> str
     it. The two screens that show a Sheets error to a person -- the
     dashboard and preflight -- both hold the config already.
     """
-    if isinstance(exc, (ApiNotEnabled, NotSharedWithRobot, SheetSchemaError)):
+    if isinstance(
+        exc, (ApiNotEnabled, NotSharedWithRobot, SheetSchemaError, TabMissing)
+    ):
         return str(exc)
     detail = str(exc)
     # Google says the same sentence whether the caller is a person or a

@@ -64,7 +64,13 @@ class ApiClient {
       // Both forms have to be caught or the page renders an empty queue and
       // calls it "nothing to do".
       if (!res.ok || json.error) {
-        return { error: json.error || `HTTP ${res.status}: ${res.statusText}` };
+        // The body rides along: an expected failure often carries more than
+        // its message -- which of several repairs applies, for one -- and a
+        // response collapsed to `{ error }` leaves a view no way to know.
+        return {
+          error: json.error || `HTTP ${res.status}: ${res.statusText}`,
+          raw: json,
+        };
       }
       return { data: json, ok: true };
     } catch (err: any) {
@@ -349,10 +355,15 @@ class ApiClient {
    * page, so the stage is not shown at all -- a panel that can never do
    * anything reads as broken.
    */
-  async getVisualQueue(): Promise<ApiResponse<VisualQueue>> {
+  async getVisualQueue(): Promise<ApiResponse<VisualQueue> & { missingTab?: boolean }> {
     const res = await this.request<Raw>('/api/visual/queue');
+    // `request` collapses a body carrying `error` into a failed response, so
+    // the flag sitting beside it would be lost. Read off the raw body first.
+    const missingTab = !!(res.raw && res.raw.missing_tab);
+    if (res.error) return { error: res.error, missingTab };
     return this.map(res, (d) => ({
       enabled: !!d.enabled,
+      missing_tab: !!d.missing_tab,
       track: d.track || 'website',
       tool_name: d.tool_name || '',
       // Left empty rather than defaulted to a guess: a button pointing at the
@@ -456,6 +467,17 @@ class ApiClient {
       // server reads absent as "leave it alone" and empty as "no button".
       ...(tool ? { tool_name: tool.name, tool_url: tool.url } : {}),
     });
+  }
+
+  /**
+   * Add any tab this version needs that the Sheet does not have.
+   *
+   * Idempotent, and it touches no data row -- only missing tabs and row 1.
+   * It existed as `outreach init-sheet` long before it had a button, which
+   * is the same as not existing for someone who does not use a terminal.
+   */
+  async repairTabs(): Promise<ApiResponse<{ ok: boolean; added: string[]; note: string }>> {
+    return this.post('/api/repair-tabs');
   }
 
   async setVisualRotation(

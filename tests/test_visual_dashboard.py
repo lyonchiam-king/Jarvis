@@ -642,3 +642,169 @@ def test_a_save_that_will_not_load_is_reverted_not_a_crash(
         import yaml
 
         assert isinstance(yaml.safe_load(fork.read_text()), dict)
+
+
+# ------------------------------------------------------ a Sheet made earlier
+#
+# Every schema addition breaks every existing Sheet the same way: the
+# spreadsheet was created from the schema as it stood that day and is never
+# touched again, so Google answers a read of the new tab with "Unable to parse
+# range" -- which reads as a bug in this tool rather than as a Sheet that
+# predates the tab. Reported from a real run the day the track shipped.
+
+
+GOOGLE_PARSE_ERROR = (
+    "<HttpError 400 when requesting https://sheets.googleapis.com/v4/"
+    "spreadsheets/XYZ/values/%27Visual%20Briefs%27%21A1%3AN?alt=json "
+    'returned "Unable to parse range: \'Visual Briefs\'!A1:N". '
+    "Details: \"Unable to parse range: 'Visual Briefs'!A1:N\">"
+)
+
+
+class FakeHttpError(Exception):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.resp = type("R", (), {"status": status})()
+
+
+def test_a_missing_tab_is_named_rather_than_reported_as_a_broken_range(
+    monkeypatch,
+):
+    from outreach import sheets as sheets_mod
+
+    monkeypatch.setattr(sheets_mod, "HttpError", FakeHttpError)
+
+    def boom():
+        raise FakeHttpError(400, GOOGLE_PARSE_ERROR)
+
+    with pytest.raises(sheets_mod.TabMissing) as caught:
+        sheets_mod._with_retry(boom, "read Visual Briefs")
+    exc = caught.value
+    assert exc.tab == "Visual Briefs"
+    message = str(exc)
+    assert "Visual Briefs" in message
+    assert "Nothing is broken and nothing is lost" in message
+    assert "Add the missing tabs" in message
+    # Google's own wording must not survive: it is what made this read as a
+    # defect in the tool.
+    assert "Unable to parse range" not in message
+    assert "HttpError" not in message
+
+
+def test_an_ordinary_bad_request_is_not_relabelled_as_a_missing_tab(monkeypatch):
+    """A control. Telling someone to add a tab that is already there is a
+    wasted hour, the same reason a permissions 403 is left alone."""
+    from outreach import sheets as sheets_mod
+
+    monkeypatch.setattr(sheets_mod, "HttpError", FakeHttpError)
+
+    def boom():
+        raise FakeHttpError(400, "Invalid value at 'data.values' (TYPE_STRING)")
+
+    with pytest.raises(sheets_mod.SheetsError) as caught:
+        sheets_mod._with_retry(boom, "write Leads")
+    assert not isinstance(caught.value, sheets_mod.TabMissing)
+
+
+def test_the_missing_tab_message_reaches_the_screens_unwrapped():
+    """`explain` must let it through verbatim: wrapping it in prose about the
+    Sheet buries the one sentence that is the repair."""
+    from outreach.sheets import TabMissing, explain
+
+    exc = TabMissing("Your Sheet has no tab yet.\nPress the button.", "Visual Briefs")
+    assert explain(exc, robot_email="robot@x.iam.gserviceaccount.com") == str(exc)
+
+
+def test_the_queue_flags_a_missing_tab_so_the_page_can_offer_the_button(
+    app, monkeypatch
+):
+    """Flagged, not pattern-matched on the wording: a page that decided which
+    button to show by searching an error message breaks the next time a
+    sentence is improved."""
+    from outreach import dashboard as dash_mod
+    from outreach.sheets import TabMissing
+
+    client, sheets = app()
+
+    def refuse(_tab):
+        raise TabMissing("no such tab", "Visual Briefs")
+
+    monkeypatch.setattr(sheets, "read_rows", refuse)
+    d = client.get("/api/visual/queue").get_json()
+    assert d["missing_tab"] is True
+    assert "no such tab" in d["error"]
+
+
+def test_an_ordinary_sheet_failure_is_not_flagged_as_a_missing_tab(
+    app, monkeypatch
+):
+    client, sheets = app()
+
+    def refuse(_tab):
+        raise RuntimeError("the network went away")
+
+    monkeypatch.setattr(sheets, "read_rows", refuse)
+    d = client.get("/api/visual/queue").get_json()
+    assert d["missing_tab"] is False
+
+
+def test_the_repair_adds_only_what_is_missing(app, monkeypatch):
+    """`ensure_tabs` adds tabs and rewrites row 1. No data row is touched, so
+    pressing it twice costs nothing."""
+    client, sheets = app()
+    calls = {"ensure": 0}
+    present = {t.title for t in schema.ALL_TABS} - {schema.VISUAL_BRIEFS.title}
+
+    def titles():
+        return set(present)
+
+    def ensure(_tabs):
+        calls["ensure"] += 1
+        present.add(schema.VISUAL_BRIEFS.title)
+
+    sheets.existing_tab_titles = titles
+    sheets.ensure_tabs = ensure
+
+    d = client.post("/api/repair-tabs").get_json()
+    assert d["ok"] is True
+    assert d["added"] == [schema.VISUAL_BRIEFS.title]
+    assert "Visual Briefs" in d["note"]
+    assert calls["ensure"] == 1
+
+
+def test_repairing_a_healthy_sheet_says_so_rather_than_claiming_work(app):
+    client, sheets = app()
+    sheets.existing_tab_titles = lambda: {t.title for t in schema.ALL_TABS}
+    sheets.ensure_tabs = lambda _tabs: None
+
+    d = client.post("/api/repair-tabs").get_json()
+    assert d["ok"] is True
+    assert d["added"] == []
+    assert "already there" in d["note"]
+
+
+def test_the_repair_drops_the_cached_reads_that_just_failed(app, monkeypatch):
+    """The read cache is keyed per tab, so a panel that just failed on a
+    missing tab would go on failing from its own snapshot until the TTL ran
+    out -- which is the repair looking like it did nothing."""
+    from outreach import dashboard as dash_mod
+
+    client, sheets = app()
+    sheets.existing_tab_titles = lambda: set()
+    sheets.ensure_tabs = lambda _tabs: None
+    dropped = {"n": 0}
+    monkeypatch.setattr(
+        dash_mod, "_invalidate_sheets_cache",
+        lambda: dropped.__setitem__("n", dropped["n"] + 1),
+    )
+    client.post("/api/repair-tabs")
+    assert dropped["n"] == 1
+
+
+def test_the_repair_refuses_before_there_is_a_sheet_at_all(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUTREACH_STATE_DIR", str(tmp_path))
+    base = load_config(PENANG, env_file=None)
+    cfg_no_sheet = replace(base, secrets=replace(base.secrets, sheet_id=""))
+    client = dash.create_app(cfg_no_sheet).test_client()
+    d = client.post("/api/repair-tabs").get_json()
+    assert "Create my Google Sheet" in d["error"]

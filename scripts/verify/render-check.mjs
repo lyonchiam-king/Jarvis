@@ -604,6 +604,50 @@ try {
   await dt.evaluate(`document.getElementById('campaign-settings-toggle').click()`);
   await new Promise((r) => setTimeout(r, 250));
 
+  // The missing-tab repair. Every schema addition breaks every existing
+  // Sheet the same way, so the button beside that error is the difference
+  // between one press and a terminal command the owner cannot run. Driven
+  // by swapping the fixture's answer for the failure a real Sheet gave.
+  await dt.evaluate(`(() => {
+    const original = window.fetch;
+    window.fetch = async (input) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url.startsWith('/api/visual/queue')) {
+        return new Response(JSON.stringify({
+          error: 'Your Sheet has no "Visual Briefs" tab yet.\\nPress the button below.',
+          missing_tab: true,
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return original(input);
+    };
+  })()`);
+  await dt.evaluate(`document.getElementById('stage-send').click()`);
+  await new Promise((r) => setTimeout(r, 250));
+  await dt.evaluate(`document.getElementById('stage-visual').click()`);
+  await new Promise((r) => setTimeout(r, 800));
+  const repair = await dt.evaluate(`(() => {
+    const box = document.getElementById('visual-error');
+    const btn = document.getElementById('repair-tabs-btn');
+    return {
+      shown: !!box,
+      text: box ? (box.innerText || '') : '',
+      button: !!btn,
+      // The message runs to several lines and the repair is the last of
+      // them, so collapsed newlines would run the steps together.
+      wraps: box ? getComputedStyle(box.querySelector('p')).whiteSpace : '',
+    };
+  })()`);
+  if (!repair.shown) fail('the missing-tab error did not render at all');
+  if (!repair.button) {
+    fail('the missing-tab error offers no button, so the only fix is a terminal');
+  }
+  if (!/Visual Briefs/.test(repair.text)) {
+    fail(`the missing-tab error does not name the tab: ${JSON.stringify(repair.text)}`);
+  }
+  if (!/pre-wrap|pre-line/.test(repair.wraps)) {
+    fail(`the multi-line message is collapsed (white-space: ${repair.wraps})`);
+  }
+
   // Results, which is new and entirely derived from the summary.
   await dt.evaluate(`document.getElementById('nav-item-results').click()`);
   await new Promise((r) => setTimeout(r, 400));

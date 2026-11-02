@@ -64,7 +64,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1550 tests, pytest, no CI -- the suite is the only gate
+tests/             1562 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -1259,6 +1259,38 @@ producing a graphic.
 **An unknown style name fails at load, naming the fix.** Dropped silently from
 the ring it looks exactly like the rotation ignoring the setting -- the drift
 `discovery.social_domains` already fails loudly over.
+
+**A schema that grows a tab breaks every Sheet already in use.** The
+spreadsheet was created from the schema as it stood that day and is never
+touched again, so the first read of a new tab comes back "Unable to parse
+range" -- which reads as a bug in this tool rather than as a Sheet that
+predates the tab. Reported from a real run the morning the infographic track
+shipped. It is the Sheet's version of the `*.local.yaml` fork that inherits
+no key added after it was copied, and it carries the same lesson: an addition
+existing installs cannot pick up is not shipped.
+
+`ensure_tabs` was always the repair and was always idempotent -- it adds only
+missing tabs, rewrites only row 1, and touches no data row. What it did not
+have was a way to reach it. It lived in `outreach init-sheet`, a terminal
+command, and the owner of this tool does not use a terminal, so the fix
+existed and nobody could perform it. `POST /api/repair-tabs` is that press,
+and it drops the read cache afterwards -- the cache is keyed per tab, so the
+panel that just failed would go on failing from its own snapshot and the
+repair would look like it did nothing.
+
+**The button goes where the message says it is.** `TabMissing` is its own
+class so `explain` passes it through verbatim, and its text ends "press Add
+the missing tabs below" -- so both pages render that button beside *that*
+error and no other. Which error it is arrives as a **flag** from the server,
+never matched on the wording: a page that chose a button by searching an
+error message breaks the next time the sentence is improved. A control holds
+that an ordinary 400 is not relabelled, for the same reason a permissions 403
+is not -- telling someone to add a tab that is already there is a wasted hour.
+
+**An expected failure often carries more than its message.** `client.ts`
+collapsed any body with an `error` key into `{ error }`, which threw away the
+flag sitting beside it, so no view could act on it. `ApiResponse.raw` keeps
+the body.
 
 ## Conventions
 

@@ -227,6 +227,15 @@ export interface ApiResponse<T> {
   data?: T;
   error?: string;
   ok?: boolean;
+  /**
+   * The body exactly as Flask sent it.
+   *
+   * A failed-but-expected call answers HTTP 200 with an `error` key *and*
+   * whatever else it wanted to say -- a flag saying the error has a repair
+   * button, for instance. Collapsing that body into `{ error }` threw the
+   * rest away, so a view could never act on it.
+   */
+  raw?: Record<string, any>;
 }
 
 // --------------------------------------------------------- the visual track
@@ -268,6 +277,13 @@ export interface VisualItem {
 export interface VisualQueue {
   /** False on the original track: the campaign pitches a page, not a picture. */
   enabled: boolean;
+  /**
+   * Set when the read failed because this Sheet predates a tab the schema
+   * has since grown. Flagged by the server rather than matched on the
+   * error's wording: a view that chose a button by searching a message
+   * would break the next time the sentence was improved.
+   */
+  missing_tab?: boolean;
   track: string;
   tool_name: string;
   /** Empty when no address is configured. The view then shows no button. */

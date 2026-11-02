@@ -2297,6 +2297,55 @@ def create_app(config: Config) -> Flask:
 
         return jsonify({"ok": True, "url": sheets.url, "title": title})
 
+    @app.route("/api/repair-tabs", methods=["POST"])
+    def api_repair_tabs():
+        """Add any tab this version needs that the Sheet does not have.
+
+        Every schema addition breaks every existing Sheet the same way: the
+        spreadsheet was created from the schema as it stood that day and is
+        never touched again, so Google answers a read of the new tab with
+        "Unable to parse range" -- which reads as a bug in this tool.
+
+        `ensure_tabs` has always been the repair and has always been
+        idempotent. What it did not have was a way to reach it: it lived in
+        `outreach init-sheet`, a terminal command, and the person who owns
+        this tool does not use a terminal. A fix nobody can perform is not a
+        fix.
+
+        It adds only missing tabs and rewrites only row 1. No data row is
+        touched, so pressing it twice costs nothing and pressing it on a
+        healthy Sheet does nothing at all.
+        """
+        c = current()
+        if not c.secrets.sheet_id:
+            return jsonify({
+                "error": "There is no Sheet yet. Press Create my Google Sheet "
+                         "first."
+            }), 200
+        try:
+            sheets = _sheets_client(c)
+            before = set(sheets.existing_tab_titles())
+            sheets.ensure_tabs(schema.ALL_TABS)
+            after = set(sheets.existing_tab_titles())
+        except Exception as exc:  # noqa: BLE001
+            return jsonify({"error": _explain_sheets(exc, c)}), 200
+
+        added = sorted(after - before)
+        # The read cache is per tab and keyed by title, so a panel that just
+        # failed on a missing tab would go on failing from its own snapshot
+        # until the TTL ran out -- which is the repair looking like it did
+        # nothing.
+        _invalidate_sheets_cache()
+        return jsonify({
+            "ok": True,
+            "added": added,
+            "note": (
+                "Added: " + ", ".join(added)
+                if added
+                else "Every tab was already there -- nothing to add."
+            ),
+        })
+
     # ------------------------------------------------- the infographic track
     #
     # The graphic is generated outside this tool, by hand, in the image tool.
@@ -2336,7 +2385,17 @@ def create_app(config: Config) -> Flask:
             leads = sheets.read_rows(schema.LEADS)
             briefs = sheets.read_rows(schema.VISUAL_BRIEFS)
         except Exception as exc:  # noqa: BLE001
-            return jsonify({**base, "error": _explain_sheets(exc, c)}), 200
+            from .sheets import TabMissing
+
+            # Flagged rather than left for the page to pattern-match on the
+            # wording: an error message is for a person to read, and a page
+            # that decided which button to show by searching it would break
+            # the next time a sentence was improved.
+            return jsonify({
+                **base,
+                "error": _explain_sheets(exc, c),
+                "missing_tab": isinstance(exc, TabMissing),
+            }), 200
 
         queue = []
         for lead_id, (_n, row) in briefs.items():
@@ -5596,7 +5655,15 @@ async function loadVisual() {
   }
   if (step) step.style.display = '';
   if (controls) controls.style.display = '';
-  if (d.error) { el.innerHTML = `<div class="card err">${esc(d.error)}</div>`; return; }
+  if (d.error) {
+    // .long-err, not a plain span: this message is several lines and HTML
+    // collapses every newline inside one, which is how a three-step cure
+    // once reached the page as a single run-on paragraph.
+    el.innerHTML = `<div class="card">
+      <div class="long-err">${esc(d.error)}</div>
+      ${d.missing_tab ? repairTabsHtml() : ''}</div>`;
+    return;
+  }
   vizQueue = d.queue || [];
   const note = document.querySelector('#visual-note');
   if (note) {
@@ -5693,6 +5760,39 @@ function vizCard(m, d) {
       </div>
       ${body}
     </div>`;
+}
+
+// Offered beside the error that needs it, because the message says "press
+// the button below" -- guidance that names a button nowhere near it is the
+// same as no guidance.
+function repairTabsHtml() {
+  return `<div class="row" style="margin-top:10px">
+    <button onclick="repairTabs(this)">Add the missing tabs</button>
+    <span class="hint" id="repair-note"></span>
+  </div>`;
+}
+
+async function repairTabs(btn) {
+  const note = document.querySelector('#repair-note');
+  if (btn) btn.disabled = true;
+  if (note) { note.textContent = 'Checking your Sheet...'; note.className = 'hint'; }
+  let d;
+  try {
+    d = await (await fetch('/api/repair-tabs', {method: 'POST'})).json();
+  } catch (e) {
+    if (note) { note.textContent = 'Could not reach the dashboard: ' + e; note.className = 'err'; }
+    if (btn) btn.disabled = false;
+    return;
+  }
+  if (!d.ok) {
+    if (note) { note.textContent = d.error || 'Could not repair the Sheet.'; note.className = 'err'; }
+    if (btn) btn.disabled = false;
+    return;
+  }
+  if (note) { note.textContent = d.note; note.className = 'ok'; }
+  // Every panel that was reading the missing tab, not just this one.
+  await loadVisual();
+  refresh();
 }
 
 function vizArm(leadId, on) {
