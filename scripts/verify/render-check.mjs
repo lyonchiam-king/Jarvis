@@ -1149,6 +1149,73 @@ try {
   }
   if (!sendControls.skip) fail('a queued card offers no "Not this one"');
 
+  // Step 4 may never answer with silence.
+  //
+  // `loadQueue` read the reply, took `res.data`, and dropped an `error`
+  // alongside it on the floor -- so a queue that could not be read rendered
+  // as a step with nothing in it. Identical on screen to "nothing is
+  // waiting", which is a normal state, and reported as exactly that: "it
+  // goes to the tab, but the tab is empty". The old page has shown this
+  // error up top for as long as it has existed, so the new page was the
+  // regression. Both states are driven here because the whole bug is that
+  // they looked the same.
+  const sendQueueStates = async (payload) => {
+    await dt.evaluate(`(() => {
+      if (!window.__sendFetch) window.__sendFetch = window.fetch;
+      window.fetch = async (input) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (url.startsWith('/api/whatsapp/queue')) {
+          return new Response(JSON.stringify(${JSON.stringify(payload)}), {
+            status: 200, headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return window.__sendFetch(input);
+      };
+    })()`);
+    // Remount the view, which is what re-runs its load.
+    await dt.evaluate(`document.getElementById('stage-visual').click()`);
+    await new Promise((r) => setTimeout(r, 250));
+    await dt.evaluate(`document.getElementById('stage-send').click()`);
+    await new Promise((r) => setTimeout(r, 700));
+    return dt.pageText();
+  };
+
+  const unreadable = await sendQueueStates({
+    error: 'SheetsApiError: the Outreach Log could not be read.',
+  });
+  const unreadableShown = await dt.evaluate(
+    `!!document.getElementById('send-load-error')`,
+  );
+  if (!unreadableShown) {
+    fail('an unreadable send queue rendered as an empty step, saying nothing');
+  }
+  if (!unreadable.includes('could not be read')) {
+    fail('the send step did not say why its list is missing');
+  }
+
+  const nothingWaiting = await sendQueueStates({ queue: [], excluded: [] });
+  const emptyShown = await dt.evaluate(
+    `!!document.getElementById('send-empty')`,
+  );
+  if (!emptyShown) {
+    fail('an empty send queue renders no empty state at all');
+  }
+  if (!/No messages are waiting/i.test(nothingWaiting)) {
+    fail('the empty send step does not say it is empty');
+  }
+  // And the two must not read the same, which was the whole defect.
+  if (await dt.evaluate(`!!document.getElementById('send-load-error')`)) {
+    fail('an empty queue still shows the unreadable-queue error');
+  }
+
+  await dt.evaluate(
+    `(() => { if (window.__sendFetch) window.fetch = window.__sendFetch; })()`,
+  );
+  await dt.evaluate(`document.getElementById('stage-visual').click()`);
+  await new Promise((r) => setTimeout(r, 250));
+  await dt.evaluate(`document.getElementById('stage-send').click()`);
+  await new Promise((r) => setTimeout(r, 700));
+
   // The missing-tab repair. Every schema addition breaks every existing
   // Sheet the same way, so the button beside that error is the difference
   // between one press and a terminal command the owner cannot run. Driven

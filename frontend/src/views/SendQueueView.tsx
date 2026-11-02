@@ -101,6 +101,9 @@ export const SendQueueView: React.FC<SendQueueViewProps> = ({
   // the only correction for that is to message the business twice.
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [sendError, setSendError] = useState<string | null>(null);
+  // Why the queue could not be read, if it could not. Separate from
+  // `sendError`, which is about one attempted send.
+  const [loadError, setLoadError] = useState<string | null>(null);
   // Which cards have had their click-to-chat link followed. WhatsApp opens
   // in another app and tells this page nothing, so the card has to ask
   // afterwards -- leaving it alone would keep offering the same business.
@@ -115,6 +118,7 @@ export const SendQueueView: React.FC<SendQueueViewProps> = ({
     setLoading(true);
     const res = await api.getSendQueue();
     if (res.data) {
+      setLoadError(null);
       setQueue(res.data.queue);
       setExcluded(res.data.excluded);
       const initialMsgs: Record<string, string> = {};
@@ -122,6 +126,16 @@ export const SendQueueView: React.FC<SendQueueViewProps> = ({
         initialMsgs[item.lead_id] = item.whatsapp_message;
       });
       setMessagesMap(initialMsgs);
+    } else {
+      // An error here used to be dropped on the floor -- `if (res.data)`
+      // with no else -- so a queue that could not be read rendered as a
+      // step with nothing in it. Indistinguishable from "nothing to send",
+      // and reported exactly that way: "it goes to the tab, but the tab is
+      // empty". The endpoint answers a failed-but-expected call with HTTP
+      // 200 and an `error` key, so every one of them landed here.
+      setLoadError(res.error || 'The send queue could not be read.');
+      setQueue([]);
+      setExcluded([]);
     }
     setLoading(false);
   };
@@ -289,6 +303,24 @@ export const SendQueueView: React.FC<SendQueueViewProps> = ({
           </button>
         )}
       </div>
+
+      {/* Why there is nothing here, when there is nothing here and it is not
+          because nothing is drafted. Silence is the one answer this step may
+          never give: an unreadable queue and an empty one look identical,
+          and the second is normal. */}
+      {loadError && (
+        <div
+          id="send-load-error"
+          className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-900 dark:text-rose-200 text-xs flex items-start gap-2"
+        >
+          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+          <span>
+            <strong>This list could not be read, so it is not empty --
+            it is unknown.</strong>{' '}
+            <span className="long-err whitespace-pre-wrap">{loadError}</span>
+          </span>
+        </div>
+      )}
 
       {sendError && (
         <div
@@ -595,6 +627,26 @@ export const SendQueueView: React.FC<SendQueueViewProps> = ({
               />
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Nothing drafted yet. Said in words, because a step that renders a
+          header and then stops reads as broken -- and this step is the one
+          every other card signposts, so arriving at a blank screen is the
+          dead end those signposts exist to avoid. */}
+      {!loadError && queue.length === 0 && excluded.length === 0 && (
+        <div
+          id="send-empty"
+          className="p-8 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 text-center space-y-1"
+        >
+          <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
+            No messages are waiting to send.
+          </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            A message appears here once it has been written. Write one from a
+            confirmed graphic on the Infographic step, or run the draft step
+            from Today.
+          </p>
         </div>
       )}
 

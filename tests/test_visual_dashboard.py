@@ -40,15 +40,16 @@ class FakeSheets:
     once shipped past a green suite.
     """
 
-    def __init__(self, leads=None, visuals=None):
+    def __init__(self, leads=None, visuals=None, research=None, outreach=None):
         self._tabs = {
             schema.LEADS.title: leads or {},
             schema.VISUAL_BRIEFS.title: visuals or {},
-            schema.RESEARCH.title: {},
-            schema.OUTREACH_LOG.title: {},
+            schema.RESEARCH.title: research or {},
+            schema.OUTREACH_LOG.title: outreach or {},
             schema.SITE_BRIEFS.title: {},
         }
         self.writes = []
+        self.upserts = []
         self.spreadsheet_id = "fake"
 
     def read_rows(self, tab):
@@ -66,6 +67,23 @@ class FakeSheets:
     def upsert(self, tab, rows, *, on_conflict=None):
         from outreach.sheets import UpsertResult
 
+        # The rows have to land where `read_rows` will find them. Returning a
+        # count and inserting nothing made this fake more permissive than the
+        # real client -- and it is why no test in this file could see a
+        # message being written and then never reaching step 4, which is
+        # exactly what was reported: "it goes to the tab, but the tab is
+        # empty". The same fix was already made to the fake in
+        # tests/test_outreach_draft.py; this file has its own and was missed.
+        self.upserts.append((tab.title, list(rows)))
+        table = self._tabs.setdefault(tab.title, {})
+        for row in rows:
+            key = str(row.get(tab.headers[0], "") or "")
+            if not key:
+                continue
+            if key in table:
+                table[key][1].update({k: str(v) for k, v in row.items()})
+            else:
+                table[key] = (len(table) + 2, {k: str(v) for k, v in row.items()})
         return UpsertResult(inserted=len(rows))
 
 
@@ -99,9 +117,11 @@ def brief(lead_id="a", **extra):
 def app(tmp_path, monkeypatch):
     monkeypatch.setenv("OUTREACH_STATE_DIR", str(tmp_path))
 
-    def build(track="visual", leads=None, visuals=None):
+    def build(track="visual", leads=None, visuals=None, research=None,
+              outreach=None):
         sheets = FakeSheets(leads or {"a": (2, {"Business Name": "Your Nail Crush"})},
-                            visuals if visuals is not None else brief())
+                            visuals if visuals is not None else brief(),
+                            research=research, outreach=outreach)
         monkeypatch.setattr(dash, "_sheets_client", lambda config: sheets)
         client = dash.create_app(cfg(track)).test_client()
         return client, sheets
@@ -1460,3 +1480,87 @@ def test_writing_says_so_when_there_was_nothing_to_do(app, monkeypatch):
 def test_writing_needs_a_lead(app):
     client, _ = app()
     assert client.post("/api/visual/write-message", json={}).status_code == 400
+
+
+# ------------------------------- written, and then actually offered to send
+
+
+class _Writer:
+    """Only the model is faked. Everything between the press and the send
+    queue is the real code, which is the whole point of the test below."""
+
+    call_count = 0
+
+    def write_outreach_copy(self, prompt, **kw):
+        from outreach.providers.llm import OutreachCopy
+
+        self.call_count += 1
+        return OutreachCopy(
+            subject="A thought about your bookings",
+            email_body="Hello -- three quick wins for your salon.",
+            whatsapp_message="Hello -- three quick wins for your salon.",
+        )
+
+
+def _confirmed_graphic(tmp_name="a.png"):
+    visual.visuals_dir().mkdir(parents=True, exist_ok=True)
+    (visual.visuals_dir() / tmp_name).write_bytes(b"png")
+    return brief("a", **{
+        "Image File": f"visuals/{tmp_name}", "Text Confirmed": "yes",
+    })
+
+
+def test_a_written_message_is_actually_offered_by_the_send_step(app, monkeypatch):
+    """"It goes to the tab, but the tab is empty."
+
+    The card writes the message, says so, and offers **Go to Review & Send**
+    -- and step 4 showed nothing at all. Not even in its excluded list, which
+    exists precisely so a drafted lead can never vanish silently.
+
+    Every earlier test of this path faked `draft.run`, so each proved the
+    endpoint *called* it and none proved a row came out the other end that
+    step 4 would take. The fake in this file compounded it by returning an
+    insert count while inserting nothing. Here the only thing faked is the
+    model.
+    """
+    client, sheets = app(
+        leads={"a": (2, {
+            "Lead ID": "a",
+            "Stage": "Researched",
+            "Business Name": "Your Nail Crush",
+            "Category": "Nail salon",
+            "Phone": "012-3456789",
+        })},
+        visuals=_confirmed_graphic(),
+        research={"a": (2, {
+            "Lead ID": "a",
+            "WhatsApp Reachable": "yes",
+            "Business Name": "Your Nail Crush",
+            "Tone": "warm",
+            "Services": "manicure",
+            "Customer Praise": "Lovely",
+            "Customer Pain Points": "Hard to book",
+            "Suggested Website Angle": "Online booking",
+            "Email Found": "",
+            "Email Source": "not found",
+        })},
+    )
+    monkeypatch.setattr("outreach.cli._gmail_or_none", lambda c: None)
+    monkeypatch.setattr(
+        "outreach.providers.llm.make_writer", lambda *a, **k: _Writer()
+    )
+
+    wrote = client.post(
+        "/api/visual/write-message", json={"lead_id": "a"}
+    ).get_json()
+    assert wrote.get("message_written") is True, wrote
+
+    sent = client.get("/api/whatsapp/queue").get_json()
+
+    queued = [row["lead_id"] for row in sent["queue"]]
+    held = {row["lead_id"]: row["reason"] for row in sent["excluded"]}
+    # The failure being reproduced is "in neither list", so name which it is.
+    assert "a" in queued, (
+        f"written but not offered to send. excluded={held or 'nothing at all'}"
+    )
+    assert sent["queue"][0]["message"].strip()

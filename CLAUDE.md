@@ -1732,6 +1732,30 @@ working." The same defect as the link *into* that page being small grey
 text, and the same answer. It is in the sidebar, and `render-check` reads
 the rendered anchor rather than the source.
 
+**Step 4 may never answer with silence.** `loadQueue` read the reply, took
+`res.data`, and dropped an `error` sitting beside it on the floor -- `if
+(res.data)` with no else. So a queue that could not be read rendered as a
+step with nothing in it, which is pixel-identical to "nothing is waiting" --
+a normal state. Reported as "it goes to the tab, but the tab is empty", and
+there was no way for him to tell the two apart, or for me to. The old page
+has shown that error up top since it was written, with a comment saying why,
+so the React page was the regression against the page he calls the working
+one. Both states are now distinct and both are driven in the browser,
+because the entire defect was that they looked the same. An empty queue also
+says so in words: a step that draws a header and then stops reads as broken,
+and this is the step every other card signposts.
+
+**A fake that returns a count while inserting nothing hides a whole class of
+bug.** `tests/test_outreach_draft.py`'s fake was fixed for exactly this and
+`tests/test_visual_dashboard.py` has its own, which was missed -- so no test
+in the file covering the infographic hand-off could see a message being
+written and then never reaching the send queue. Worse, every test of that
+path faked `draft.run` itself, so each proved the endpoint *called* it and
+none proved a row came out that step 4 would take.
+`test_a_written_message_is_actually_offered_by_the_send_step` drives the real
+draft and then reads the real queue, faking only the model. When two
+features must agree, test them against each other, not each against a stub.
+
 ## Conventions
 
 - Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`, `chore:`)
