@@ -928,6 +928,33 @@ the same message and the same screenshot, ready to send.
 Nothing is regenerated, so it costs nothing. Use it whenever WhatsApp claimed
 a message went out and it did not actually land.
 
+### "Could not re-word ... Read timed out"
+
+**Nothing is wrong and nothing needs redoing.** The prompt was still written.
+
+Writing a prompt is two steps. The cards — the three problems and their fixes
+— are chosen from your research by fixed rules, not by a model. Then one small
+model call rephrases those cards in that trade's own words: *term fees* rather
+than *prices* for a tuition centre.
+
+Only the second step needs the model. When it cannot be reached, the card keeps
+its standard wording, which is always true — just slightly less specific to
+their trade. The graphic is fine to send.
+
+If it fails twice in a row the run **stops asking** for the rest of that batch
+and says so at the end. That is deliberate: each attempt waits half a minute
+to produce exactly what not asking produces instantly, so ten leads would
+otherwise be a long wait for nothing.
+
+**If you want the tailored phrasing back**, press **Different look** on a card
+once the model is answering again. **If you would rather never wait on it**,
+set `visual.localise_wording: false` in your campaign file and every prompt
+uses the standard wording immediately.
+
+Worth knowing: that error names whatever model provider your campaign uses, so
+if it keeps timing out, research and the message drafts will be slow too — it
+is not something about the infographics.
+
 ### "Your Sheet has no Visual Briefs tab yet"
 
 Press **Add the missing tabs**, right under that message. That is the whole

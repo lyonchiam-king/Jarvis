@@ -1995,7 +1995,14 @@ class _Writer:
     model = ""
     call_count = 0
 
-    def _call(self, system: str, prompt: str, schema: dict[str, Any]) -> dict:
+    def _call(
+        self,
+        system: str,
+        prompt: str,
+        schema: dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> dict:
         raise NotImplementedError
 
     def write(self, prompt: str) -> ResearchBrief:
@@ -2039,7 +2046,9 @@ class _Writer:
                 out.append(area.strip())
         return tuple(out)
 
-    def write_gap_wording(self, prompt: str) -> tuple[GapCard, ...]:
+    def write_gap_wording(
+        self, prompt: str, *, timeout: float | None = None
+    ) -> tuple[GapCard, ...]:
         """Re-word the chosen cards in this business's own vocabulary.
 
         Returns whatever the model gave back, unvalidated against the cards
@@ -2047,7 +2056,9 @@ class _Writer:
         caller's job, because the caller is the only thing holding the
         evidence each id has to stay attached to.
         """
-        payload = self._call(GAP_WORDING_SYSTEM, prompt, GAP_WORDING_SCHEMA)
+        payload = self._call(
+            GAP_WORDING_SYSTEM, prompt, GAP_WORDING_SCHEMA, timeout=timeout
+        )
         out: list[GapCard] = []
         for card in payload.get("cards") or []:
             if not isinstance(card, dict):
@@ -2144,9 +2155,17 @@ class BriefWriter(_Writer):
             self._warned_effort = True
         return config
 
-    def _call(self, system: str, prompt: str, schema: dict[str, Any]) -> dict:
+    def _call(
+        self,
+        system: str,
+        prompt: str,
+        schema: dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> dict:
         self.call_count += 1
         try:
+            extra = {} if timeout is None else {"timeout": timeout}
             response = self._client.messages.create(
                 model=self.model,
                 # Thinking is on by default on Opus 5 and counts against
@@ -2155,6 +2174,7 @@ class BriefWriter(_Writer):
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
                 output_config=self._output_config(schema),
+                **extra,
             )
         except LLMError:
             raise
@@ -2210,7 +2230,12 @@ class OpenAICompatibleWriter(_Writer):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    def _post(self, messages: list[dict[str, str]], schema: dict[str, Any]) -> str:
+    def _post(
+        self,
+        messages: list[dict[str, str]],
+        schema: dict[str, Any],
+        timeout: float | None = None,
+    ) -> str:
         body = {
             "model": self.model,
             "messages": messages,
@@ -2226,7 +2251,8 @@ class OpenAICompatibleWriter(_Writer):
         url = f"{self.base_url}/chat/completions"
         try:
             response = self._session.post(
-                url, json=body, headers=self._headers, timeout=self.timeout
+                url, json=body, headers=self._headers,
+                timeout=self.timeout if timeout is None else timeout
             )
         except Exception as exc:  # noqa: BLE001 -- per-lead error, not a crash
             raise LLMError(f"Could not reach {url}: {type(exc).__name__}: {exc}") from exc
@@ -2246,14 +2272,21 @@ class OpenAICompatibleWriter(_Writer):
 
         return _reply_text(message)
 
-    def _call(self, system: str, prompt: str, schema: dict[str, Any]) -> dict:
+    def _call(
+        self,
+        system: str,
+        prompt: str,
+        schema: dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> dict:
         self.call_count += 1
         messages = [
             {"role": "system", "content": system + "\n\n" + _json_instruction(schema)},
             {"role": "user", "content": prompt},
         ]
 
-        text = self._post(messages, schema)
+        text = self._post(messages, schema, timeout)
         try:
             return _validated(text, schema)
         except LLMError as first:
@@ -2272,7 +2305,7 @@ class OpenAICompatibleWriter(_Writer):
                 ),
             },
         ]
-        return _validated(self._post(messages, schema), schema)
+        return _validated(self._post(messages, schema, timeout), schema)
 
 
 def _reply_text(message: dict) -> str:

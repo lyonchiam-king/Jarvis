@@ -87,6 +87,25 @@ def group_of(lead: dict[str, str], research_row: dict[str, str] | None) -> str:
     return "unchecked"
 
 
+# How long one card re-wording may take before it is abandoned.
+#
+# Deliberately far below the writer's own default, which is sized for a whole
+# site spec from a slow local model. This call returns a handful of short
+# lines, so a minute of waiting buys nothing -- and on a run of ten leads the
+# default turned an unreachable endpoint into half an hour of nothing. The
+# fallback text is always true, so cutting a slow answer short costs a little
+# blandness and nothing else.
+WORDING_TIMEOUT = 30.0
+
+# Consecutive failures before a run stops asking at all. Two, because one is
+# a blip and two in a row is the endpoint being down -- and every further
+# attempt then costs WORDING_TIMEOUT to produce exactly what not asking
+# produces instantly. Consecutive rather than total: a couple of scattered
+# failures across sixty leads is not a reason to give up on the other
+# fifty-eight.
+WORDING_GIVE_UP_AFTER = 2
+
+
 @dataclass
 class VisualBriefReport:
     candidates: int = 0
@@ -110,6 +129,11 @@ class VisualBriefReport:
     reworded: int = 0
     wording_failures: int = 0
     wording_reason: str = ""
+    # Set when a run stopped asking. Reported separately from a count of
+    # failures: "it failed twice" and "it stopped trying" are different
+    # facts, and only the second explains why the other fifty-eight leads
+    # were never attempted.
+    wording_given_up: bool = False
     errors: int = 0
     llm_calls: int = 0
     checkpoints: int = 0
@@ -140,9 +164,19 @@ class VisualBriefReport:
             lines.append(f"  re-worded for the trade {self.reworded}")
         if self.wording_failures:
             lines.append(
-                f"  library wording kept    {self.wording_failures}  "
+                f"  standard wording kept   {self.wording_failures}  "
                 f"({self.wording_reason})"
             )
+        if self.wording_given_up:
+            lines += [
+                "",
+                "  The model stopped answering, so the rest of this run used",
+                "  the standard card wording. Every prompt was still written",
+                "  and every card is still true -- just not phrased in this",
+                "  trade's own words. Nothing needs redoing unless you want",
+                "  that phrasing, in which case press Different look on a card",
+                "  once the model is back.",
+            ]
         lines += [
             f"Errors logged             {self.errors}",
             "",
@@ -239,6 +273,8 @@ def _cards_for(
     lead: dict[str, str],
     research_row: dict[str, str] | None,
     report: VisualBriefReport,
+    *,
+    allow_wording: bool = True,
 ) -> tuple[tuple[gaps_lib.Gap, ...], bool]:
     """The cards for one lead, and whether they name the business.
 
@@ -259,7 +295,7 @@ def _cards_for(
         # so there is nothing to localise and nothing to spend a call on.
         return gaps_lib.GENERIC_GAPS[: config.visual.max_cards], False
 
-    if not config.visual.localise_wording:
+    if not config.visual.localise_wording or not allow_wording:
         return found, True
 
     try:
@@ -271,14 +307,19 @@ def _cards_for(
                 tone=(research_row or {}).get("Tone", ""),
                 services=(research_row or {}).get("Services", ""),
                 cards=[(g.id, g.problem, g.fix) for g in found],
-            )
+            ),
+            timeout=WORDING_TIMEOUT,
         )
     except Exception as exc:  # noqa: BLE001 -- deliberately everything
         # Same shape as capture_site_shot: an optional step catches every
         # exception, not only the one its own module raises, and reports the
         # reason in the summary so the sole trace is not a log nobody reads.
+        # Says what it means for the output, not only what failed. "Keeping
+        # the library wording" is accurate and tells the reader nothing about
+        # whether the prompt they are about to use is any good.
         log.warning(
-            "Keeping the library wording for %s: %s: %s",
+            "Could not re-word %s's cards, so they keep the standard wording "
+            "-- still true, just not in this trade's own words. (%s: %s)",
             lead.get("Business Name", "") or lead.get("Lead ID", ""),
             type(exc).__name__,
             exc,
@@ -443,6 +484,10 @@ def run(
     log.info("Writing %d image prompt(s).", len(selected))
     pending = _Pending()
     previous = last_pairs(leads, existing, config.campaign.category)
+    # Tracked here rather than on the report: it is loop state, and the
+    # report is what the run has to say for itself afterwards.
+    consecutive_failures = 0
+    allow_wording = True
 
     for index, lead in enumerate(selected, start=1):
         lead_id = lead.get("Lead ID", "")
@@ -459,9 +504,26 @@ def run(
                 )
             _row_number, research_row = brief
 
+            failures_before = report.wording_failures
             cards, specific = _cards_for(
-                config, writer, lead, research_row, report
+                config, writer, lead, research_row, report,
+                allow_wording=allow_wording,
             )
+            if report.wording_failures > failures_before:
+                consecutive_failures += 1
+            else:
+                consecutive_failures = 0
+            if allow_wording and consecutive_failures >= WORDING_GIVE_UP_AFTER:
+                # Every further attempt costs WORDING_TIMEOUT to produce
+                # exactly what not asking produces instantly.
+                allow_wording = False
+                report.wording_given_up = True
+                log.warning(
+                    "The model has not answered %d times in a row, so the "
+                    "rest of this run will not ask again. Prompts are still "
+                    "being written, with the standard card wording.",
+                    consecutive_failures,
+                )
             industry = visual.industry_for(
                 lead.get("Category", ""), config.campaign.category
             )

@@ -123,14 +123,16 @@ class FakeWriter:
                  drop_all=False):
         self.call_count = 0
         self.prompts = []
+        self.timeouts = []
         self.fail = fail
         self.extra_card = extra_card
         self.wrong_ids = wrong_ids
         self.drop_all = drop_all
 
-    def write_gap_wording(self, prompt):
+    def write_gap_wording(self, prompt, *, timeout=None):
         self.call_count += 1
         self.prompts.append(prompt)
+        self.timeouts.append(timeout)
         if self.fail:
             raise RuntimeError("the model fell over")
         if self.drop_all:
@@ -323,7 +325,7 @@ def test_a_failed_wording_call_is_reported_not_fatal():
     assert report.wording_failures == 1
     assert "RuntimeError" in report.wording_reason
     assert "the model fell over" in report.wording_reason
-    assert "\n".join(report.summary_lines()).count("library wording kept") == 1
+    assert "\n".join(report.summary_lines()).count("standard wording kept") == 1
 
 
 def test_switching_off_localisation_spends_no_model_call():
@@ -724,3 +726,95 @@ def test_no_filter_at_all_behaves_exactly_as_before():
     assert report.prompts_written == 2
     assert report.filtered_out == 0
     assert "outside what you picked" not in "\n".join(report.summary_lines())
+
+
+# ---------------------------------------- when the model stops answering
+#
+# Seen on a real run: ollama.com read-timed-out on the first lead and the
+# fallback did its job -- but at 180 seconds a lead, ten leads would have been
+# half an hour of waiting to produce exactly what not asking produces
+# instantly.
+
+
+class SlowWriter:
+    """Fails every re-wording call, and records the timeout it was given."""
+
+    def __init__(self, *, fail_after=0):
+        self.call_count = 0
+        self.timeouts = []
+        self.fail_after = fail_after
+
+    def write_gap_wording(self, prompt, *, timeout=None):
+        self.call_count += 1
+        self.timeouts.append(timeout)
+        if self.call_count > self.fail_after:
+            raise RuntimeError("Read timed out. (read timeout=180.0)")
+        return ()
+
+
+def test_the_rewording_call_gets_its_own_short_budget():
+    """The writer's own default is sized for a whole site spec from a slow
+    local model. This call returns a handful of short lines."""
+    sheets = FakeSheets(index([lead("a")]), index([research("a")]))
+    writer = SlowWriter(fail_after=5)
+    visual_brief.run(cfg(), sheets, writer)
+    assert writer.timeouts == [visual_brief.WORDING_TIMEOUT]
+    assert visual_brief.WORDING_TIMEOUT <= 60, "a short answer does not need a minute"
+
+
+def test_a_run_stops_asking_after_two_failures_in_a_row():
+    leads = [lead(k) for k in "abcdefgh"]
+    sheets = FakeSheets(index(leads), index([research(k) for k in "abcdefgh"]))
+    writer = SlowWriter()
+    report = visual_brief.run(cfg(), sheets, writer)
+
+    assert report.prompts_written == 8, "every prompt must still be written"
+    assert report.errors == 0
+    assert writer.call_count == visual_brief.WORDING_GIVE_UP_AFTER, (
+        "it went on paying the timeout after the endpoint was plainly down"
+    )
+    assert report.wording_given_up is True
+    summary = "\n".join(report.summary_lines())
+    assert "stopped answering" in summary
+    assert "still true" in summary
+
+
+def test_a_single_blip_does_not_stop_the_rest_of_the_run():
+    """One failure is a blip. Giving up on fifty-eight leads because two
+    scattered ones failed would lose a feature that was mostly working."""
+    leads = [lead(k) for k in "abcd"]
+    sheets = FakeSheets(index(leads), index([research(k) for k in "abcd"]))
+
+    class Flaky(SlowWriter):
+        def write_gap_wording(self, prompt, *, timeout=None):
+            self.call_count += 1
+            self.timeouts.append(timeout)
+            if self.call_count == 2:
+                raise RuntimeError("one blip")
+            return ()
+
+    writer = Flaky()
+    report = visual_brief.run(cfg(), sheets, writer)
+    assert writer.call_count == 4, "a single failure stopped the run asking"
+    assert report.wording_given_up is False
+
+
+def test_giving_up_is_reported_apart_from_the_failures_that_caused_it():
+    """"It failed twice" and "it stopped trying" are different facts, and
+    only the second explains the other leads never being attempted."""
+    report = visual_brief.VisualBriefReport(
+        prompts_written=10, wording_failures=2,
+        wording_reason="RuntimeError: Read timed out", wording_given_up=True,
+    )
+    summary = "\n".join(report.summary_lines())
+    assert "standard wording kept   2" in summary
+    assert "Nothing needs redoing" in summary
+
+
+def test_a_healthy_run_says_nothing_about_any_of_this():
+    """A control: the explanation must not appear when nothing went wrong."""
+    sheets = FakeSheets(index([lead("a")]), index([research("a")]))
+    report = visual_brief.run(cfg(), sheets, FakeWriter())
+    summary = "\n".join(report.summary_lines())
+    assert "stopped answering" not in summary
+    assert "standard wording kept" not in summary

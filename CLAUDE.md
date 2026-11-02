@@ -64,7 +64,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1591 tests, pytest, no CI -- the suite is the only gate
+tests/             1596 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -1334,6 +1334,29 @@ open one -- who, what it waits on, and whether it claims anything about them
 never part of *All*: remove has to mean gone from the list, or the button has
 not done what it says. Nothing is destroyed; it is the existing `Skip`, and
 **Put it back** reverses it.
+
+**An optional call must not be charged the required one's patience.**
+`OpenAICompatibleWriter` waits 180 seconds, which is right for a whole site
+spec from a slow local model and absurd for four short lines of card
+wording. On a real run `ollama.com` read-timed-out and the fallback worked
+perfectly -- while quietly costing three minutes a lead to produce exactly
+what `localise_wording: false` produces instantly. `write_gap_wording` takes
+its own timeout, and after `WORDING_GIVE_UP_AFTER` failures **in a row** the
+run stops asking altogether. Consecutive, not total: a couple of scattered
+failures across sixty leads is not a reason to abandon the other
+fifty-eight.
+
+The per-call timeout is a real override on **both** transports -- the
+Anthropic SDK takes one per request -- because a parameter that one provider
+silently ignores is worse than no parameter.
+
+**"Keeping the library wording" says what failed, not what it means.** A
+person reading a warning mid-run wants to know whether the thing they are
+about to use is any good. The line now says the cards keep their standard
+wording, that it is still true, and what is lost -- the trade's own
+phrasing. And giving up is reported apart from the failures that caused it:
+"it failed twice" and "it stopped trying" are different facts, and only the
+second explains why the other leads were never attempted.
 
 ## Conventions
 
