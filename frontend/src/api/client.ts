@@ -392,6 +392,8 @@ class ApiClient {
           state: (v.state || 'needs_image') as VisualState,
           approval: v.approval || '',
           expected_text: v.expected_text || [],
+          message: v.message || '',
+          sent_at: v.sent_at || '',
           created_at: v.created_at || '',
         })
       ),
@@ -534,6 +536,9 @@ class ApiClient {
           recipient_phone: s.phone || '',
           e164_phone: s.phone_e164 || '',
           whatsapp_message: s.message || '',
+          // Which picture rides with it. The queue has always said; nothing
+          // read it, so an infographic was labelled a site screenshot.
+          shot_kind: s.shot_kind === 'visual' ? 'visual' : 'site',
           // Only offered when a picture actually exists on disk: the queue
           // says so per lead, and a broken image is worse than none.
           screenshot_url: s.has_shot ? `/api/screenshot/${encodeURIComponent(s.lead_id)}` : '',

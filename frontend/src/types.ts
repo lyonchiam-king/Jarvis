@@ -97,6 +97,12 @@ export interface BuildItem {
 export interface SendItem {
   lead_id: string;
   business_name: string;
+  /**
+   * Which picture rides with the message: the infographic that IS the pitch
+   * on the visual track, or a screenshot of the built page. Naming it wrong
+   * describes the thing being sent as something else.
+   */
+  shot_kind?: 'visual' | 'site';
   category: string;
   recipient_phone: string;
   e164_phone: string;
@@ -271,6 +277,14 @@ export interface VisualItem {
    * so these exist to be read against the picture by a person.
    */
   expected_text: string[];
+  /**
+   * The real WhatsApp text, written per business by the draft stage. Not
+   * `expected_text`, which belongs on the picture and is never sent -- the
+   * two were read as one thing, which is the mistake this field exists to
+   * stop.
+   */
+  message: string;
+  sent_at: string;
   created_at: string;
 }
 

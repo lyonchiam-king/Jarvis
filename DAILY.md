@@ -690,10 +690,32 @@ stops.
    generate the picture.
 3. **Paste the picture back.** Click the box and press Ctrl+V, drop the file on
    it, or paste the link and press **Fetch it** — whichever you have.
-4. **Read the words.** The card shows the picture at about the size WhatsApp
-   gives it in a chat, with the exact words that are supposed to be on it
-   right underneath. Check them, then press **The words are right**.
+4. **Proofread the picture.** The card shows it at about the size WhatsApp
+   gives it in a chat, with the words that are supposed to be *on it* right
+   underneath. Check the spelling, then press **The words are right**.
 5. **Step 4, Send.** The picture is attached to the message. Press Send.
+
+### The proofreading box is not the message
+
+Worth being clear about, because the two sit next to each other.
+
+The box under the picture is **for checking the picture**. Those are the words
+the prompt asked Google Flow to draw. They are never sent to anybody — they are
+only there so you can compare them against the image and catch a garbled one.
+
+**The message is separate**, and it is written per business from that
+business's own research, exactly like the website messages. Once you have
+confirmed the picture, the card shows you that message in full, below the
+proofreading box.
+
+### There is no send button on step 3b
+
+On purpose. Everything sends from **step 4**, one queue, whichever track the
+lead is on — so you never have two places to check and never message the same
+business twice. The card on step 3b says so and links there.
+
+Step 4 now also names which picture it is carrying: **Infographic attached**
+or **Site screenshot attached**.
 
 Step 4 holds a lead until step 4 of that list is done. That is deliberate:
 until someone has read the words, there is no message, because the message is

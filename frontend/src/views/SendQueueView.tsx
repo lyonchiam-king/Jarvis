@@ -284,9 +284,26 @@ export const SendQueueView: React.FC<SendQueueViewProps> = ({
                   <img
                     src={item.screenshot_url || `/api/screenshot/${encodeURIComponent(item.lead_id)}`}
                     alt={`Preview of ${item.business_name}`}
-                    className="w-full h-44 object-cover"
+                    // The infographic is 16:9 and IS the pitch, so cropping it
+                    // to a tall card hides the thing being sent.
+                    className={
+                      item.shot_kind === 'visual'
+                        ? 'w-full object-contain bg-slate-950'
+                        : 'w-full h-44 object-cover'
+                    }
                   />
                 </div>
+                {/* Named, not assumed. The queue has always said which picture
+                    it carries; nothing read it, so an infographic was labelled
+                    a site screenshot. */}
+                <p
+                  id={`send-shot-kind-${item.lead_id}`}
+                  className="text-[11px] text-slate-500"
+                >
+                  {item.shot_kind === 'visual'
+                    ? 'Infographic attached'
+                    : 'Site screenshot attached'}
+                </p>
 
                 <div className="text-[11px] font-mono text-slate-500">
                   Recipient Dial: <strong className="text-teal-600 dark:text-teal-400">{item.e164_phone}</strong>

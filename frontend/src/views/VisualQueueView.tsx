@@ -557,23 +557,30 @@ const VisualCard: React.FC<CardProps> = ({
               </p>
             </>
           )}
-          <div>
-            <p className="text-[12px] text-slate-300 font-medium">
-              These exact words must be on the picture
+          {/* Set apart from the message below it: the two were read as one
+              thing, and only one of them is ever sent. */}
+          <div className="p-3 rounded-lg border border-amber-900/40 bg-amber-950/20">
+            <p className="text-[12px] text-slate-200 font-medium">
+              Proofread the picture
             </p>
             <p className="text-[11px] text-slate-500">
-              Nothing here can check that, so this is the one thing only you
-              can do.
+              These are the words the prompt asked for. Check they appear on
+              the image above and are spelled right — nothing here can see the
+              picture, so this is the one thing only you can do.
             </p>
-            <pre className="mt-2 p-3 rounded-lg bg-slate-950 border border-emerald-900/50 text-[12px] text-slate-200 whitespace-pre-wrap font-mono">
+            <pre className="mt-2 p-3 rounded-lg bg-slate-950 border border-slate-800 text-[12px] text-slate-200 whitespace-pre-wrap font-mono">
               {item.expected_text.join('\n') || 'No text recorded.'}
             </pre>
+            <p className="text-[11px] text-amber-300/80 mt-2">
+              This is <strong>not</strong> the message. It is never sent
+              anywhere — it is only here to compare against the picture.
+            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {item.state === 'ready' ? (
               <span className="inline-flex items-center gap-1.5 text-[12px] text-emerald-300">
                 <Check className="w-3.5 h-3.5" />
-                Checked — this picture goes out with the message.
+                Picture checked.
               </span>
             ) : (
               <button
@@ -593,6 +600,8 @@ const VisualCard: React.FC<CardProps> = ({
               Wrong picture
             </button>
           </div>
+
+          {item.state === 'ready' && <VisualMessage item={item} />}
         </div>
       )}
 
@@ -927,6 +936,72 @@ const CandidatePicker: React.FC<{ onStarted: () => void }> = ({ onStarted }) => 
           </span>
         )}
       </div>
+    </div>
+  );
+};
+
+
+/**
+ * What actually gets sent, shown where the question is asked.
+ *
+ * The proofreading box above it was read as the message -- a fair reading of
+ * "these exact words", and the kind of mistake you only make once a graphic
+ * has reached a real business. So the real text is here, on the same card,
+ * and it says where it sends from: there is no send button on this step.
+ */
+const VisualMessage: React.FC<{ item: VisualItem }> = ({ item }) => {
+  if (item.sent_at) {
+    return (
+      <div
+        id={`visual-sent-${item.lead_id}`}
+        className="p-3 rounded-lg border border-slate-700 bg-slate-950/60 space-y-2"
+      >
+        <p className="text-[12px] text-slate-300 font-medium">
+          Already sent — {item.sent_at}
+        </p>
+        <pre className="text-[12px] text-slate-400 whitespace-pre-wrap font-mono">
+          {item.message}
+        </pre>
+      </div>
+    );
+  }
+  if (!item.message) {
+    return (
+      <div
+        id={`visual-undrafted-${item.lead_id}`}
+        className="p-3 rounded-lg border border-emerald-900/40 bg-emerald-950/20"
+      >
+        <p className="text-[12px] text-slate-200 font-medium">
+          Next: its message has not been written yet
+        </p>
+        <p className="text-[11px] text-slate-500 mt-1">
+          Run the draft step and this business gets its own message, written
+          from its own research — exactly like the website ones. The picture
+          above is attached to it. It then sends from Review &amp; Send, the
+          same queue as everything else.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div
+      id={`visual-message-${item.lead_id}`}
+      className="p-3 rounded-lg border border-emerald-900/40 bg-emerald-950/20 space-y-2"
+    >
+      <p className="text-[12px] text-slate-200 font-medium">
+        The message this picture goes out with
+      </p>
+      <p className="text-[11px] text-slate-500">
+        Written for this business, and editable in Review &amp; Send before it
+        goes.
+      </p>
+      <pre className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-[12px] text-slate-200 whitespace-pre-wrap font-mono">
+        {item.message}
+      </pre>
+      <p className="text-[11px] text-slate-500">
+        It sends from <strong>Review &amp; Send</strong>, the same queue as the
+        website messages. There is no separate send button here.
+      </p>
     </div>
   );
 };

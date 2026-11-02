@@ -64,7 +64,7 @@ frontend/          React source for /app; `npm run build` writes src/outreach/we
 Dockerfile         the hosted image -- Chromium, one /data volume, no Node
 fly.toml           the deploy: /data volume, /healthz, asleep when idle
 DEPLOY.md          the guide Lyon follows to put it on the internet
-tests/             1596 tests, pytest, no CI -- the suite is the only gate
+tests/             1603 tests, pytest, no CI -- the suite is the only gate
 ```
 
 ## Rules that came from real bugs
@@ -1357,6 +1357,39 @@ wording, that it is still true, and what is lost -- the trade's own
 phrasing. And giving up is reported apart from the failures that caused it:
 "it failed twice" and "it stopped trying" are different facts, and only the
 second explains why the other leads were never attempted.
+
+**"These exact words must be on the picture" was read as the message.** A
+fair reading, asked outright from a checked card: *are these going to be the
+messages that are going to be sent out?* They are the words the prompt asked
+the image tool to draw, shown so a garbled one is caught -- and they are
+never sent anywhere. The box is titled **Proofread the picture**, set apart
+from what follows it, and says in as many words that it is not the message.
+
+The fix is not only the label. The question was asked on the one screen that
+could not answer it, so the card now carries the **real** drafted message,
+read from the Outreach Log, beneath the proofreading box: written for that
+business from its own research, exactly like the website messages. An
+unchecked card shows no message, because nothing is attached until the words
+are confirmed and promising one would describe work not yet done. A card
+already sent says so rather than inviting a second send.
+
+**A card that says "ready to send" and offers no onward signpost is a dead
+end.** There is no send button on the infographic step and there should not
+be: both tracks end at the same queue, which is what stops a business being
+messaged twice. So the card says that, and links to it.
+
+**`shot_kind` was returned by the queue and rendered by nothing.** Mine, two
+commits after writing the rule down -- the send queue said "Site screenshot
+attached" whatever arrived, so an infographic, which *is* the pitch on that
+track, was described as something else entirely. Both pages name it now, and
+the React card stops cropping a 16:9 graphic into a tall thumbnail that hides
+the thing being sent.
+
+**An assertion on rendered HTML must not depend on where a line wrapped.**
+The page's template literals wrap, so "its own research" reached the DOM as
+"its\n        own research" and a literal `in` check failed on correct
+output. Collapse whitespace before asserting -- otherwise the test is
+checking the formatter.
 
 ## Conventions
 

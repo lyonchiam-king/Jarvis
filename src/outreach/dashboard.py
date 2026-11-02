@@ -2400,6 +2400,11 @@ def create_app(config: Config) -> Flask:
             sheets = _sheets_client(c)
             leads = sheets.read_rows(schema.LEADS)
             briefs = sheets.read_rows(schema.VISUAL_BRIEFS)
+            # The message that will actually go out. Read here because this
+            # card is where the question gets asked -- the proofreading box
+            # beside it was read as the message, which is a mistake you only
+            # make once a graphic has reached a real business.
+            drafted = sheets.read_rows(schema.OUTREACH_LOG)
         except Exception as exc:  # noqa: BLE001
             from .sheets import TabMissing
 
@@ -2437,6 +2442,15 @@ def create_app(config: Config) -> Flask:
                     # test that they rendered; this is what makes the check
                     # possible for the one pair of eyes that can.
                     "expected_text": _expected_text(row),
+                    # The real WhatsApp text, written per business by the
+                    # draft stage. Not the words above, which belong on the
+                    # picture and are never sent anywhere.
+                    "message": (drafted.get(lead_id) or (0, {}))[1].get(
+                        "WhatsApp Message", ""
+                    ),
+                    "sent_at": (drafted.get(lead_id) or (0, {}))[1].get(
+                        "WhatsApp Sent At", ""
+                    ),
                     "created_at": row.get("Created At", ""),
                 }
             )
@@ -3971,6 +3985,14 @@ PAGE = """<!doctype html>
      is a graphic nobody will read. */
   /* Collapsed by default: sixty cards is not a list anybody reads, and the
      header carries everything needed to decide whether to open one. */
+  /* The proofreading box is visually apart from the message below it: the
+     two were read as one thing, and only one of them is ever sent. */
+  .viz-proof { margin-top:10px; padding:10px 12px; border-radius:6px;
+               border:1px solid #3a3326; background:#1b1811; }
+  .viz-next { margin-top:12px; padding:10px 12px; border-radius:6px;
+              border:1px solid #274034; background:#101c17; }
+  .viz-sent { margin-top:12px; padding:10px 12px; border-radius:6px;
+              border:1px solid #2a3a33; background:#141a18; }
   .viz-head { display:flex; align-items:center; gap:10px; cursor:pointer;
               user-select:none; }
   .viz-caret { color:#49C990; width:1em; }
@@ -4316,7 +4338,7 @@ PAGE = """<!doctype html>
   </details>
   <div id="visual"></div>
 
-  <h2><span class="stepno">4</span> Send
+  <h2 id="send-step"><span class="stepno">4</span> Send
       <a class="sub" href="/guide#4-open-gmail-drafts" target="_blank" rel="noopener">What is this?</a></h2>
   <div class="card" id="send"></div>
 
@@ -4663,12 +4685,18 @@ async function loadWhatsAppInline() {
       // The picture that will ride with the message. Shown small, and
       // clickable, because the only way to check it before was to send it
       // and look at your phone.
+      // Named, not assumed. The queue has always said which picture it is
+      // carrying; the page said "site screenshot" whatever arrived, so an
+      // infographic -- which IS the pitch on that track -- was described as
+      // something else entirely.
+      const shotWord = m.shot_kind === 'visual'
+        ? 'Infographic attached' : 'Site screenshot attached';
       const shot = m.has_shot
         ? `<a href="/api/screenshot/${encodeURIComponent(m.lead_id)}" target="_blank"
-              rel="noopener" class="wa-shot" title="Open the screenshot full size">
+              rel="noopener" class="wa-shot" title="Open the picture full size">
              <img src="/api/screenshot/${encodeURIComponent(m.lead_id)}" alt="">
-             <span>Site screenshot attached</span></a>`
-        : '<div class="sub" style="margin:6px 0">No screenshot &mdash; the text '
+             <span>${shotWord}</span></a>`
+        : '<div class="sub" style="margin:6px 0">No picture &mdash; the text '
           + 'will send on its own.</div>';
 
       return `<div class="wa-msg-card" id="wa-msg-${k}">
@@ -6001,16 +6029,24 @@ function vizBody(m, d, id, u) {
       <img class="viz-shot" src="${shot}" alt="">
       <div class="sub" style="margin-top:6px">Shown at about the size WhatsApp
         gives it in a chat. If it is not readable here, it is not readable there.</div>
-      <div class="sub" style="margin-top:10px"><b>These exact words must be on the picture</b>
-        &mdash; nothing here can check that, so this is the one thing only you can do:</div>
-      <div class="viz-words">${esc(words)}</div>
+      <div class="viz-proof">
+        <div class="sub"><b>Proofread the picture</b> &mdash; the words below are
+          what the prompt asked for. Check they appear on the image above and are
+          spelled right. Nothing here can see the picture, so this is the one
+          thing only you can do.</div>
+        <div class="viz-words">${esc(words)}</div>
+        <div class="hint" style="margin-top:6px">This is <b>not</b> the message.
+          It is never sent anywhere &mdash; it is only here so you can compare it
+          against the picture.</div>
+      </div>
       <div class="row" style="margin-top:10px">
         ${ready
-          ? '<span class="ok">Checked &mdash; this picture goes out with the message.</span>'
+          ? '<span class="ok">Picture checked.</span>'
           : `<button onclick="confirmVizText('${id}')">The words are right</button>`}
         <button onclick="clearVizImage('${id}')">Wrong picture</button>
         <span class="sub" id="vizn-${id}">${esc(u.note || '')}</span>
-      </div>`;
+      </div>
+      ${ready ? vizMessage(m) : ''}`;
   }
 
   return `
@@ -6146,6 +6182,37 @@ async function repairTabs(btn) {
   // Every panel that was reading the missing tab, not just this one.
   await loadVisual();
   refresh();
+}
+
+// What actually gets sent, shown on the card where the question is asked.
+// The proofreading box above was read as the message -- a fair reading of
+// "these exact words", and the kind of mistake you only make once a graphic
+// has reached a real business.
+function vizMessage(m) {
+  if (m.sent_at) {
+    return `<div class="viz-sent">
+      <div class="sub"><b>Already sent.</b> This one went out on
+        ${esc(m.sent_at)}.</div>
+      <div class="viz-words">${esc(m.message || '')}</div>
+    </div>`;
+  }
+  if (!m.message) {
+    return `<div class="viz-next">
+      <div class="sub"><b>Next: its message has not been written yet.</b></div>
+      <p class="hint" style="margin:6px 0 0">Press <b>Draft messages</b> in
+        step 4 and this business gets its own message &mdash; written from its
+        own research, like the website ones. The picture above is attached to
+        it. Then send it from step 4, the same queue as everything else.</p>
+    </div>`;
+  }
+  return `<div class="viz-next">
+    <div class="sub"><b>The message this picture goes out with</b> &mdash;
+      written for this business, and editable in step 4 before you send:</div>
+    <div class="viz-words">${esc(m.message)}</div>
+    <p class="hint" style="margin:6px 0 0">It sends from
+      <a href="#send-step">step 4</a>, the same queue as the website messages.
+      There is no separate send button here.</p>
+  </div>`;
 }
 
 function vizArm(leadId, on) {

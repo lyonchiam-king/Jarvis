@@ -3496,7 +3496,7 @@ def test_a_checked_picture_says_so_instead_of_asking_again():
     """)
     html = __import__("json").loads(out)["html"]
     assert "The words are right" not in html
-    assert "goes out with the message" in html
+    assert "Picture checked" in html
 
 
 def test_a_generic_graphic_says_so_on_its_own_card():
@@ -3943,3 +3943,117 @@ def test_the_tick_count_is_shown_so_nobody_runs_a_batch_they_did_not_mean():
     data = __import__("json").loads(out)
     assert data["before"] == "Nothing ticked yet"
     assert data["after"] == "2 ticked"
+
+
+# ------------------------------------------ the message, and where it sends
+#
+# Asked after a real run, looking at a checked card: "are these going to be
+# the messages that are going to be sent out?" -- about the proofreading box.
+# A fair reading of "these exact words must be on the picture", and the kind
+# of mistake you only make once a graphic has reached a real business.
+
+
+def _checked(**over):
+    import json as _json
+
+    q = _json.loads(_viz_queue_response())
+    row = q["queue"][0]
+    row["state"] = "ready"
+    row.update(over)
+    q["counts"] = {"needs_image": 0, "needs_check": 0, "ready": 1, "skipped": 0}
+    return _json.dumps(q)
+
+
+def _open_ready(payload):
+    import re as _re
+
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({payload})}});
+    await loadVisual();
+    vizSetFilter('ready');
+    vizToggle('LEAD-1');
+    console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
+    """)
+    return _re.sub(r"\s+", " ", __import__("json").loads(out)["html"])
+
+
+def test_the_proofreading_box_says_it_is_not_the_message():
+    """It was read as the message. The words are there to be compared against
+    the picture and are never sent anywhere."""
+    html = _open_ready(_checked(message="Hi, Lyon here. Noticed something."))
+    assert "Proofread the picture" in html
+    assert "is <b>not</b> the message" in html or "not</b> the message" in html
+    assert "never sent anywhere" in html
+
+
+def test_a_checked_card_shows_the_message_that_will_actually_go():
+    """The answer to "is it custom?" belongs on the screen the question is
+    asked from."""
+    html = _open_ready(_checked(message="Hi, Lyon here. Saw your reviews."))
+    assert "Hi, Lyon here. Saw your reviews." in html
+    assert "The message this picture goes out with" in html
+
+
+def test_it_says_where_it_sends_from_because_there_is_no_button_here():
+    """A card that says "ready to send" and offers no onward signpost is a
+    dead end -- the same shape as a stage with no button."""
+    html = _open_ready(_checked(message="Hi there."))
+    assert "no separate send button here" in html
+    assert "#send-step" in html
+
+
+def test_a_card_with_no_message_yet_says_what_to_press():
+    html = _open_ready(_checked(message=""))
+    assert "has not been written yet" in html
+    assert "Draft messages" in html
+    assert "its own research" in html
+
+
+def test_an_already_sent_one_says_so_rather_than_inviting_a_second_send():
+    """The same business messaged twice is the thing this pipeline works
+    hardest to avoid."""
+    html = _open_ready(_checked(message="Hi there.", sent_at="2026-11-02T09:00:00Z"))
+    assert "Already sent" in html
+    assert "2026-11-02T09:00:00Z" in html
+    assert "no separate send button here" not in html
+
+
+def test_an_unchecked_card_does_not_show_the_message_yet():
+    """Nothing is attached until the words are confirmed, so promising a
+    message beside an unchecked picture would describe work not yet done."""
+    import json as _json
+
+    q = _json.loads(_viz_queue_response())
+    q["queue"][0].update(state="needs_check", message="Hi, Lyon here.")
+    q["counts"] = {"needs_image": 0, "needs_check": 1, "ready": 0, "skipped": 0}
+    out = _run_in_node(_VIZ_DOM + f"""
+    globalThis.fetch = async () => ({{json: async () => ({_json.dumps(q)})}});
+    await loadVisual();
+    vizSetFilter('needs_check');
+    vizToggle('LEAD-1');
+    console.log(JSON.stringify({{html: _el('#visual').innerHTML}}));
+    """)
+    html = __import__("json").loads(out)["html"]
+    assert "Proofread the picture" in html
+    assert "The message this picture goes out with" not in html
+
+
+def test_the_send_queue_names_which_picture_it_is_carrying():
+    """The queue has always carried `shot_kind`. The page said "site
+    screenshot" whatever arrived, so an infographic -- which IS the pitch on
+    that track -- was described as something else entirely."""
+    out = _run_in_node(_VIZ_DOM + """
+    const base = {lead_id: 'a', name: 'Salon', phone: '+60123',
+                  phone_e164: '+60123', message: 'hi', has_shot: true,
+                  wa_link: 'https://wa.me/60123'};
+    globalThis.fetch = async () => ({json: async () => ({
+      queue: [{...base, shot_kind: 'visual'},
+              {...base, lead_id: 'b', name: 'Shop', shot_kind: 'site'}],
+      excluded: [],
+    })});
+    await loadWhatsAppInline();
+    console.log(JSON.stringify({html: _el('#wa-inline').innerHTML}));
+    """)
+    html = __import__("json").loads(out)["html"]
+    assert "Infographic attached" in html
+    assert "Site screenshot attached" in html

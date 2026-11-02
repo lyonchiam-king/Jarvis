@@ -345,7 +345,7 @@ try {
       // supposed to disappear rather than become a dead link.
       tool_url: 'https://example.com/flow',
       signature: 'by Lyon, Business Growth Consultant',
-      counts: { needs_image: 1, needs_check: 1, ready: 0, skipped: 0 },
+      counts: { needs_image: 1, needs_check: 1, ready: 1, skipped: 0 },
       catalogue: {
         styles: ['paper-cut', 'watercolour'], layouts: ['rows', 'road'],
         chosen_styles: [], chosen_layouts: [],
@@ -358,6 +358,8 @@ try {
           style: 'paper-cut', layout: 'rows', specific: true,
           state: 'needs_image', approval: 'Approved',
           expected_text: ['3 quick wins for Your Nail Crush'],
+          message: '',
+          sent_at: '',
           created_at: '2026-01-01T00:00:00Z',
         },
         {
@@ -368,6 +370,23 @@ try {
           state: 'needs_check', approval: 'Approved',
           expected_text: ['3 quick wins for your business',
                           'Time going on jobs a tool could do  ->  Automate the repeated ones'],
+          // The real message, so the block answering "is THIS what gets
+          // sent?" is actually rendered rather than taking its empty branch.
+          message: '',
+          sent_at: '',
+          created_at: '2026-01-01T00:00:00Z',
+        },
+        {
+          lead_id: 'LEAD-C', name: 'Third Salon', category: 'Hair salon',
+          prompt: 'Wide 16:9 landscape semi-infographic for "Third Salon".',
+          gaps: 'no_website: Google lists no website for this business',
+          style: 'flat-vector', layout: 'rows', specific: true,
+          state: 'ready', approval: 'Approved',
+          expected_text: ['3 quick wins for Third Salon'],
+          // The real message, so the block answering "is THIS what gets
+          // sent?" renders rather than taking its empty branch.
+          message: 'Hi, Lyon here. Noticed people asking how to book.',
+          sent_at: '',
           created_at: '2026-01-01T00:00:00Z',
         },
       ],
@@ -516,13 +535,34 @@ try {
     'Second Salon',
     'Generic',
     'not enough evidence to name them',
-    'These exact words must be on the picture',
+    'Proofread the picture',
     '3 quick wins for your business',
+    // Asked after a real run, about this very box: "are these going to be the
+    // messages that are going to be sent out?" It has to say no.
+    'not the message',
   ]) {
     if (!vizText2.includes(phrase)) {
       fail(`an opened card did not render ${JSON.stringify(phrase)}`);
     }
   }
+  // The checked card: what actually gets sent, and where from. A card that
+  // says "ready to send" and offers no onward signpost is a dead end.
+  await dt.evaluate(`document.getElementById('visual-filter-ready').click()`);
+  await new Promise((r) => setTimeout(r, 300));
+  await dt.evaluate(OPEN_FIRST_CARD);
+  await new Promise((r) => setTimeout(r, 400));
+  const checked = await dt.evaluate('document.body.innerText || ""');
+  for (const phrase of [
+    'Third Salon',
+    'The message this picture goes out with',
+    'Hi, Lyon here. Noticed people asking how to book.',
+    'no separate send button here',
+  ]) {
+    if (!checked.includes(phrase)) {
+      fail(`the checked card did not render ${JSON.stringify(phrase)}`);
+    }
+  }
+
   // All three ways in. Read off the waiting card, which is the only state
   // that offers them. The link field is a placeholder, so it is not in
   // innerText -- asserted off the DOM instead, which is also what proves the
