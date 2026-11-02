@@ -453,7 +453,7 @@ try {
       // supposed to disappear rather than become a dead link.
       tool_url: 'https://example.com/flow',
       signature: 'by Lyon, Business Growth Consultant',
-      counts: { needs_image: 1, needs_check: 1, ready: 2, sent: 1,
+      counts: { needs_image: 1, needs_check: 1, ready: 3, sent: 1,
                 skipped: 0 },
       catalogue: {
         styles: ['paper-cut', 'watercolour'], layouts: ['rows', 'road'],
@@ -504,6 +504,20 @@ try {
           // -- it lived in step 4's excluded list, which is a different
           // screen from the one saying the message is ready.
           can_unblock: true,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+        {
+          // Confirmed, drafted, and actually waiting in the send step. The
+          // one state that needs a way *out* of this step -- LEAD-C covers
+          // the opposite, where saying "go there" would be a lie.
+          lead_id: 'LEAD-F', name: 'Sixth Salon', category: 'Hair salon',
+          prompt: 'Wide 16:9 landscape semi-infographic for "Sixth Salon".',
+          gaps: 'no_website: Google lists no website for this business',
+          style: 'watercolour', layout: 'rows', specific: true,
+          state: 'ready', approval: 'Approved',
+          expected_text: ['3 quick wins for Sixth Salon'],
+          message: 'Noticed people finding you and not getting in touch.',
+          sent_at: '', in_send_queue: true, send_hold: '', can_unblock: false,
           created_at: '2026-01-01T00:00:00Z',
         },
         {
@@ -741,6 +755,50 @@ try {
   if (!afterFix.includes('It is in Review & Send now')) {
     fail('pressing the repair said nothing about what it did');
   }
+  // And a way to go there, at the moment he most wants to: it has just
+  // arrived, and the alternative is hunting for the step by hand.
+  const afterFixSignpost = await dt.evaluate(
+    `!!document.getElementById('visual-go-to-send')`,
+  );
+  if (!afterFixSignpost) {
+    fail('the repair reports success and offers no way to the step it landed in');
+  }
+
+  // The way out of this step. The card named "Review & Send" in bold and
+  // offered nothing to press -- reported as "there's no button to send, I
+  // can't see it on the new dashboard". A signpost that cannot be followed
+  // is the dead end this whole block exists to avoid.
+  await dt.evaluate(`(() => {
+    const head = document.getElementById('visual-head-LEAD-F');
+    if (head && head.getAttribute('aria-expanded') !== 'true') head.click();
+  })()`);
+  await new Promise((r) => setTimeout(r, 500));
+  const signpost = await dt.evaluate(`(() => {
+    const go = document.getElementById('visual-go-to-send');
+    return { has: !!go, label: go ? (go.innerText || '').trim() : '' };
+  })()`);
+  if (!signpost.has) {
+    fail('a card waiting in Review & Send offers no way to get there');
+  }
+  if (!/Review & Send/.test(signpost.label)) {
+    fail(`the signpost reads ${JSON.stringify(signpost.label)}`);
+  }
+  // Pressed: it has to land on the step, not merely exist.
+  await dt.evaluate(`document.getElementById('visual-go-to-send').click()`);
+  await new Promise((r) => setTimeout(r, 700));
+  const landed = await dt.evaluate(
+    `document.getElementById('stage-send')?.getAttribute('aria-current') === 'step'`,
+  );
+  if (!landed) fail('pressing the signpost did not land on Review & Send');
+  const sendStepText = await dt.pageText();
+  if (!sendStepText.includes('NS Aesthetics')) {
+    fail('the signpost landed somewhere with no send queue on it');
+  }
+  // Back to the Infographic step for the assertions that follow.
+  await dt.evaluate(`document.getElementById('stage-visual').click()`);
+  await new Promise((r) => setTimeout(r, 600));
+  await dt.evaluate(`document.getElementById('visual-filter-ready').click()`);
+  await new Promise((r) => setTimeout(r, 400));
 
   // Sent is finished work: out of every working list, in its own.
   const sentList = await dt.evaluate(`(() => {

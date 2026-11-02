@@ -774,6 +774,21 @@ twice.
 
 The lead then appears in step 4 like any other, with the graphic attached.
 
+### Where the send button is
+
+On the current dashboard the steps are tabs across the top of a campaign:
+**List → Reachability → Brief → Build → Infographic → Review & Send**. The
+send button lives on that last tab, not on the Infographic one.
+
+You do not have to hunt for it. A card whose message is waiting carries
+**Go to Review & Send**, which takes you straight there, and so does the
+card right after you press **Put it in Review & Send**.
+
+The tab itself now carries a number for everything waiting there — messages
+still to write *and* messages written and waiting to go. It used to count
+only the first, so a graphic whose message was ready showed no number at all,
+which reads as nothing to do.
+
 ### There is no send button on step 3b
 
 On purpose. Everything sends from **step 4**, one queue, whichever track the

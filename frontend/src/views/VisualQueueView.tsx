@@ -13,6 +13,7 @@ import {
   Wrench,
   ChevronRight,
   ChevronDown,
+  ArrowRight,
   Trash2,
   Play,
 } from 'lucide-react';
@@ -36,9 +37,19 @@ import { api } from '../api/client';
  *   - Which graphics carry a claim about this business and which do not. A
  *     generic one says so on its own card, before it is sent.
  */
-export const VisualQueueView: React.FC<{ onRefresh?: () => void }> = ({
-  onRefresh,
-}) => {
+export const VisualQueueView: React.FC<{
+  onRefresh?: () => void;
+  /**
+   * Take him to the send step.
+   *
+   * On the old page the card linked to `#send-step`, an anchor on the same
+   * scroll. Here "Review & Send" is a step in the navigator above, so naming
+   * it in bold told him where it was and gave him no way to get there --
+   * reported as "there's no button to send, I can't see it". A signpost that
+   * cannot be followed is the dead end this card exists to avoid.
+   */
+  onGoToSend?: () => void;
+}> = ({ onRefresh, onGoToSend }) => {
   const [data, setData] = useState<VisualQueue | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -293,6 +304,7 @@ export const VisualQueueView: React.FC<{ onRefresh?: () => void }> = ({
               api.regenerateVisual(item.lead_id)
             )
           }
+          onGoToSend={onGoToSend}
         />
       ))}
     </div>
@@ -324,6 +336,7 @@ interface CardProps {
   onClear: () => void;
   onDecide: (decision: 'Skip' | 'Approved') => void;
   onRegenerate: () => void;
+  onGoToSend?: () => void;
 }
 
 const VisualCard: React.FC<CardProps> = ({
@@ -343,6 +356,7 @@ const VisualCard: React.FC<CardProps> = ({
   onClear,
   onDecide,
   onRegenerate,
+  onGoToSend,
 }) => {
   const fileRef = useRef<HTMLInputElement>(null);
   // A broken-image icon beside "the words are right" is the worst thing this
@@ -607,7 +621,7 @@ const VisualCard: React.FC<CardProps> = ({
           </div>
 
           {(item.state === 'ready' || item.state === 'sent') && (
-            <VisualMessage item={item} />
+            <VisualMessage item={item} onGoToSend={onGoToSend} />
           )}
         </div>
       )}
@@ -1021,21 +1035,52 @@ const AlreadyMessaged: React.FC<{ item: VisualItem }> = ({ item }) => {
 };
 
 /**
+ * The way to the step that sends it.
+ *
+ * Named in bold and nothing more, which told him where the send button lived
+ * and gave him no way to reach it -- "there's no button to send, I can't see
+ * it". On the old page the same signpost is a link to an anchor on the same
+ * scroll; here the step lives in the navigator above, so it needs a press.
+ */
+const GoToSend: React.FC<{ onGoToSend?: () => void; label: string }> = ({
+  onGoToSend,
+  label,
+}) =>
+  onGoToSend ? (
+    <button
+      id="visual-go-to-send"
+      onClick={onGoToSend}
+      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-500 text-slate-950 text-[12px] font-semibold hover:bg-emerald-400 studio-transition"
+    >
+      {label}
+      <ArrowRight className="w-3.5 h-3.5" />
+    </button>
+  ) : null;
+
+/**
  * The one repair this dashboard has, offered where the problem is read.
  *
  * It existed in the send step's excluded list, which is a different screen
  * from the one saying the message is ready -- so the report was "it still
  * doesn't show any button".
  */
-const UnblockButton: React.FC<{ item: VisualItem }> = ({ item }) => {
+const UnblockButton: React.FC<{
+  item: VisualItem;
+  onGoToSend?: () => void;
+}> = ({ item, onGoToSend }) => {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [done, setDone] = useState(false);
 
+  // The moment he most wants to go there is the moment it arrives, so the
+  // way through is offered here rather than only after a reload.
   if (done) {
     return (
-      <span className="text-[11px] text-emerald-300">
-        Done. It is in Review &amp; Send now.
+      <span className="inline-flex flex-wrap items-center gap-2">
+        <span className="text-[11px] text-emerald-300">
+          Done. It is in Review &amp; Send now.
+        </span>
+        <GoToSend onGoToSend={onGoToSend} label="Go to Review & Send" />
       </span>
     );
   }
@@ -1093,7 +1138,10 @@ const RewriteButton: React.FC<{ item: VisualItem }> = ({ item }) => {
   );
 };
 
-const VisualMessage: React.FC<{ item: VisualItem }> = ({ item }) => {
+const VisualMessage: React.FC<{
+  item: VisualItem;
+  onGoToSend?: () => void;
+}> = ({ item, onGoToSend }) => {
   if (item.sent_at) {
     return <AlreadyMessaged item={item} />;
   }
@@ -1134,13 +1182,17 @@ const VisualMessage: React.FC<{ item: VisualItem }> = ({ item }) => {
           words. "It isn't brought over" was the only report a person could
           make about a card saying ready beside a queue that never had it. */}
       {item.in_send_queue ? (
-        <p
+        <div
           id={`visual-in-queue-${item.lead_id}`}
-          className="text-[11px] text-slate-500"
+          className="space-y-2"
         >
-          Waiting in <strong>Review &amp; Send</strong> now, the same queue as
-          the website messages. There is no separate send button here.
-        </p>
+          <p className="text-[11px] text-slate-500">
+            Waiting in <strong>Review &amp; Send</strong> now, the same queue as
+            the website messages. There is no separate send button here, so
+            that one business is never messaged twice.
+          </p>
+          <GoToSend onGoToSend={onGoToSend} label="Go to Review & Send" />
+        </div>
       ) : (
         <div
           id={`visual-send-hold-${item.lead_id}`}
@@ -1152,7 +1204,7 @@ const VisualMessage: React.FC<{ item: VisualItem }> = ({ item }) => {
           </p>
           {item.can_unblock && (
             <div className="flex flex-wrap items-center gap-2">
-              <UnblockButton item={item} />
+              <UnblockButton item={item} onGoToSend={onGoToSend} />
             </div>
           )}
         </div>

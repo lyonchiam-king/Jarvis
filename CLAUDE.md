@@ -1522,6 +1522,31 @@ on a control run. `dt.pageText()` asks for the body safely and gives it one
 more chance before believing the page is empty; a flake that hides the thing
 you are testing costs more than the thing you are testing.
 
+**A signpost that cannot be followed is the dead end it was written to
+avoid.** The card said the message was "waiting in **Review & Send**" in bold
+and offered nothing to press. On the old page the same sentence is a link to
+`#send-step`, an anchor on the same scroll; on the React page that step is a
+tab in the navigator above, so naming it told him where it was and gave him
+no way to get there -- reported as "there's no button to send, I can't see it
+on the new dashboard". `onGoToSend` reaches `setStage('send')`, and the
+button is on the queued card *and* on the success line of the repair, which
+is the moment he most wants it. Driven in the browser by pressing it and
+asserting the step it lands on, not that the element exists.
+
+**A step's badge has to count the work that step does.** Review & Send both
+writes messages and sends them, and its count was `to_draft` alone -- leads
+with no Outreach Log row. So a confirmed graphic whose message was already
+written and waiting left that tab with no number on it, which reads as
+nothing to do there and is the other half of "I can't find where to send".
+It is `to_draft + whatsapp_waiting` now; the two cannot double-count, since
+one requires no row on the Outreach Log and the other requires one.
+
+**Never `git checkout <file>` to undo a control run.** Twice in one session
+it reverted uncommitted work in that file -- the second time taking two
+unrelated changes with it. A control that destroys the thing it was proving
+is worse than no control: copy the file to the scratchpad and restore from
+there.
+
 **A sent graphic is finished work, not a queue item.** `_visual_state` grew a
 fifth state read off the Outreach Log, because the visual track writes no
 Stage and the send is recorded there. Leaving it under Ready made that list

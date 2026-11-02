@@ -78,6 +78,8 @@ export const CampaignsView: React.FC<CampaignsViewProps> = ({
   const by = summary?.by_stage;
   const built = by?.['Site Built'] || 0;
   const sent = by?.Sent || 0;
+  const waitingHere =
+    (summary?.to_draft || 0) + (summary?.whatsapp_waiting || 0);
 
   const stages: StageInfo[] = [
     {
@@ -135,8 +137,16 @@ export const CampaignsView: React.FC<CampaignsViewProps> = ({
       key: 'send',
       label: 'Review & Send',
       blurb: 'Read every message before it goes',
-      state: describe(summary?.to_draft || 0, sent > 0),
-      count: summary?.to_draft || 0,
+      // Both halves of the work at this step: messages still to write, and
+      // messages written and waiting to go. It counted only the first, so a
+      // confirmed graphic whose message was ready to send left this step
+      // with no badge at all -- which reads as nothing to do here, and was
+      // reported as "I can't find where to send".
+      //
+      // The two cannot double-count: `to_draft` is leads with no Outreach
+      // Log row, `whatsapp_waiting` is rows on it that have not gone.
+      state: describe(waitingHere, sent > 0),
+      count: waitingHere,
       blockedReason: noSheet ? 'Connect a Google Sheet first' : undefined,
     },
   ];
@@ -198,6 +208,11 @@ export const CampaignsView: React.FC<CampaignsViewProps> = ({
                 if (res.data) setVisual(res.data);
               });
             }}
+            // The card says the message is waiting in Review & Send. Naming
+            // the step without a way to reach it is the dead end this whole
+            // signpost exists to avoid -- on the old page it is a link to an
+            // anchor, and here the step is a tab above.
+            onGoToSend={() => setStage('send')}
           />
         )}
         {stage === 'send' && (
