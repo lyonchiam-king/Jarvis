@@ -502,12 +502,21 @@ const VisualCard: React.FC<CardProps> = ({
               const file = e.dataTransfer?.files?.[0];
               if (file) onFile(file);
             }}
-            onClick={() => fileRef.current?.click()}
-            className="p-5 rounded-xl border border-dashed border-slate-700 text-center text-[12px] text-slate-400 cursor-pointer hover:border-slate-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500"
+            // Clicking arms the paste, and nothing else. It used to open
+            // the file picker, on the very element telling you to click it
+            // and press Ctrl+V -- so the click that was supposed to let you
+            // paste launched Explorer and took the focus with it, making the
+            // next keystroke go to a dialog instead of this box. One element
+            // cannot both receive a paste and open a modal on the same
+            // gesture. The old page never had this: its box has no click
+            // handler at all and the file chooser is its own control
+            // underneath, which is what this now copies.
+            onClick={(e) => (e.currentTarget as HTMLDivElement).focus()}
+            className="p-5 rounded-xl border border-dashed border-slate-700 text-center text-[12px] text-slate-400 hover:border-slate-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500"
           >
             <Upload className="w-4 h-4 mx-auto mb-1.5 text-slate-500" />
-            Click here and press Ctrl+V to paste the picture, drop the file
-            here, or click to choose it.
+            Click here and press Ctrl+V to paste the picture, or drop the
+            file on this box.
           </div>
           <input
             ref={fileRef}
@@ -519,6 +528,17 @@ const VisualCard: React.FC<CardProps> = ({
               if (file) onFile(file);
             }}
           />
+          {/* Choosing a file is a third route and gets its own button, so
+              that the box above is only ever a paste target. */}
+          <button
+            id={`visual-choose-${item.lead_id}`}
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            className="px-3 py-1.5 rounded-lg border border-slate-700 text-[11px] font-medium text-slate-300 hover:bg-slate-800 studio-transition"
+          >
+            Choose a file instead
+          </button>
+
           <div className="flex flex-wrap gap-2">
             <input
               type="url"

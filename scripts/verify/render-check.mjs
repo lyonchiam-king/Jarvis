@@ -937,6 +937,47 @@ try {
     );
   }
 
+  // Clicking the paste box must not open a file dialog.
+  //
+  // The box says "click here and press Ctrl+V", and its own onClick called
+  // the hidden file input -- so the click that was meant to arm the paste
+  // opened Explorer and took the focus with it, and the Ctrl+V then went to
+  // a dialog. Reported as "that place should not open up a new file
+  // explorer, right?", and it should not: one element cannot both receive a
+  // paste and open a modal on the same gesture. The old page has always had
+  // this right, with no click handler on the box and the chooser as its own
+  // control. Asserted by spying on the input's click, because the bug is
+  // what the gesture *does*.
+  const pasteClick = await dt.evaluate(`(() => {
+    const drop = document.querySelector('[id^="visual-drop-"]');
+    const file = document.querySelector('[id^="visual-item-"] input[type="file"]');
+    if (!drop || !file) return { ok: false, missing: true };
+    let opened = 0;
+    const realClick = file.click;
+    file.click = () => { opened += 1; };
+    drop.click();
+    file.click = realClick;
+    return {
+      ok: true,
+      opened,
+      focused: document.activeElement === drop,
+      chooser: !!document.querySelector('[id^="visual-choose-"]'),
+    };
+  })()`);
+  if (pasteClick.missing) {
+    fail('could not find the paste box and its file input to drive');
+  } else {
+    if (pasteClick.opened > 0) {
+      fail('clicking the paste box opens a file dialog, which steals the paste');
+    }
+    if (!pasteClick.focused) {
+      fail('clicking the paste box does not focus it, so Ctrl+V goes nowhere');
+    }
+    if (!pasteClick.chooser) {
+      fail('no separate button for choosing a file, so that route is lost');
+    }
+  }
+
   // The thumbnail must be an <img> pointed at the server, not the base64 of
   // one printed into the page -- the same bug the pairing code had.
   //

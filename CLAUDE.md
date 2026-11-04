@@ -1756,6 +1756,19 @@ none proved a row came out that step 4 would take.
 draft and then reads the real queue, faking only the model. When two
 features must agree, test them against each other, not each against a stub.
 
+**One element cannot both take a paste and open a modal.** The image box
+read "click here and press Ctrl+V to paste the picture... or click to choose
+it", and its `onClick` called the hidden file input -- so the click that was
+meant to arm the paste opened Explorer and took the focus with it, and the
+next keystroke went to a dialog. Asked as "that place should not open up a
+new file explorer, right?", and it should not. The old page has always had
+this right: no click handler on the box at all, `tabIndex` so a click
+focuses it, and the file chooser as its own control underneath. The React
+page reimplemented a working behaviour and merged two gestures onto one
+target. Clicking now only focuses, **Choose a file instead** is its own
+button, and `render-check` spies on the input's `click` while clicking the
+box -- the bug is what the gesture does, not what the markup contains.
+
 ## Conventions
 
 - Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`, `chore:`)
