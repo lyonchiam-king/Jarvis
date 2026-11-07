@@ -22,6 +22,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import paths
+
 log = logging.getLogger("outreach")
 
 # Where the browsers actually are, in the order worth trying. Edge first
@@ -178,12 +180,33 @@ def capture(
     # confusing error everywhere else.
     modes = (["--headless=new"], ["--headless=old"], ["--headless"])
 
+    # A container cannot use Chromium's sandbox, so in one it must be told
+    # not to try.
+    #
+    # Found by running the image for the first time: every mode failed with
+    # "No usable sandbox! If this is a Debian system, please install the
+    # chromium-sandbox package", and installing that package only moved the
+    # failure to a broken pipe out of the zygote -- the sandbox needs kernel
+    # privileges a container does not hand out. With --no-sandbox the same
+    # page photographs fine. The container is itself the isolation boundary,
+    # and on Fly there is a VM around that too.
+    #
+    # Gated on `is_hosted`, the seam that already means "this is a server"
+    # for the Google sign-in and for binding every interface, so Lyon's
+    # Windows runs keep the sandbox they can actually use. /dev/shm defaults
+    # to 64MB in a container, which Chromium outgrows on a long page and
+    # reports as a tab crash, so that is answered here as well.
+    container_flags = (
+        ["--no-sandbox", "--disable-dev-shm-usage"] if paths.is_hosted() else []
+    )
+
     attempts: list[str] = []
     for mode in modes:
         with tempfile.TemporaryDirectory(prefix="jarvis-shot-") as profile:
             cmd = [
                 exe,
                 *mode,
+                *container_flags,
                 "--disable-gpu",
                 "--hide-scrollbars",
                 "--no-first-run",

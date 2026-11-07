@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from outreach import screenshot
+from outreach import paths, screenshot
 
 
 def _page(tmp_path) -> Path:
@@ -567,3 +567,53 @@ def test_chrome_sync_natter_is_not_reported_as_the_cause():
         )
 
     assert "nothing explaining why" in screenshot._why(R())
+
+
+# ----------------------------------------- photographing from inside a container
+
+
+def _capture_with(tmp_path, monkeypatch, hosted):
+    """Drive `capture` and hand back the argv the browser was given."""
+    page = _page(tmp_path)
+    out = tmp_path / "out.png"
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        out.write_bytes(b"\x89PNG")
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    exe = tmp_path / "chromium"
+    exe.write_text("")
+    if hosted:
+        monkeypatch.setenv(paths.ENV_VAR, str(tmp_path))
+    else:
+        monkeypatch.delenv(paths.ENV_VAR, raising=False)
+    screenshot.capture(page, out, browser=str(exe), runner=fake_run)
+    return seen["cmd"]
+
+
+def test_a_hosted_run_tells_chromium_not_to_sandbox(tmp_path, monkeypatch):
+    """The first run of the real image failed every headless mode with "No
+    usable sandbox!", and installing chromium-sandbox only moved it to a
+    broken pipe out of the zygote: a container cannot grant the sandbox its
+    kernel privileges. Every message would have gone out with no picture --
+    and on the infographic track the picture is the pitch, so that is the
+    wrong message rather than a lesser one."""
+    cmd = _capture_with(tmp_path, monkeypatch, hosted=True)
+
+    assert "--no-sandbox" in cmd
+    # /dev/shm is 64MB in a container, which Chromium outgrows on a long page
+    # and reports as a tab crash.
+    assert "--disable-dev-shm-usage" in cmd
+
+
+def test_a_local_run_keeps_the_sandbox_it_can_use(tmp_path, monkeypatch):
+    """The control. Lyon's Windows machine can sandbox perfectly well, and
+    weakening it there to fix a container would be a security change made by
+    accident -- so this is gated on the same seam that already means "this
+    is a server" for the Google sign-in and for binding every interface."""
+    cmd = _capture_with(tmp_path, monkeypatch, hosted=False)
+
+    assert "--no-sandbox" not in cmd
+    assert "--disable-dev-shm-usage" not in cmd

@@ -16,9 +16,20 @@ FROM python:3.11-slim
 # ca-certificates is not optional: every call this makes is https, and
 # without it Google, Cloudflare and Anthropic all fail certificate
 # verification with an error that reads like a network outage.
+#
+# chromium-sandbox is a Recommends, which --no-install-recommends drops --
+# and its absence is the first thing running this image revealed: every
+# headless mode failed with "No usable sandbox!", so every message would
+# have gone out with no picture. On the infographic track the picture is the
+# pitch, so that is not a degraded message, it is the wrong one. Installing
+# it is not by itself enough -- a container cannot grant the sandbox its
+# kernel privileges, which is why `screenshot.py` passes --no-sandbox where
+# a state directory says this is a server -- but it is what makes the
+# failure legible rather than a broken pipe out of the zygote.
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
         chromium \
+        chromium-sandbox \
         ca-certificates \
         tini \
     && rm -rf /var/lib/apt/lists/*

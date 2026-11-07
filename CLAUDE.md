@@ -1769,6 +1769,29 @@ target. Clicking now only focuses, **Choose a file instead** is its own
 button, and `render-check` spies on the input's `click` while clicking the
 box -- the bug is what the gesture does, not what the markup contains.
 
+**A container cannot use Chromium's sandbox, so in one it must be told not
+to try.** The first run of the real image failed every headless mode with
+"No usable sandbox! If this is a Debian system, please install the
+chromium-sandbox package" -- a Recommends that `--no-install-recommends`
+drops. Installing it only moved the failure to a broken pipe out of the
+zygote: the sandbox needs kernel privileges a container does not hand out.
+`--no-sandbox` photographs the same page fine, and the container is itself
+the isolation boundary, with a VM around it on Fly. It is gated on
+`paths.is_hosted()`, the seam that already means "this is a server" for the
+Google sign-in and for binding every interface, so Lyon's Windows machine
+keeps the sandbox it can actually use -- weakening that to fix a container
+would be a security change made by accident. `--disable-dev-shm-usage` goes
+with it, because /dev/shm is 64MB in a container and Chromium outgrows it on
+a long page, reporting a tab crash. The package is installed anyway: it is
+what makes the failure legible instead of a broken pipe.
+
+This is the whole argument for running the thing. The screenshot is
+"never fatal" by design, so this would not have crashed anything -- every
+message would simply have gone out with no picture, and on the infographic
+track the picture *is* the pitch, so that is the wrong message rather than a
+lesser one. No test could have caught it: the suite fakes the browser, which
+is right, because what failed was the browser.
+
 ## Conventions
 
 - Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`, `chore:`)
@@ -1845,20 +1868,27 @@ Say so rather than implying otherwise:
   binary cannot even be fetched. Everything on the Python side -- reading the
   published address, the refusals, the rate-limit keying, the shutdown -- is
   driven against a stand-in for cloudflared.
-- The `Dockerfile` has never been built **to completion**. The furthest it
-  has got, checked rather than assumed: a daemon starts (`sudo dockerd`) and
-  `FROM python:3.11-slim` now *does* pull -- Docker Hub's blob CDN is no
-  longer refused, so the old note saying the build stops at line 9 was out of
-  date. It stops at line 19 instead: `apt-get` cannot resolve
-  `deb.debian.org`, because the agent proxy listens on loopback for this
-  session's own tools and is not a general egress for a build container.
-  `--network=host` with the proxy passed as a build arg does not fix it
-  either, since that host is not on the allowlist. Don't spend another ten
-  minutes on it. So every claim about the image is still checked by reading
-  it and by installing the package for real -- which is what caught the
-  missing `package-data` and the install that would have shipped no
-  `outreach` command. Nobody has yet seen the image start, take a
-  screenshot, or reach Google from inside it.
+- The `Dockerfile` **now builds to completion and the image runs** -- first
+  done on 2026-11-08, after the note here saying it stopped at line 19. That
+  note was right when written and had been overtaken: this environment's
+  network is unrestricted now, so `apt-get` resolves `deb.debian.org` and
+  fetches 213MB without complaint. Checked by running it, not by reading:
+  the image starts, `serve` binds every interface behind the password,
+  `/healthz` answers `{"ok":true}` with no session, `/`, `/app` and
+  `/classic` each 302 to `/login?next=<path>`, `/api/` answers 401 rather
+  than redirecting, and `outreach shot-check` photographs a local page
+  (9,460 bytes). It is 1.49GB, nearly all Chromium.
+
+  Two things still have to be said. `pip install` fails **here** on PyPI's
+  certificate, because this container's proxy intercepts TLS and the build
+  does not carry its CA -- an artefact of this environment, not a defect in
+  the image, and Fly's builders have no such proxy. It was verified with a
+  throwaway overlay Dockerfile that adds the CA; the committed file is
+  unchanged, since baking a CA into what ships would be wrong. And Chromium
+  keeps its own certificate store, so inside this container it cannot load
+  an https page at all (`net_error -202`) -- which is why the screenshot was
+  proved against a local file. Nobody has yet seen the image reach Google,
+  or photograph a page on the internet.
 - Nothing has ever been deployed to Fly from here. `flyctl` is not
   installed, there are no Fly credentials in this container, the image has
   never finished building, and no machine has started --
