@@ -131,6 +131,47 @@ export const SettingsView: React.FC = () => {
 
   return (
     <div id="settings-view" className="space-y-6 max-w-3xl mx-auto">
+      {/*
+        The way back to the original dashboard, named in the place somebody
+        goes looking to switch between them.
+
+        It is already in the sidebar footer, and was still asked for -- "why
+        can't I go back to the standard dashboard?". A link that has to be
+        hunted for is the link's fault, and the sidebar footer sits below the
+        setup box and Settings, so on a short window it needs the sidebar
+        itself scrolled. Saying the address out loud matters as much as the
+        button: it is the one way back that works even when this page will
+        not render at all, which is the moment it is most wanted.
+      */}
+      <div
+        id="settings-classic"
+        className="p-5 rounded-xl border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+      >
+        <div>
+          <h2 className="text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+            The original dashboard
+          </h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            Still here, unchanged, with every button it ever had. Its
+            address is{' '}
+            <code className="text-slate-400">
+              {typeof window === 'undefined'
+                ? '/classic'
+                : `${window.location.origin}/classic`}
+            </code>
+            . Worth a bookmark: it is the way back even if this page will not
+            load.
+          </p>
+        </div>
+        <a
+          id="settings-classic-link"
+          href="/classic"
+          className="shrink-0 px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 studio-transition text-center"
+        >
+          Open the original dashboard
+        </a>
+      </div>
+
       {/* Header */}
       <div className="flex items-center justify-between p-5 rounded-xl border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-xs">
         <div>
